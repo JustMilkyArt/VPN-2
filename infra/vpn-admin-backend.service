@@ -1,0 +1,40 @@
+[Unit]
+Description=VPN Admin Backend (FastAPI/uvicorn)
+Documentation=https://github.com/JustMilkyArt/VPN-2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=vpnadmin
+Group=vpnadmin
+WorkingDirectory=/opt/vpn-admin/backend
+Environment=PATH=/opt/vpn-admin/venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/opt/vpn-admin/backend/.env
+ExecStart=/opt/vpn-admin/venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info \
+    --access-log \
+    --timeout-keep-alive 30
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/vpn-admin
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vpn-admin-backend
+
+[Install]
+WantedBy=multi-user.target

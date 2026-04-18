@@ -1,0 +1,158 @@
+/**
+ * UI Utilities: toasts, modals, helpers
+ */
+
+// ───────────────────────────────────── TOAST ──────────────────────────────────
+function toast(message, type = 'info', duration = 4000) {
+  const icons = { success: 'fa-circle-check', error: 'fa-circle-exclamation', info: 'fa-circle-info' };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span>${message}</span>`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity 0.3s, transform 0.3s';
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(100%)';
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
+
+// ───────────────────────────────────── MODALS ─────────────────────────────────
+function openModal(id) {
+  document.getElementById(id)?.classList.remove('hidden');
+}
+function closeModal(id) {
+  document.getElementById(id)?.classList.add('hidden');
+}
+
+// Close on overlay click
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', (e) => {
+    if (e.target === el) el.classList.add('hidden');
+  });
+});
+
+// ───────────────────────────────────── TABS ───────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+
+  document.getElementById(`tab-${name}`)?.classList.remove('hidden');
+  document.querySelector(`[data-tab="${name}"]`)?.classList.add('active');
+
+  if (name === 'servers') loadServers();
+  if (name === 'connections') loadConnectionsGrouped();
+}
+
+// ───────────────────────────────────── COPY ───────────────────────────────────
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      btn.textContent = '✓ Скопировано';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Копировать';
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+    toast('Скопировано в буфер', 'success', 2000);
+  } catch {
+    toast('Не удалось скопировать', 'error', 2000);
+  }
+}
+
+// ───────────────────────────────────── COUNTRY FLAGS ─────────────────────────
+const COUNTRY_FLAGS = {
+  RU: '🇷🇺', DE: '🇩🇪', NL: '🇳🇱', FI: '🇫🇮', FR: '🇫🇷',
+  GB: '🇬🇧', US: '🇺🇸', TR: '🇹🇷', PL: '🇵🇱',
+  '??': '🌍',
+};
+
+function getFlag(country) {
+  return COUNTRY_FLAGS[country?.toUpperCase()] || '🌍';
+}
+
+// ───────────────────────────────────── STATUS HELPERS ─────────────────────────
+function statusDot(status) {
+  const cls = { online: 'online', offline: 'offline', unknown: 'unknown', deploying: 'deploying' };
+  return `<span class="status-dot ${cls[status] || 'unknown'}"></span>`;
+}
+
+function statusText(status) {
+  const labels = {
+    online: '<span class="text-green-400">Online</span>',
+    offline: '<span class="text-red-400">Offline</span>',
+    unknown: '<span class="text-gray-500">Unknown</span>',
+    deploying: '<span class="text-amber-400">Deploying...</span>',
+    active: '<span class="text-green-400">Active</span>',
+    inactive: '<span class="text-gray-500">Inactive</span>',
+    error: '<span class="text-red-400">Error</span>',
+  };
+  return labels[status] || status;
+}
+
+function protocolLabel(proto) {
+  const map = {
+    vless_reality: { text: 'VLESS Reality', icon: 'fa-lock' },
+    trojan: { text: 'Trojan', icon: 'fa-shield-halved' },
+    naive_proxy: { text: 'NaiveProxy', icon: 'fa-globe' },
+  };
+  return map[proto] || { text: proto, icon: 'fa-network-wired' };
+}
+
+function roleLabel(role) {
+  const map = {
+    RU: '<span class="role-badge-ru">RU ENTRY</span>',
+    EU: '<span class="role-badge-eu">EU EXIT</span>',
+    MIXED: '<span class="role-badge-mixed">MIXED</span>',
+  };
+  return map[role] || role;
+}
+
+// ───────────────────────────────────── LOADING ────────────────────────────────
+function setLoading(elementId, loading) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  if (loading) {
+    el.dataset.originalHtml = el.innerHTML;
+    el.innerHTML = '<span class="spinner"></span>';
+    el.disabled = true;
+  } else {
+    el.innerHTML = el.dataset.originalHtml || el.innerHTML;
+    el.disabled = false;
+  }
+}
+
+// ───────────────────────────────────── AUTH ───────────────────────────────────
+function showLogin() {
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('app').classList.add('hidden');
+}
+
+function showApp(username) {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('username-display').textContent = username || 'admin';
+}
+
+async function logout() {
+  api.clearToken();
+  showLogin();
+  toast('Выход выполнен', 'info', 2000);
+}
+
+// Expose globally
+window.showTab = showTab;
+window.copyText = copyText;
+window.getFlag = getFlag;
+window.statusDot = statusDot;
+window.statusText = statusText;
+window.protocolLabel = protocolLabel;
+window.roleLabel = roleLabel;
+window.openModal = openModal;
+window.closeModal = closeModal;
+window.toast = toast;
+window.logout = logout;
+window.showLogin = showLogin;
+window.showApp = showApp;

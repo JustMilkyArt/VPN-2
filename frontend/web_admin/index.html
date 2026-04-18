@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPN Admin Panel</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+  <link rel="stylesheet" href="css/app.css">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f4ff', 100: '#e0e9ff', 200: '#c7d7fe',
+              300: '#a5b9fc', 400: '#818cf8', 500: '#6366f1',
+              600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
+
+<!-- ══════════════════════════════════════════════════════════════════
+  LOGIN SCREEN
+═══════════════════════════════════════════════════════════════════ -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
+  <div class="w-full max-w-md px-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+      <!-- Logo -->
+      <div class="flex flex-col items-center mb-8">
+        <div class="w-16 h-16 bg-brand-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
+          <i class="fas fa-shield-halved text-3xl text-white"></i>
+        </div>
+        <h1 class="text-2xl font-bold text-white">VPN Admin</h1>
+        <p class="text-gray-400 text-sm mt-1">Infrastructure Management System</p>
+      </div>
+
+      <!-- Error -->
+      <div id="login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
+        <i class="fas fa-circle-exclamation"></i>
+        <span id="login-error-text"></span>
+      </div>
+
+      <!-- Form -->
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Логин</label>
+          <div class="relative">
+            <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
+            <input id="login-username" type="text" placeholder="admin"
+              class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Пароль</label>
+          <div class="relative">
+            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
+            <input id="login-password" type="password" placeholder="••••••••"
+              class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
+          </div>
+        </div>
+        <button type="submit" id="login-btn"
+          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 mt-2">
+          <i class="fas fa-right-to-bracket"></i>
+          Войти
+        </button>
+      </form>
+    </div>
+    <p class="text-center text-gray-600 text-xs mt-4">VPN Infrastructure Manager v1.0 MVP</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+  MAIN APP
+═══════════════════════════════════════════════════════════════════ -->
+<div id="app" class="hidden min-h-screen flex flex-col">
+
+  <!-- TOP NAV -->
+  <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+          <i class="fas fa-shield-halved text-white text-sm"></i>
+        </div>
+        <span class="font-bold text-white">VPN Admin</span>
+        <span class="hidden sm:block text-gray-600 text-xs">Infrastructure Manager</span>
+      </div>
+
+      <!-- Tab navigation -->
+      <nav class="flex gap-1">
+        <button onclick="showTab('servers')" data-tab="servers"
+          class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+          <i class="fas fa-server text-xs"></i>
+          <span>Серверы</span>
+        </button>
+        <button onclick="showTab('connections')" data-tab="connections"
+          class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+          <i class="fas fa-network-wired text-xs"></i>
+          <span>Подключения</span>
+        </button>
+      </nav>
+
+      <!-- User / logout -->
+      <div class="flex items-center gap-2">
+        <span id="user-badge" class="hidden sm:flex items-center gap-2 text-xs text-gray-400">
+          <i class="fas fa-circle-user"></i>
+          <span id="username-display">admin</span>
+        </span>
+        <button onclick="logout()"
+          class="p-2 text-gray-400 hover:text-red-400 hover:bg-red-900/20 rounded-lg transition" title="Выйти">
+          <i class="fas fa-right-from-bracket text-sm"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+
+    <!-- ──────────────────────────────── SERVERS TAB ──────────────────────────────── -->
+    <section id="tab-servers" class="tab-content">
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Серверы</h2>
+          <p class="text-gray-400 text-sm mt-0.5">Управление VPN-узлами инфраструктуры</p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="checkAllServers()" id="check-all-btn"
+            class="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition flex items-center gap-2">
+            <i class="fas fa-rotate text-xs"></i>
+            Проверить все
+          </button>
+          <button onclick="showAddServerModal()"
+            class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+            <i class="fas fa-plus text-xs"></i>
+            Добавить сервер
+          </button>
+        </div>
+      </div>
+
+      <!-- Servers grid -->
+      <div id="servers-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <!-- Loaded dynamically -->
+      </div>
+      <div id="servers-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-server text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Серверов пока нет</p>
+        <p class="text-gray-600 text-sm mt-1">Добавьте первый VPN-сервер</p>
+        <button onclick="showAddServerModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-plus mr-2"></i>Добавить
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────── CONNECTIONS TAB ──────────────────────────────── -->
+    <section id="tab-connections" class="tab-content hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Подключения</h2>
+          <p class="text-gray-400 text-sm mt-0.5">VPN-конфигурации по серверам</p>
+        </div>
+        <button onclick="showAddConnectionModal()"
+          class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+          <i class="fas fa-plus text-xs"></i>
+          Создать подключение
+        </button>
+      </div>
+
+      <!-- Grouped connections list -->
+      <div id="connections-list" class="space-y-4"></div>
+      <div id="connections-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-network-wired text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Подключений пока нет</p>
+        <p class="text-gray-600 text-sm mt-1">Создайте первое VPN-подключение</p>
+        <button onclick="showAddConnectionModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-plus mr-2"></i>Создать
+        </button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+  MODALS
+═══════════════════════════════════════════════════════════════════ -->
+
+<!-- ADD SERVER MODAL -->
+<div id="modal-add-server" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-server text-brand-400"></i>
+        Добавить сервер
+      </h3>
+      <button onclick="closeModal('modal-add-server')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <form id="add-server-form" class="p-6 space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+          <label class="form-label">Название</label>
+          <input name="name" type="text" placeholder="EU-DE-01" class="form-input" required>
+        </div>
+        <div class="col-span-2">
+          <label class="form-label">IP адрес</label>
+          <input name="ip" type="text" placeholder="1.2.3.4" class="form-input" required>
+        </div>
+        <div>
+          <label class="form-label">Страна</label>
+          <select name="country" class="form-input">
+            <option value="DE">🇩🇪 Германия</option>
+            <option value="NL">🇳🇱 Нидерланды</option>
+            <option value="FI">🇫🇮 Финляндия</option>
+            <option value="FR">🇫🇷 Франция</option>
+            <option value="GB">🇬🇧 Британия</option>
+            <option value="RU">🇷🇺 Россия</option>
+            <option value="US">🇺🇸 США</option>
+            <option value="TR">🇹🇷 Турция</option>
+            <option value="PL">🇵🇱 Польша</option>
+            <option value="??">🌍 Другая</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Роль</label>
+          <select name="role" class="form-input">
+            <option value="EU">EU — Exit node</option>
+            <option value="RU">RU — Entry node</option>
+            <option value="MIXED">Mixed</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">SSH пользователь</label>
+          <input name="ssh_user" type="text" value="root" class="form-input">
+        </div>
+        <div>
+          <label class="form-label">SSH порт</label>
+          <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+        </div>
+        <div class="col-span-2">
+          <label class="form-label">Домен (для NaiveProxy/Trojan TLS)</label>
+          <input name="domain" type="text" placeholder="vpn.example.com" class="form-input">
+        </div>
+        <div class="col-span-2">
+          <label class="form-label">SSH приватный ключ (PEM)</label>
+          <textarea name="ssh_key" rows="5" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
+            class="form-input font-mono text-xs resize-none"></textarea>
+        </div>
+        <div class="col-span-2">
+          <label class="form-label">или SSH пароль</label>
+          <input name="ssh_password" type="password" class="form-input" placeholder="Пароль (если нет ключа)">
+        </div>
+      </div>
+
+      <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="closeModal('modal-add-server')"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Отмена
+        </button>
+        <button type="submit"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-plus text-xs"></i>
+          Добавить
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- SERVER DETAIL MODAL -->
+<div id="modal-server-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2" id="server-detail-title">
+        <i class="fas fa-server text-brand-400"></i>
+        Сервер
+      </h3>
+      <button onclick="closeModal('modal-server-detail')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="server-detail-content" class="p-6"></div>
+  </div>
+</div>
+
+<!-- ADD CONNECTION MODAL -->
+<div id="modal-add-connection" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-network-wired text-brand-400"></i>
+        Создать подключение
+      </h3>
+      <button onclick="closeModal('modal-add-connection')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <form id="add-connection-form" class="p-6 space-y-4">
+      <div>
+        <label class="form-label">Название</label>
+        <input name="name" type="text" placeholder="VLESS-DE-01" class="form-input" required>
+      </div>
+      <div>
+        <label class="form-label">Шаг 1: Сервер</label>
+        <select name="server_id" id="conn-server-select" class="form-input" required>
+          <option value="">— Выберите сервер —</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label">Шаг 2: Протокол</label>
+        <select name="protocol" id="conn-protocol-select" class="form-input" required>
+          <option value="">— Выберите протокол —</option>
+          <option value="vless_reality">🔒 VLESS + Reality (рекомендуется)</option>
+          <option value="trojan">🛡️ Trojan</option>
+          <option value="naive_proxy">🌐 NaiveProxy</option>
+        </select>
+      </div>
+      <div id="conn-exit-server-block" class="hidden">
+        <label class="form-label">EU Exit node (опционально)</label>
+        <select name="exit_server_id" id="conn-exit-select" class="form-input">
+          <option value="">— Прямой выход (EU сервер) —</option>
+        </select>
+        <p class="text-gray-500 text-xs mt-1">Для RU → EU цепочки выберите EU-сервер как точку выхода</p>
+      </div>
+      <div id="conn-sni-block" class="hidden">
+        <label class="form-label">Reality SNI (fingerprint цель)</label>
+        <input name="reality_server_name" type="text" value="www.microsoft.com" class="form-input">
+      </div>
+
+      <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
+        <i class="fas fa-info-circle text-brand-400 mr-1"></i>
+        Шаг 3 — автоматически: ключи, порт и конфигурация генерируются и деплоятся на сервер через SSH
+      </div>
+
+      <div id="add-connection-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
+      <div id="add-connection-progress" class="hidden p-3 bg-brand-900/50 border border-brand-700 rounded-lg text-brand-300 text-sm flex items-center gap-2">
+        <i class="fas fa-spinner fa-spin"></i>
+        <span>Деплой подключения на сервер...</span>
+      </div>
+
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="closeModal('modal-add-connection')"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Отмена
+        </button>
+        <button type="submit"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-rocket text-xs"></i>
+          Создать и задеплоить
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- CLIENT CONFIG MODAL -->
+<div id="modal-client-config" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-qrcode text-brand-400"></i>
+        Конфигурация клиента
+      </h3>
+      <button onclick="closeModal('modal-client-config')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="client-config-content" class="p-6"></div>
+  </div>
+</div>
+
+<!-- INSTALL STACK MODAL -->
+<div id="modal-install-stack" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-download text-brand-400"></i>
+        Установка VPN стека
+      </h3>
+      <button onclick="closeModal('modal-install-stack')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <p class="text-gray-400 text-sm">Выберите компоненты для установки на сервере:</p>
+      <div class="space-y-3">
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-xray" checked class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">Xray-core</div>
+            <div class="text-xs text-gray-500">Основной движок (VLESS, Trojan, Reality)</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-warp" class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">Cloudflare WARP</div>
+            <div class="text-xs text-gray-500">Fallback механизм выхода в интернет</div>
+          </div>
+        </label>
+      </div>
+      <div id="install-output" class="hidden mt-2 p-3 bg-gray-800 rounded-lg text-xs font-mono text-green-400 max-h-32 overflow-y-auto"></div>
+      <input type="hidden" id="install-server-id">
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeModal('modal-install-stack')"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Отмена
+        </button>
+        <button onclick="confirmInstallStack()"
+          class="flex-1 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-download text-xs"></i>
+          Установить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container" class="fixed bottom-4 right-4 z-[100] space-y-2"></div>
+
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/servers.js"></script>
+<script src="js/connections.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
