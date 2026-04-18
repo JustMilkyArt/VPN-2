@@ -11,6 +11,8 @@ Group=vpnadmin
 WorkingDirectory=/opt/vpn-admin/backend
 Environment=PATH=/opt/vpn-admin/venv/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/vpn-admin/backend/.env
+# Синхронизировать пароль /docs с .env перед каждым стартом
+ExecStartPre=/usr/local/bin/sync_docs_password.sh
 ExecStart=/opt/vpn-admin/venv/bin/uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8000 \
