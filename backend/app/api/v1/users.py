@@ -31,7 +31,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 def _to_read(u: AdminUser) -> AdminUserRead:
-    # Format date as DD.MM.YYYY
+    # Format created_at as DD.MM.YYYY string
     if u.created_at:
         d = u.created_at
         created_str = f"{d.day:02d}.{d.month:02d}.{d.year}"
@@ -44,6 +44,7 @@ def _to_read(u: AdminUser) -> AdminUserRead:
         role=u.role,
         is_active=u.is_active,
         totp_enabled=u.totp_enabled,
+        last_login=u.last_login,          # datetime or None — frontend checks truthiness
         created_by_id=u.created_by_id,
         created_at=created_str,
     )
@@ -213,6 +214,47 @@ def delete_user(
     can_manage_target_user(user, current_user)
     db.delete(user)
     db.commit()
+
+
+# ─── Confirm TOTP (verify code after QR shown) ───────────────────────────────
+
+from pydantic import BaseModel as _PydanticBase
+from datetime import datetime, timezone as _tz
+from app.services.totp_service import verify_totp as _verify_totp
+
+
+class ConfirmTotpBody(_PydanticBase):
+    totp_code: str
+
+
+@router.post("/{user_id}/confirm-totp")
+def confirm_totp(
+    user_id: int,
+    body: ConfirmTotpBody,
+    db: Session = Depends(get_db),
+    current_user: AdminUser = Depends(can_manage_users),
+):
+    """
+    Admin confirms TOTP was correctly set up by verifying a code from the new user's app.
+    On success sets last_login so Active/2FA badges go green.
+    """
+    user = db.get(AdminUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    can_manage_target_user(user, current_user)
+
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="TOTP не настроен")
+
+    code = (body.totp_code or "").strip()
+    if not code or not _verify_totp(user.totp_secret, code):
+        raise HTTPException(status_code=400, detail="Неверный код. Попробуйте ещё раз.")
+
+    user.totp_enabled = True
+    user.last_login = datetime.now(_tz.utc)
+    db.commit()
+    db.refresh(user)
+    return {"ok": True}
 
 
 # ─── Rebind TOTP ──────────────────────────────────────────────────────────────

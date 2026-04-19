@@ -120,6 +120,10 @@ const api = {
     return this.request('POST', `/users/${id}/rebind-totp`);
   },
 
+  async confirmUserTotp(id, totpCode) {
+    return this.request('POST', `/users/${id}/confirm-totp`, { totp_code: totpCode });
+  },
+
   // ─── Servers ───────────────────────────────────────────────────────────────
   async getServers() {
     return this.request('GET', '/servers/');

@@ -214,15 +214,18 @@
 ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
 
-/* ─── Custom Select / Dropdown ─────────────────────────────── */
+/* ─── Select / Dropdown — global override ───────────────────── */
+
+/* Wrapper adds the custom arrow */
 .custom-select-wrap {
   position: relative;
+  display: block;
 }
 
 .custom-select-wrap::after {
   content: '';
   position: absolute;
-  right: 12px;
+  right: 14px;
   top: 50%;
   transform: translateY(-50%);
   width: 0;
@@ -232,51 +235,65 @@
   border-top: 6px solid #6b7280;
   pointer-events: none;
   transition: border-top-color 0.15s;
+  z-index: 1;
 }
 
 .custom-select-wrap:focus-within::after {
   border-top-color: #818cf8;
 }
 
+/* Apply to ALL select elements (with or without .custom-select class) */
+select,
+select.form-input,
 .custom-select {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  padding-right: 2.5rem !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  background-image: none !important;
   cursor: pointer;
+  padding-right: 2.5rem !important;
   background-color: #1f2937;
   border: 1px solid #374151;
   border-radius: 0.5rem;
   color: #f3f4f6;
+  font-size: 0.875rem;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+select:focus,
+select.form-input:focus,
 .custom-select:focus {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
+select:hover,
+select.form-input:hover,
 .custom-select:hover {
   border-color: #4b5563;
 }
 
-/* Styled option elements (best-effort — limited browser support) */
+/* Option background — best-effort cross-browser */
+select option,
 .custom-select option {
   background-color: #111827;
   color: #f3f4f6;
   padding: 8px 12px;
 }
 
+select option:checked,
 .custom-select option:checked {
   background-color: #312e81;
   color: #a5b4fc;
 }
 
-/* Firefox specific */
+/* Firefox: darker bg for options */
 @-moz-document url-prefix() {
+  select option,
   .custom-select option {
     background-color: #1f2937;
+    color: #f3f4f6;
   }
 }
 

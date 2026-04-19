@@ -14,10 +14,14 @@ function roleBadge(role) {
   return `<span class="px-2 py-0.5 rounded text-xs font-medium border ${r.cls}">${r.text}</span>`;
 }
 
-function fmtDate(iso) {
-  if (!iso) return '—';
+function fmtDate(val) {
+  if (!val) return '—';
+  // Already formatted as DD.MM.YYYY (created_at from backend)
+  if (typeof val === 'string' && /^\d{2}\.\d{2}\.\d{4}$/.test(val)) return val;
+  // ISO datetime string or Date object
   try {
-    const d = new Date(iso);
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return '—';
     const dd = String(d.getDate()).padStart(2, '0');
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const yyyy = d.getFullYear();
@@ -235,7 +239,7 @@ async function euRebindTotp(userId, username) {
   const res = await api.rebindUserTotp(userId);
   if (res.ok) {
     closeModal('modal-edit-user');
-    showTotpOneTimeModal(res.data.totp_qr, res.data.totp_secret, username, 'Новый TOTP — ' + username);
+    showTotpOneTimeModal(res.data.totp_qr, res.data.totp_secret, username, 'Новый TOTP — ' + username, userId);
     loadUsers();
   } else {
     euShowError(res.error);
@@ -321,7 +325,8 @@ function showCreateUserModal() {
         res.data.totp_qr,
         res.data.totp_secret,
         res.data.user.username,
-        'TOTP для ' + res.data.user.username
+        'TOTP для ' + res.data.user.username,
+        res.data.user.id
       );
       loadUsers();
     } else {
@@ -335,13 +340,73 @@ function showCreateUserModal() {
 
 // ─── One-time TOTP show modal ─────────────────────────────────────────────────
 
-function showTotpOneTimeModal(qrDataUri, secret, username, title = 'TOTP аутентификатор') {
+let _totpOnceUserId = null; // user ID whose TOTP is being confirmed
+
+function showTotpOneTimeModal(qrDataUri, secret, username, title = 'TOTP аутентификатор', userId = null) {
+  _totpOnceUserId = userId;
+
   document.getElementById('totp-once-title').innerHTML =
     `<i class="fas fa-qrcode text-brand-400 mr-1"></i>${escapeHtml(title)}`;
   document.getElementById('totp-once-user').textContent = username;
   document.getElementById('totp-once-qr').src = qrDataUri;
   document.getElementById('totp-once-secret').textContent = secret;
+  document.getElementById('totp-once-code').value = '';
+  document.getElementById('totp-once-error').classList.add('hidden');
+
+  const btn = document.getElementById('totp-once-confirm-btn');
+  btn.innerHTML = '<i class="fas fa-check"></i> Подтвердить';
+  btn.disabled = false;
+
   document.getElementById('modal-totp-once').classList.remove('hidden');
+  setTimeout(() => document.getElementById('totp-once-code').focus(), 200);
+}
+
+// Auto-submit on 6 digits
+document.getElementById('totp-once-code')?.addEventListener('input', (e) => {
+  const val = e.target.value.replace(/\D/g, '');
+  e.target.value = val;
+  if (val.length === 6) confirmTotpOnce();
+});
+
+async function confirmTotpOnce() {
+  const code = document.getElementById('totp-once-code').value.trim();
+  const errEl = document.getElementById('totp-once-error');
+  const errTxt = document.getElementById('totp-once-error-text');
+  const btn = document.getElementById('totp-once-confirm-btn');
+
+  errEl.classList.add('hidden');
+
+  if (!code || code.length < 6) {
+    errTxt.textContent = 'Введите 6-значный код';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  if (!_totpOnceUserId) {
+    // No user to confirm for (e.g. rebind with no confirm needed) — just close
+    closeModal('modal-totp-once');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+  const res = await api.confirmUserTotp(_totpOnceUserId, code);
+
+  btn.disabled = false;
+  btn.innerHTML = '<i class="fas fa-check"></i> Подтвердить';
+
+  if (res.ok) {
+    closeModal('modal-totp-once');
+    _totpOnceUserId = null;
+    showToast('Аутентификатор подтверждён ✓', 'success');
+    loadUsers();
+  } else {
+    errTxt.textContent = res.error || 'Неверный код';
+    errEl.classList.remove('hidden');
+    document.getElementById('totp-once-code').value = '';
+    document.getElementById('totp-once-code').focus();
+  }
 }
 
 function copyTotpSecret() {
@@ -358,4 +423,5 @@ window.euToggle              = euToggle;
 window.euRebindTotp          = euRebindTotp;
 window.euDelete              = euDelete;
 window.showTotpOneTimeModal  = showTotpOneTimeModal;
+window.confirmTotpOnce       = confirmTotpOnce;
 window.copyTotpSecret        = copyTotpSecret;
