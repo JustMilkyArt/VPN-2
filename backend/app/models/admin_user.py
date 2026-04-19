@@ -34,6 +34,7 @@ class AdminUser(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    last_login = Column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self):
         return f"<AdminUser {self.username} [{self.role}]>"

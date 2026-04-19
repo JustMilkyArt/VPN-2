@@ -64,11 +64,17 @@ const api = {
   },
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
-  async login(username, password, totpCode) {
-    return this.request('POST', '/auth/login', {
-      username,
-      password,
-      totp_code: totpCode || '',
+
+  // Step 1: username + password → phase=totp + temp_token
+  async loginStep1(username, password) {
+    return this.request('POST', '/auth/login', { username, password });
+  },
+
+  // Step 2: temp_token + totp_code → access_token
+  async loginStep2(tempToken, totpCode) {
+    return this.request('POST', '/auth/totp-verify', {
+      temp_token: tempToken,
+      totp_code: totpCode,
     });
   },
 

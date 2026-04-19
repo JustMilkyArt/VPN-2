@@ -1,11 +1,20 @@
 /**
- * App: auth flow (login = username + password + TOTP always),
- * profile panel with change-credentials.
+ * App: two-step auth flow
+ *   Step 1: login-form  → POST /auth/login     → phase=totp, temp_token
+ *   Step 2: totp modal  → POST /auth/totp-verify → access_token
  */
 
 // ─── Show screens ─────────────────────────────────────────────────────────────
 
 function showLogin() {
+  // Clear all login fields on every show
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-error').classList.add('hidden');
+  document.getElementById('totp-login-code').value = '';
+  document.getElementById('totp-login-error').classList.add('hidden');
+  document.getElementById('modal-totp-login').classList.add('hidden');
+
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
 }
@@ -13,6 +22,7 @@ function showLogin() {
 function showApp(user) {
   api.saveUser(user);
   document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('modal-totp-login').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
 
   document.getElementById('username-display').textContent = user.username;
@@ -21,7 +31,6 @@ function showApp(user) {
   const roleEl = document.getElementById('role-badge');
   if (roleEl) roleEl.textContent = labels[user.role] || user.role;
 
-  // Users tab: visible only to creator / head_admin
   const usersTabBtn = document.getElementById('tab-btn-users');
   if (usersTabBtn) {
     const canSee = user.role === 'creator' || user.role === 'head_admin';
@@ -46,28 +55,72 @@ async function initApp() {
   showLogin();
 }
 
-// ─── Login form ───────────────────────────────────────────────────────────────
+// ─── Step 1: Login form (username + password) ─────────────────────────────────
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
 
-  const username  = document.getElementById('login-username').value.trim();
-  const password  = document.getElementById('login-password').value;
-  const totpCode  = document.getElementById('login-totp').value.trim();
-  const errorEl   = document.getElementById('login-error');
-  const errorText = document.getElementById('login-error-text');
-  const btn       = document.getElementById('login-btn');
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errorEl  = document.getElementById('login-error');
+  const errorTxt = document.getElementById('login-error-text');
+  const btn      = document.getElementById('login-btn');
 
   errorEl.classList.add('hidden');
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
   btn.disabled = true;
 
-  const res = await api.login(username, password, totpCode);
+  const res = await api.loginStep1(username, password);
 
   btn.innerHTML = '<i class="fas fa-right-to-bracket"></i> Войти';
   btn.disabled = false;
 
-  if (res.ok && res.data.phase === 'ok') {
+  if (res.ok && res.data.phase === 'totp') {
+    // Store temp_token and show TOTP modal
+    api._tempToken = res.data.temp_token;
+    showTotpLoginModal();
+  } else {
+    errorTxt.textContent = res.error || 'Неверный логин или пароль';
+    errorEl.classList.remove('hidden');
+    document.getElementById('login-password').value = '';
+  }
+});
+
+// ─── Step 2: TOTP modal ───────────────────────────────────────────────────────
+
+function showTotpLoginModal() {
+  document.getElementById('totp-login-code').value = '';
+  document.getElementById('totp-login-error').classList.add('hidden');
+  document.getElementById('modal-totp-login').classList.remove('hidden');
+  setTimeout(() => document.getElementById('totp-login-code').focus(), 100);
+}
+
+function cancelTotpLogin() {
+  api._tempToken = null;
+  document.getElementById('modal-totp-login').classList.add('hidden');
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-username').focus();
+}
+
+document.getElementById('totp-login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const code    = document.getElementById('totp-login-code').value.trim();
+  const errEl   = document.getElementById('totp-login-error');
+  const errTxt  = document.getElementById('totp-login-error-text');
+  const btn     = document.getElementById('totp-login-btn');
+
+  errEl.classList.add('hidden');
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  btn.disabled = true;
+
+  const res = await api.loginStep2(api._tempToken, code);
+
+  btn.innerHTML = '<i class="fas fa-check"></i> Подтвердить';
+  btn.disabled = false;
+
+  if (res.ok && res.data.access_token) {
+    api._tempToken = null;
     api.setToken(res.data.access_token);
     const me = await api.me();
     if (me.ok) {
@@ -76,11 +129,19 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
       startPolling();
     }
   } else {
-    errorText.textContent = res.error || 'Неверный логин, пароль или код';
-    errorEl.classList.remove('hidden');
-    document.getElementById('login-password').value = '';
-    document.getElementById('login-totp').value = '';
-    document.getElementById('login-totp').focus();
+    errTxt.textContent = res.error || 'Неверный код';
+    errEl.classList.remove('hidden');
+    document.getElementById('totp-login-code').value = '';
+    document.getElementById('totp-login-code').focus();
+  }
+});
+
+// Auto-submit TOTP when 6 digits entered
+document.getElementById('totp-login-code').addEventListener('input', (e) => {
+  const val = e.target.value.replace(/\D/g, '');
+  e.target.value = val;
+  if (val.length === 6) {
+    document.getElementById('totp-login-form').requestSubmit();
   }
 });
 
@@ -89,6 +150,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 function logout() {
   stopPolling();
   api.clearToken();
+  api._tempToken = null;
   showLogin();
 }
 
@@ -105,7 +167,6 @@ function showProfilePanel() {
   document.getElementById('pp-role').textContent = labels[user.role] || user.role;
   document.getElementById('pp-2fa-status').textContent = user.totp_enabled ? 'Включён ✓' : 'Не настроен';
 
-  // Hide change-creds form when opening
   document.getElementById('pp-change-creds-form').classList.add('hidden');
   document.getElementById('pp-change-btn').classList.remove('hidden');
 
@@ -114,7 +175,6 @@ function showProfilePanel() {
 
 document.getElementById('profile-btn')?.addEventListener('click', showProfilePanel);
 
-// Show/hide change-creds form
 document.getElementById('pp-change-btn')?.addEventListener('click', () => {
   document.getElementById('pp-change-creds-form').classList.remove('hidden');
   document.getElementById('pp-change-btn').classList.add('hidden');
@@ -130,7 +190,6 @@ document.getElementById('pp-cancel-change')?.addEventListener('click', () => {
   document.getElementById('pp-change-btn').classList.remove('hidden');
 });
 
-// Submit change-creds
 document.getElementById('pp-change-creds-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const errEl = document.getElementById('pp-creds-error');
@@ -139,10 +198,10 @@ document.getElementById('pp-change-creds-form')?.addEventListener('submit', asyn
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
-  const newUsername = document.getElementById('pp-new-username').value.trim();
-  const newPassword = document.getElementById('pp-new-password').value;
+  const newUsername     = document.getElementById('pp-new-username').value.trim();
+  const newPassword     = document.getElementById('pp-new-password').value;
   const confirmPassword = document.getElementById('pp-confirm-password').value;
-  const totpCode = document.getElementById('pp-totp-code').value.trim();
+  const totpCode        = document.getElementById('pp-totp-code').value.trim();
 
   if (newPassword !== confirmPassword) {
     errEl.textContent = 'Пароли не совпадают';
@@ -174,7 +233,7 @@ document.getElementById('pp-change-creds-form')?.addEventListener('submit', asyn
 // Close profile panel on outside click
 document.addEventListener('click', (e) => {
   const panel = document.getElementById('profile-panel');
-  const btn = document.getElementById('profile-btn');
+  const btn   = document.getElementById('profile-btn');
   if (panel && !panel.classList.contains('hidden')) {
     if (!panel.contains(e.target) && !btn.contains(e.target)) {
       panel.classList.add('hidden');
@@ -210,6 +269,7 @@ function stopPolling() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    document.getElementById('modal-totp-login')?.classList.add('hidden');
     document.getElementById('profile-panel')?.classList.add('hidden');
   }
   if (e.ctrlKey && e.key === '1') { e.preventDefault(); showTab('servers'); }
@@ -221,6 +281,7 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('DOMContentLoaded', initApp);
 
-window.showLogin = showLogin;
-window.showApp   = showApp;
-window.logout    = logout;
+window.showLogin      = showLogin;
+window.showApp        = showApp;
+window.logout         = logout;
+window.cancelTotpLogin = cancelTotpLogin;

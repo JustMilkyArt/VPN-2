@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
+from datetime import datetime
 from app.models.admin_user import UserRole
 
 
@@ -8,13 +9,17 @@ from app.models.admin_user import UserRole
 class LoginRequest(BaseModel):
     username: str
     password: str
-    totp_code: str          # always required
+    # totp_code NOT included here — step 1 only checks password
 
 
 class LoginResponse(BaseModel):
-    phase: str              # always "ok" now
-    access_token: str
-    token_type: str = "bearer"
+    phase: str              # "totp" — always go to TOTP step
+    temp_token: str         # short-lived token to be used in /auth/totp-verify
+
+
+class TotpVerifyRequest(BaseModel):
+    temp_token: str
+    totp_code: str
 
 
 class TokenResponse(BaseModel):
@@ -43,6 +48,7 @@ class ProfileResponse(BaseModel):
     username: str
     role: UserRole
     totp_enabled: bool
+    last_login: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -62,6 +68,7 @@ class AdminUserRead(BaseModel):
     role: UserRole
     is_active: bool
     totp_enabled: bool
+    last_login: Optional[datetime] = None
     created_by_id: Optional[int] = None
     created_at: Optional[str] = None
 

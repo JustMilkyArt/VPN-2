@@ -1,16 +1,19 @@
 """
 Auth endpoints:
-  POST /auth/login         — login: username + password + totp_code (always required)
+  POST /auth/login         — step 1: username + password → phase=totp + temp_token
+  POST /auth/totp-verify   — step 2: temp_token + totp_code → full access_token
   GET  /auth/me            — current user profile
   POST /auth/change-creds  — self: change own username+password (requires TOTP)
 """
 import logging
+import secrets
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.schemas.auth import (
-    LoginRequest, LoginResponse, TokenResponse,
+    LoginRequest, LoginResponse, TotpVerifyRequest, TokenResponse,
     ChangeCredentialsRequest, ProfileResponse,
 )
 from app.models.admin_user import AdminUser
@@ -21,56 +24,93 @@ from app.services.totp_service import verify_totp
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# In-memory temp tokens: token → user_id (cleared after use or on restart)
+_pending_totp: dict[str, int] = {}
+
 
 def _issue_full_token(user: AdminUser) -> str:
     return create_access_token({"sub": user.username, "role": user.role.value})
 
 
-# ─── Login ────────────────────────────────────────────────────────────────────
+# ─── Step 1: Login with username + password ───────────────────────────────────
 
 @router.post("/login", response_model=LoginResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     """
-    Single-step login: username + password + totp_code always required.
-    TOTP is set up by the admin before handing credentials to the user.
-    Returns phase="ok" with full token on success.
+    Step 1: Verify username + password.
+    Returns phase='totp' with a short-lived temp_token to proceed to TOTP step.
+    No TOTP code accepted here.
     """
     user: AdminUser | None = db.query(AdminUser).filter(
         AdminUser.username == request.username,
         AdminUser.is_active == True,
     ).first()
 
-    # Deliberate: same error for wrong user/password/totp to prevent enumeration
     auth_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Неверный логин, пароль или код аутентификатора",
+        detail="Неверный логин или пароль",
     )
 
     if not user or not verify_password(request.password, user.password_hash):
         raise auth_error
 
-    # TOTP is mandatory for ALL users at ALL times
     if not user.totp_secret:
-        # Account has no TOTP configured — block login, admin must set up via /users/{id}/rebind-totp
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Аутентификатор не настроен. Обратитесь к администратору.",
         )
 
+    # Generate temp token for TOTP step
+    temp_token = secrets.token_urlsafe(32)
+    _pending_totp[temp_token] = user.id
+
+    return LoginResponse(phase="totp", temp_token=temp_token)
+
+
+# ─── Step 2: Verify TOTP code ─────────────────────────────────────────────────
+
+@router.post("/totp-verify", response_model=TokenResponse)
+def totp_verify(request: TotpVerifyRequest, db: Session = Depends(get_db)):
+    """
+    Step 2: Submit TOTP code with temp_token from step 1.
+    Returns full access_token on success.
+    """
+    auth_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Неверный код аутентификатора",
+    )
+
+    user_id = _pending_totp.get(request.temp_token)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Сессия истекла. Войдите снова.",
+        )
+
+    user: AdminUser | None = db.query(AdminUser).filter(
+        AdminUser.id == user_id,
+        AdminUser.is_active == True,
+    ).first()
+
+    if not user or not user.totp_secret:
+        _pending_totp.pop(request.temp_token, None)
+        raise auth_error
+
     totp_code = (request.totp_code or "").strip()
-    if not totp_code:
+    if not totp_code or not verify_totp(user.totp_secret, totp_code):
         raise auth_error
 
-    if not verify_totp(user.totp_secret, totp_code):
-        raise auth_error
+    # Consume temp token
+    _pending_totp.pop(request.temp_token, None)
 
-    # Mark totp as enabled if it was not yet (covers legacy accounts)
-    if not user.totp_enabled:
-        user.totp_enabled = True
-        db.commit()
+    # Mark totp_enabled + record last_login
+    user.totp_enabled = True
+    user.last_login = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
 
     token = _issue_full_token(user)
-    return LoginResponse(phase="ok", access_token=token)
+    return TokenResponse(access_token=token)
 
 
 # ─── Profile ──────────────────────────────────────────────────────────────────

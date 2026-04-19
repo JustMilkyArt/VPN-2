@@ -49,13 +49,13 @@
         <span id="login-error-text"></span>
       </div>
 
-      <!-- Form -->
+      <!-- Form: step 1 — username + password only -->
       <form id="login-form" class="space-y-4">
         <div>
           <label class="block text-sm text-gray-400 mb-1">Логин</label>
           <div class="relative">
             <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
-            <input id="login-username" type="text" placeholder="admin" autocomplete="username"
+            <input id="login-username" type="text" placeholder="admin" autocomplete="off"
               class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
           </div>
         </div>
@@ -64,19 +64,9 @@
           <label class="block text-sm text-gray-400 mb-1">Пароль</label>
           <div class="relative">
             <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
-            <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password"
+            <input id="login-password" type="password" placeholder="••••••••" autocomplete="off"
               class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
           </div>
-        </div>
-
-        <div>
-          <label class="block text-sm text-gray-400 mb-1">
-            <i class="fas fa-mobile-screen-button mr-1 text-brand-400"></i>
-            Код аутентификатора
-          </label>
-          <input id="login-totp" type="text" inputmode="numeric" maxlength="6"
-            placeholder="000000" autocomplete="one-time-code"
-            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-[0.4em] placeholder-gray-600 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
         </div>
 
         <button type="submit" id="login-btn"
@@ -87,6 +77,43 @@
       </form>
     </div>
     <p class="text-center text-gray-600 text-xs mt-4">VPN Infrastructure Manager v1.0 MVP</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  MODAL: TOTP step (overlay поверх login-screen)
+══════════════════════════════════════════════════════ -->
+<div id="modal-totp-login" class="hidden fixed inset-0 z-[200] flex items-center justify-center p-4"
+     style="background: rgba(3,7,18,0.75); backdrop-filter: blur(6px);">
+  <div class="bg-gray-900/95 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-sm p-8 relative">
+    <div class="flex flex-col items-center mb-6">
+      <div class="w-14 h-14 bg-brand-700/50 border border-brand-600 rounded-2xl flex items-center justify-center mb-3">
+        <i class="fas fa-mobile-screen-button text-2xl text-brand-300"></i>
+      </div>
+      <h2 class="text-xl font-bold text-white">Код аутентификатора</h2>
+      <p class="text-gray-400 text-sm mt-1 text-center">Введите 6-значный код из приложения</p>
+    </div>
+
+    <div id="totp-login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
+      <i class="fas fa-circle-exclamation flex-shrink-0"></i>
+      <span id="totp-login-error-text"></span>
+    </div>
+
+    <form id="totp-login-form" class="space-y-4">
+      <input id="totp-login-code" type="text" inputmode="numeric" maxlength="6"
+        placeholder="000 000" autocomplete="one-time-code"
+        class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-4 text-3xl text-white text-center tracking-[0.5em] placeholder-gray-700 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/40 transition font-mono">
+
+      <button type="submit" id="totp-login-btn"
+        class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
+        <i class="fas fa-check"></i> Подтвердить
+      </button>
+
+      <button type="button" onclick="cancelTotpLogin()"
+        class="w-full py-2.5 text-gray-500 hover:text-gray-300 text-sm transition">
+        ← Вернуться к входу
+      </button>
+    </form>
   </div>
 </div>
 
@@ -122,8 +149,8 @@
         </button>
         <button id="tab-btn-users" onclick="showTab('users')" data-tab="users"
           class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
-          <i class="fas fa-users text-xs"></i>
-          <span class="hidden sm:inline">Пользователи</span>
+          <i class="fas fa-users-gear text-xs"></i>
+          <span class="hidden sm:inline">Управление</span>
         </button>
       </nav>
 
@@ -274,12 +301,12 @@
       </div>
     </section>
 
-    <!-- ─── USERS TAB ───────────────────────────────── -->
+    <!-- ─── USERS (MANAGEMENT) TAB ─────────────────── -->
     <section id="tab-users" class="tab-content hidden">
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h2 class="text-xl font-bold text-white">Пользователи</h2>
-          <p class="text-gray-400 text-sm mt-0.5">Управление учётными записями операторов</p>
+          <h2 class="text-xl font-bold text-white">Управление</h2>
+          <p class="text-gray-400 text-sm mt-0.5">Учётные записи операторов</p>
         </div>
         <button onclick="showCreateUserModal()"
           class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
@@ -329,26 +356,30 @@
         </div>
         <div>
           <label class="form-label">Страна</label>
-          <select name="country" class="form-input">
-            <option value="DE">🇩🇪 Германия</option>
-            <option value="NL">🇳🇱 Нидерланды</option>
-            <option value="FI">🇫🇮 Финляндия</option>
-            <option value="FR">🇫🇷 Франция</option>
-            <option value="GB">🇬🇧 Британия</option>
-            <option value="RU">🇷🇺 Россия</option>
-            <option value="US">🇺🇸 США</option>
-            <option value="TR">🇹🇷 Турция</option>
-            <option value="PL">🇵🇱 Польша</option>
-            <option value="??">🌍 Другая</option>
-          </select>
+          <div class="custom-select-wrap">
+            <select name="country" class="form-input custom-select">
+              <option value="DE">🇩🇪 Германия</option>
+              <option value="NL">🇳🇱 Нидерланды</option>
+              <option value="FI">🇫🇮 Финляндия</option>
+              <option value="FR">🇫🇷 Франция</option>
+              <option value="GB">🇬🇧 Британия</option>
+              <option value="RU">🇷🇺 Россия</option>
+              <option value="US">🇺🇸 США</option>
+              <option value="TR">🇹🇷 Турция</option>
+              <option value="PL">🇵🇱 Польша</option>
+              <option value="??">🌍 Другая</option>
+            </select>
+          </div>
         </div>
         <div>
           <label class="form-label">Роль</label>
-          <select name="role" class="form-input">
-            <option value="EU">EU — Exit node</option>
-            <option value="RU">RU — Entry node</option>
-            <option value="MIXED">Mixed</option>
-          </select>
+          <div class="custom-select-wrap">
+            <select name="role" class="form-input custom-select">
+              <option value="EU">EU — Exit node</option>
+              <option value="RU">RU — Entry node</option>
+              <option value="MIXED">Mixed</option>
+            </select>
+          </div>
         </div>
         <div>
           <label class="form-label">SSH пользователь</label>
@@ -418,24 +449,30 @@
       </div>
       <div>
         <label class="form-label">Шаг 1: Сервер</label>
-        <select name="server_id" id="conn-server-select" class="form-input" required>
-          <option value="">— Выберите сервер —</option>
-        </select>
+        <div class="custom-select-wrap">
+          <select name="server_id" id="conn-server-select" class="form-input custom-select" required>
+            <option value="">— Выберите сервер —</option>
+          </select>
+        </div>
       </div>
       <div>
         <label class="form-label">Шаг 2: Протокол</label>
-        <select name="protocol" id="conn-protocol-select" class="form-input" required>
-          <option value="">— Выберите протокол —</option>
-          <option value="vless_reality">🔒 VLESS + Reality (рекомендуется)</option>
-          <option value="trojan">🛡️ Trojan</option>
-          <option value="naive_proxy">🌐 NaiveProxy</option>
-        </select>
+        <div class="custom-select-wrap">
+          <select name="protocol" id="conn-protocol-select" class="form-input custom-select" required>
+            <option value="">— Выберите протокол —</option>
+            <option value="vless_reality">🔒 VLESS + Reality (рекомендуется)</option>
+            <option value="trojan">🛡️ Trojan</option>
+            <option value="naive_proxy">🌐 NaiveProxy</option>
+          </select>
+        </div>
       </div>
       <div id="conn-exit-server-block" class="hidden">
         <label class="form-label">EU Exit node (опционально)</label>
-        <select name="exit_server_id" id="conn-exit-select" class="form-input">
-          <option value="">— Прямой выход —</option>
-        </select>
+        <div class="custom-select-wrap">
+          <select name="exit_server_id" id="conn-exit-select" class="form-input custom-select">
+            <option value="">— Прямой выход —</option>
+          </select>
+        </div>
         <p class="text-gray-500 text-xs mt-1">Для RU → EU цепочки выберите EU-сервер</p>
       </div>
       <div id="conn-sni-block" class="hidden">
@@ -532,6 +569,22 @@
       </button>
     </div>
     <div id="create-user-modal-body"></div>
+  </div>
+</div>
+
+<!-- EDIT USER MODAL -->
+<div id="modal-edit-user" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-user-pen text-brand-400"></i>
+        <span id="edit-user-modal-title">Изменить пользователя</span>
+      </h3>
+      <button onclick="closeModal('modal-edit-user')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="edit-user-modal-body" class="p-5 space-y-4"></div>
   </div>
 </div>
 
