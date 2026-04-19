@@ -42,6 +42,7 @@ function showTab(name) {
 
   if (name === 'servers') loadServers();
   if (name === 'connections') loadConnectionsGrouped();
+  if (name === 'users') loadUsers();
 }
 
 // ───────────────────────────────────── COPY ───────────────────────────────────
@@ -125,21 +126,18 @@ function setLoading(elementId, loading) {
 }
 
 // ───────────────────────────────────── AUTH ───────────────────────────────────
-function showLogin() {
-  document.getElementById('login-screen').classList.remove('hidden');
-  document.getElementById('app').classList.add('hidden');
+// showLogin / showApp / logout are defined in app.js (they handle multi-screen logic)
+// Keep legacy stubs here for backward compat with servers.js / connections.js
+function _legacyShowLogin() {
+  if (window.showLogin) window.showLogin();
 }
 
-function showApp(username) {
-  document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  document.getElementById('username-display').textContent = username || 'admin';
-}
+// Also alias showToast → toast
+function showToast(msg, type='info') { toast(msg, type); }
 
-async function logout() {
-  api.clearToken();
-  showLogin();
-  toast('Выход выполнен', 'info', 2000);
+// escapeHtml helper
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // Expose globally
@@ -153,6 +151,5 @@ window.roleLabel = roleLabel;
 window.openModal = openModal;
 window.closeModal = closeModal;
 window.toast = toast;
-window.logout = logout;
-window.showLogin = showLogin;
-window.showApp = showApp;
+window.showToast = showToast;
+window.escapeHtml = escapeHtml;

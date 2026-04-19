@@ -1,6 +1,6 @@
 /**
  * API Client for VPN Admin Backend
- * Handles auth, request/response, token storage
+ * All security logic lives on the backend; frontend only transports data.
  */
 
 const API_BASE = window.location.protocol + '//' + window.location.host + '/api/v1';
@@ -20,6 +20,15 @@ const api = {
   clearToken() {
     this._token = null;
     localStorage.removeItem('vpn_admin_token');
+    localStorage.removeItem('vpn_admin_user');
+  },
+
+  saveUser(userObj) {
+    localStorage.setItem('vpn_admin_user', JSON.stringify(userObj));
+  },
+
+  getUser() {
+    try { return JSON.parse(localStorage.getItem('vpn_admin_user') || 'null'); } catch { return null; }
   },
 
   headers() {
@@ -34,7 +43,7 @@ const api = {
       method,
       url: API_BASE + path,
       headers: this.headers(),
-      ...(data && { data }),
+      ...(data !== null && { data }),
       timeout: opts.timeout || 60000,
     };
 
@@ -43,23 +52,76 @@ const api = {
       return { ok: true, data: res.data, status: res.status };
     } catch (err) {
       if (err.response?.status === 401) {
-        this.clearToken();
-        showLogin();
+        // Only hard-logout if it's not a TOTP/login endpoint error
+        const isAuthEndpoint = path.startsWith('/auth/');
+        if (!isAuthEndpoint) {
+          this.clearToken();
+          showLogin();
+        }
       }
       const detail = err.response?.data?.detail || err.message || 'Request failed';
       return { ok: false, error: detail, status: err.response?.status };
     }
   },
 
-  // Auth
-  async login(username, password) {
-    return this.request('POST', '/auth/login', { username, password });
+  // ─── Auth ──────────────────────────────────────────────────────────────────
+  async login(username, password, totpCode = null) {
+    const body = { username, password };
+    if (totpCode) body.totp_code = totpCode;
+    return this.request('POST', '/auth/login', body);
   },
+
+  async totpVerify(tempToken, totpCode) {
+    return this.request('POST', '/auth/totp-verify', { temp_token: tempToken, totp_code: totpCode });
+  },
+
   async me() {
     return this.request('GET', '/auth/me');
   },
 
-  // Servers
+  async changeCreds(newUsername, newPassword, confirmPassword, totpCode) {
+    return this.request('POST', '/auth/change-creds', {
+      new_username: newUsername,
+      new_password: newPassword,
+      confirm_password: confirmPassword,
+      totp_code: totpCode,
+    });
+  },
+
+  async bindTotp() {
+    return this.request('POST', '/auth/bind-totp');
+  },
+
+  async confirmTotp(totpCode) {
+    return this.request('POST', '/auth/confirm-totp', { totp_code: totpCode });
+  },
+
+  // ─── Users ─────────────────────────────────────────────────────────────────
+  async getUsers() {
+    return this.request('GET', '/users/');
+  },
+
+  async createUser(data) {
+    return this.request('POST', '/users/', data, { timeout: 30000 });
+  },
+
+  async updateUser(id, data) {
+    return this.request('PUT', `/users/${id}`, data);
+  },
+
+  async deleteUser(id) {
+    return this.request('DELETE', `/users/${id}`);
+  },
+
+  async toggleUser(id, active) {
+    return this.request('POST', `/users/${id}/toggle`, { active });
+  },
+
+  async rebindUserTotp(id) {
+    return this.request('POST', `/users/${id}/rebind-totp`);
+  },
+
+  // ─── Servers ───────────────────────────────────────────────────────────────
   async getServers() {
     return this.request('GET', '/servers/');
   },
@@ -91,7 +153,7 @@ const api = {
     return this.request('POST', `/servers/${id}/redeploy`, null, { timeout: 120000 });
   },
 
-  // Connections
+  // ─── Connections ───────────────────────────────────────────────────────────
   async getConnectionsGrouped() {
     return this.request('GET', '/connections/grouped');
   },

@@ -15,9 +15,9 @@
         extend: {
           colors: {
             brand: {
-              50: '#f0f4ff', 100: '#e0e9ff', 200: '#c7d7fe',
-              300: '#a5b9fc', 400: '#818cf8', 500: '#6366f1',
-              600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81',
+              50:'#f0f4ff',100:'#e0e9ff',200:'#c7d7fe',
+              300:'#a5b9fc',400:'#818cf8',500:'#6366f1',
+              600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81',
             }
           }
         }
@@ -27,13 +27,12 @@
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
 
-<!-- ══════════════════════════════════════════════════════════════════
-  LOGIN SCREEN
-═══════════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════
+  SCREEN 1: LOGIN
+══════════════════════════════════════════════════════ -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
   <div class="w-full max-w-md px-4">
     <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
-      <!-- Logo -->
       <div class="flex flex-col items-center mb-8">
         <div class="w-16 h-16 bg-brand-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
           <i class="fas fa-shield-halved text-3xl text-white"></i>
@@ -42,13 +41,11 @@
         <p class="text-gray-400 text-sm mt-1">Infrastructure Management System</p>
       </div>
 
-      <!-- Error -->
       <div id="login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
         <i class="fas fa-circle-exclamation"></i>
         <span id="login-error-text"></span>
       </div>
 
-      <!-- Form -->
       <form id="login-form" class="space-y-4">
         <div>
           <label class="block text-sm text-gray-400 mb-1">Логин</label>
@@ -77,15 +74,131 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════════
-  MAIN APP
-═══════════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════
+  SCREEN 2: TOTP STEP
+══════════════════════════════════════════════════════ -->
+<div id="totp-screen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
+  <div class="w-full max-w-md px-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+      <div class="flex flex-col items-center mb-6">
+        <div class="w-14 h-14 bg-brand-600/20 border border-brand-600 rounded-2xl flex items-center justify-center mb-4">
+          <i class="fas fa-mobile-screen-button text-2xl text-brand-400"></i>
+        </div>
+        <h2 class="text-xl font-bold text-white">Двухфакторная аутентификация</h2>
+        <p class="text-gray-400 text-sm mt-1 text-center">Введите 6-значный код из приложения-аутентификатора</p>
+      </div>
+
+      <div id="totp-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
+        Неверный код
+      </div>
+
+      <form id="totp-form" class="space-y-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Код подтверждения</label>
+          <input id="totp-code-input" type="text" inputmode="numeric" maxlength="6"
+            placeholder="000000" autocomplete="one-time-code"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-2xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
+        </div>
+        <button type="submit"
+          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
+          <i class="fas fa-shield-halved"></i> Подтвердить
+        </button>
+        <button type="button" id="totp-back-btn"
+          class="w-full py-2.5 text-gray-400 hover:text-white text-sm transition">
+          ← Назад к входу
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  SCREEN 3: FORCE CHANGE CREDENTIALS (first login)
+══════════════════════════════════════════════════════ -->
+<div id="force-change-screen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900 py-8">
+  <div class="w-full max-w-lg px-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+      <div class="flex flex-col items-center mb-6">
+        <div class="w-14 h-14 bg-yellow-600/20 border border-yellow-600 rounded-2xl flex items-center justify-center mb-4">
+          <i class="fas fa-key text-2xl text-yellow-400"></i>
+        </div>
+        <h2 class="text-xl font-bold text-white">Первый вход — смена данных</h2>
+        <p class="text-gray-400 text-sm mt-1 text-center">Установите постоянные учётные данные и привяжите аутентификатор</p>
+      </div>
+
+      <!-- TOTP QR section -->
+      <div id="fc-totp-section" class="hidden mb-6 p-4 bg-gray-800/50 border border-gray-700 rounded-xl">
+        <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+          <i class="fas fa-qrcode text-brand-400"></i>
+          Шаг 1: Привяжите аутентификатор
+        </h3>
+        <p class="text-xs text-gray-400 mb-3">Отсканируйте QR в Google Authenticator, Aegis или 2FAS:</p>
+        <div class="flex justify-center mb-3">
+          <img id="fc-qr-img" src="" alt="TOTP QR" class="w-40 h-40 rounded-lg bg-white p-1">
+        </div>
+        <p class="text-xs text-gray-500 mb-1 text-center">или введите ключ вручную:</p>
+        <div class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+          <code id="fc-secret-text" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
+          <button type="button" id="fc-copy-secret"
+            class="text-gray-500 hover:text-brand-400 transition p-1" title="Скопировать">
+            <i class="fas fa-copy text-xs"></i>
+          </button>
+        </div>
+      </div>
+
+      <div id="fc-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
+
+      <form id="force-change-form" class="space-y-4">
+        <div class="border-t border-gray-700 pt-4">
+          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <i class="fas fa-user-pen text-brand-400"></i>
+            Шаг 2: Новые учётные данные
+          </h3>
+          <div class="space-y-3">
+            <div>
+              <label class="form-label">Новый логин</label>
+              <input name="new_username" type="text" class="form-input" required placeholder="Ваш логин">
+            </div>
+            <div>
+              <label class="form-label">Новый пароль</label>
+              <input name="new_password" type="password" class="form-input" required placeholder="Минимум 8 символов">
+            </div>
+            <div>
+              <label class="form-label">Повтор пароля</label>
+              <input name="confirm_password" type="password" class="form-input" required placeholder="Повторите пароль">
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t border-gray-700 pt-4">
+          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <i class="fas fa-shield-halved text-brand-400"></i>
+            Шаг 3: Подтвердите код из приложения
+          </h3>
+          <input name="totp_code" type="text" inputmode="numeric" maxlength="6"
+            placeholder="000000" autocomplete="one-time-code"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
+        </div>
+
+        <button type="submit"
+          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
+          <i class="fas fa-check"></i> Сохранить и войти
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  SCREEN 4: MAIN APP
+══════════════════════════════════════════════════════ -->
 <div id="app" class="hidden min-h-screen flex flex-col">
 
   <!-- TOP NAV -->
   <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
-      <div class="flex items-center gap-3">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
+      <!-- Logo -->
+      <div class="flex items-center gap-3 flex-shrink-0">
         <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
           <i class="fas fa-shield-halved text-white text-sm"></i>
         </div>
@@ -96,37 +209,65 @@
       <!-- Tab navigation -->
       <nav class="flex gap-1">
         <button onclick="showTab('servers')" data-tab="servers"
-          class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+          class="tab-btn px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
           <i class="fas fa-server text-xs"></i>
-          <span>Серверы</span>
+          <span class="hidden sm:inline">Серверы</span>
         </button>
         <button onclick="showTab('connections')" data-tab="connections"
-          class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+          class="tab-btn px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
           <i class="fas fa-network-wired text-xs"></i>
-          <span>Подключения</span>
+          <span class="hidden sm:inline">Подключения</span>
+        </button>
+        <button id="tab-btn-users" onclick="showTab('users')" data-tab="users"
+          class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-users text-xs"></i>
+          <span class="hidden sm:inline">Пользователи</span>
         </button>
       </nav>
 
-      <!-- User / logout -->
-      <div class="flex items-center gap-2">
-        <span id="user-badge" class="hidden sm:flex items-center gap-2 text-xs text-gray-400">
-          <i class="fas fa-circle-user"></i>
+      <!-- Profile -->
+      <div class="flex items-center gap-2 flex-shrink-0 relative">
+        <button id="profile-btn"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-800 transition text-xs text-gray-300">
+          <i class="fas fa-circle-user text-gray-400"></i>
           <span id="username-display">admin</span>
-        </span>
-        <button onclick="logout()"
-          class="p-2 text-gray-400 hover:text-red-400 hover:bg-red-900/20 rounded-lg transition" title="Выйти">
-          <i class="fas fa-right-from-bracket text-sm"></i>
+          <span id="role-badge" class="px-1.5 py-0.5 bg-gray-700 rounded text-gray-400 text-xs"></span>
+          <i class="fas fa-chevron-down text-gray-500 text-xs"></i>
         </button>
       </div>
     </div>
   </header>
 
+  <!-- PROFILE PANEL (dropdown) -->
+  <div id="profile-panel" class="hidden absolute right-4 top-14 z-50 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 space-y-4">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 bg-brand-700 rounded-xl flex items-center justify-center">
+        <i class="fas fa-user text-white text-sm"></i>
+      </div>
+      <div>
+        <div id="pp-username" class="font-semibold text-white text-sm"></div>
+        <div id="pp-role" class="text-xs text-gray-400"></div>
+      </div>
+    </div>
+    <div class="text-xs text-gray-500 flex items-center gap-2">
+      <i class="fas fa-shield-halved"></i>
+      2FA: <span id="pp-2fa-status" class="text-gray-300"></span>
+    </div>
+    <button id="pp-bind-totp-btn"
+      class="w-full py-2 px-3 bg-yellow-900/20 hover:bg-yellow-900/40 border border-yellow-800 text-yellow-400 rounded-lg text-xs transition flex items-center justify-center gap-2">
+      <i class="fas fa-rotate"></i> Привязать / сменить аутентификатор
+    </button>
+    <button onclick="logout()"
+      class="w-full py-2 px-3 bg-red-900/20 hover:bg-red-900/40 border border-red-800 text-red-400 rounded-lg text-xs transition flex items-center justify-center gap-2">
+      <i class="fas fa-right-from-bracket"></i> Выйти
+    </button>
+  </div>
+
   <!-- MAIN CONTENT -->
   <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
 
-    <!-- ──────────────────────────────── SERVERS TAB ──────────────────────────────── -->
+    <!-- ─── SERVERS TAB ─────────────────────────────────── -->
     <section id="tab-servers" class="tab-content">
-      <!-- Header -->
       <div class="flex items-center justify-between mb-6">
         <div>
           <h2 class="text-xl font-bold text-white">Серверы</h2>
@@ -136,20 +277,16 @@
           <button onclick="checkAllServers()" id="check-all-btn"
             class="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition flex items-center gap-2">
             <i class="fas fa-rotate text-xs"></i>
-            Проверить все
+            <span class="hidden sm:inline">Проверить все</span>
           </button>
           <button onclick="showAddServerModal()"
             class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
             <i class="fas fa-plus text-xs"></i>
-            Добавить сервер
+            <span class="hidden sm:inline">Добавить сервер</span>
           </button>
         </div>
       </div>
-
-      <!-- Servers grid -->
-      <div id="servers-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        <!-- Loaded dynamically -->
-      </div>
+      <div id="servers-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
       <div id="servers-empty" class="hidden text-center py-16">
         <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
           <i class="fas fa-server text-3xl text-gray-600"></i>
@@ -162,9 +299,8 @@
       </div>
     </section>
 
-    <!-- ──────────────────────────────── CONNECTIONS TAB ──────────────────────────────── -->
+    <!-- ─── CONNECTIONS TAB ────────────────────────────── -->
     <section id="tab-connections" class="tab-content hidden">
-      <!-- Header -->
       <div class="flex items-center justify-between mb-6">
         <div>
           <h2 class="text-xl font-bold text-white">Подключения</h2>
@@ -173,20 +309,42 @@
         <button onclick="showAddConnectionModal()"
           class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
           <i class="fas fa-plus text-xs"></i>
-          Создать подключение
+          <span class="hidden sm:inline">Создать подключение</span>
         </button>
       </div>
-
-      <!-- Grouped connections list -->
       <div id="connections-list" class="space-y-4"></div>
       <div id="connections-empty" class="hidden text-center py-16">
         <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
           <i class="fas fa-network-wired text-3xl text-gray-600"></i>
         </div>
         <p class="text-gray-400 font-medium">Подключений пока нет</p>
-        <p class="text-gray-600 text-sm mt-1">Создайте первое VPN-подключение</p>
         <button onclick="showAddConnectionModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
           <i class="fas fa-plus mr-2"></i>Создать
+        </button>
+      </div>
+    </section>
+
+    <!-- ─── USERS TAB ──────────────────────────────────── -->
+    <section id="tab-users" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Пользователи</h2>
+          <p class="text-gray-400 text-sm mt-0.5">Управление учётными записями операторов</p>
+        </div>
+        <button onclick="showCreateUserModal()"
+          class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+          <i class="fas fa-user-plus text-xs"></i>
+          <span class="hidden sm:inline">Создать</span>
+        </button>
+      </div>
+      <div id="users-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      <div id="users-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-users text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Пользователей нет</p>
+        <button onclick="showCreateUserModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-user-plus mr-2"></i>Создать
         </button>
       </div>
     </section>
@@ -194,17 +352,16 @@
   </main>
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════════
+<!-- ══════════════════════════════════════════════════════
   MODALS
-═══════════════════════════════════════════════════════════════════ -->
+══════════════════════════════════════════════════════ -->
 
-<!-- ADD SERVER MODAL -->
+<!-- ADD SERVER -->
 <div id="modal-add-server" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-server text-brand-400"></i>
-        Добавить сервер
+        <i class="fas fa-server text-brand-400"></i>Добавить сервер
       </h3>
       <button onclick="closeModal('modal-add-server')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
@@ -257,7 +414,7 @@
         </div>
         <div class="col-span-2">
           <label class="form-label">SSH приватный ключ (PEM)</label>
-          <textarea name="ssh_key" rows="5" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
+          <textarea name="ssh_key" rows="4" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
             class="form-input font-mono text-xs resize-none"></textarea>
         </div>
         <div class="col-span-2">
@@ -265,31 +422,25 @@
           <input name="ssh_password" type="password" class="form-input" placeholder="Пароль (если нет ключа)">
         </div>
       </div>
-
       <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('modal-add-server')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
-          Отмена
-        </button>
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
         <button type="submit"
           class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-plus text-xs"></i>
-          Добавить
+          <i class="fas fa-plus text-xs"></i>Добавить
         </button>
       </div>
     </form>
   </div>
 </div>
 
-<!-- SERVER DETAIL MODAL -->
+<!-- SERVER DETAIL -->
 <div id="modal-server-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2" id="server-detail-title">
-        <i class="fas fa-server text-brand-400"></i>
-        Сервер
+        <i class="fas fa-server text-brand-400"></i>Сервер
       </h3>
       <button onclick="closeModal('modal-server-detail')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
@@ -299,13 +450,12 @@
   </div>
 </div>
 
-<!-- ADD CONNECTION MODAL -->
+<!-- ADD CONNECTION -->
 <div id="modal-add-connection" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-network-wired text-brand-400"></i>
-        Создать подключение
+        <i class="fas fa-network-wired text-brand-400"></i>Создать подключение
       </h3>
       <button onclick="closeModal('modal-add-connection')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
@@ -334,48 +484,40 @@
       <div id="conn-exit-server-block" class="hidden">
         <label class="form-label">EU Exit node (опционально)</label>
         <select name="exit_server_id" id="conn-exit-select" class="form-input">
-          <option value="">— Прямой выход (EU сервер) —</option>
+          <option value="">— Прямой выход —</option>
         </select>
-        <p class="text-gray-500 text-xs mt-1">Для RU → EU цепочки выберите EU-сервер как точку выхода</p>
+        <p class="text-gray-500 text-xs mt-1">Для RU → EU цепочки выберите EU-сервер</p>
       </div>
       <div id="conn-sni-block" class="hidden">
-        <label class="form-label">Reality SNI (fingerprint цель)</label>
+        <label class="form-label">Reality SNI</label>
         <input name="reality_server_name" type="text" value="www.microsoft.com" class="form-input">
       </div>
-
       <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
         <i class="fas fa-info-circle text-brand-400 mr-1"></i>
-        Шаг 3 — автоматически: ключи, порт и конфигурация генерируются и деплоятся на сервер через SSH
+        Шаг 3 — автоматически: ключи, порт, конфигурация деплоятся через SSH
       </div>
-
       <div id="add-connection-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
       <div id="add-connection-progress" class="hidden p-3 bg-brand-900/50 border border-brand-700 rounded-lg text-brand-300 text-sm flex items-center gap-2">
-        <i class="fas fa-spinner fa-spin"></i>
-        <span>Деплой подключения на сервер...</span>
+        <i class="fas fa-spinner fa-spin"></i><span>Деплой подключения...</span>
       </div>
-
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('modal-add-connection')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
-          Отмена
-        </button>
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
         <button type="submit"
           class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-rocket text-xs"></i>
-          Создать и задеплоить
+          <i class="fas fa-rocket text-xs"></i>Создать и задеплоить
         </button>
       </div>
     </form>
   </div>
 </div>
 
-<!-- CLIENT CONFIG MODAL -->
+<!-- CLIENT CONFIG -->
 <div id="modal-client-config" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-qrcode text-brand-400"></i>
-        Конфигурация клиента
+        <i class="fas fa-qrcode text-brand-400"></i>Конфигурация клиента
       </h3>
       <button onclick="closeModal('modal-client-config')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
@@ -385,20 +527,19 @@
   </div>
 </div>
 
-<!-- INSTALL STACK MODAL -->
+<!-- INSTALL STACK -->
 <div id="modal-install-stack" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-download text-brand-400"></i>
-        Установка VPN стека
+        <i class="fas fa-download text-brand-400"></i>Установка VPN стека
       </h3>
       <button onclick="closeModal('modal-install-stack')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
     <div class="p-6 space-y-4">
-      <p class="text-gray-400 text-sm">Выберите компоненты для установки на сервере:</p>
+      <p class="text-gray-400 text-sm">Выберите компоненты для установки:</p>
       <div class="space-y-3">
         <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
           <input type="checkbox" id="install-xray" checked class="w-4 h-4 accent-brand-500">
@@ -411,7 +552,7 @@
           <input type="checkbox" id="install-warp" class="w-4 h-4 accent-brand-500">
           <div>
             <div class="text-sm font-medium text-white">Cloudflare WARP</div>
-            <div class="text-xs text-gray-500">Fallback механизм выхода в интернет</div>
+            <div class="text-xs text-gray-500">Fallback механизм выхода</div>
           </div>
         </label>
       </div>
@@ -419,15 +560,107 @@
       <input type="hidden" id="install-server-id">
       <div class="flex gap-3 pt-2">
         <button onclick="closeModal('modal-install-stack')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
-          Отмена
-        </button>
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
         <button onclick="confirmInstallStack()"
           class="flex-1 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-download text-xs"></i>
-          Установить
+          <i class="fas fa-download text-xs"></i>Установить
         </button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE USER MODAL -->
+<div id="modal-create-user" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-user-plus text-brand-400"></i>Создать пользователя
+      </h3>
+      <button onclick="closeModal('modal-create-user')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="create-user-modal-body"></div>
+  </div>
+</div>
+
+<!-- TOTP ONE-TIME SHOW MODAL (after user create / rebind) -->
+<div id="modal-totp-once" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 id="totp-once-title" class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-qrcode text-brand-400"></i>TOTP аутентификатор
+      </h3>
+      <button onclick="closeModal('modal-totp-once')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-start gap-2">
+        <i class="fas fa-triangle-exclamation mt-0.5 flex-shrink-0"></i>
+        <span>Эти данные показываются <strong>один раз</strong>. После закрытия окна QR-код и ключ недоступны.</span>
+      </div>
+      <p class="text-sm text-gray-400">
+        Пользователь: <span id="totp-once-user" class="font-semibold text-white"></span>
+      </p>
+      <p class="text-xs text-gray-500">Передайте QR или ключ пользователю по защищённому каналу:</p>
+      <div class="flex justify-center">
+        <img id="totp-once-qr" src="" alt="TOTP QR" class="w-44 h-44 rounded-lg bg-white p-2">
+      </div>
+      <div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+        <code id="totp-once-secret" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
+        <button onclick="copyTotpSecret()" class="text-gray-500 hover:text-brand-400 transition p-1">
+          <i class="fas fa-copy text-xs"></i>
+        </button>
+      </div>
+      <button onclick="closeModal('modal-totp-once')"
+        class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+        Закрыть (я сохранил ключ)
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- BIND TOTP (profile self-bind) -->
+<div id="modal-bind-totp" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-mobile-screen-button text-brand-400"></i>Привязка аутентификатора
+      </h3>
+      <button onclick="closeModal('modal-bind-totp')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-start gap-2">
+        <i class="fas fa-triangle-exclamation mt-0.5 flex-shrink-0"></i>
+        <span>QR и ключ показываются <strong>один раз</strong>. Предыдущий TOTP аннулируется немедленно.</span>
+      </div>
+      <p class="text-xs text-gray-500">Отсканируйте QR в Google Authenticator, Aegis или 2FAS:</p>
+      <div class="flex justify-center">
+        <img id="bind-qr-img" src="" alt="QR" class="w-44 h-44 rounded-lg bg-white p-2">
+      </div>
+      <div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+        <code id="bind-secret-text" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
+        <button id="bind-totp-copy" class="text-gray-500 hover:text-brand-400 transition p-1">
+          <i class="fas fa-copy text-xs"></i>
+        </button>
+      </div>
+      <div id="bind-totp-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
+      <form id="bind-totp-confirm-form" class="space-y-3">
+        <div>
+          <label class="form-label">Введите код для подтверждения</label>
+          <input id="bind-confirm-code" type="text" inputmode="numeric" maxlength="6"
+            placeholder="000000" autocomplete="one-time-code"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 transition font-mono">
+        </div>
+        <button type="submit"
+          class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-check"></i> Подтвердить привязку
+        </button>
+      </form>
     </div>
   </div>
 </div>
@@ -439,6 +672,7 @@
 <script src="js/ui.js"></script>
 <script src="js/servers.js"></script>
 <script src="js/connections.js"></script>
+<script src="js/users.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
