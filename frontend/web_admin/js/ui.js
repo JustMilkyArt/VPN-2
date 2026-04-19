@@ -1,10 +1,15 @@
 /**
- * UI Utilities: toasts, modals, helpers
+ * UI Utilities: toasts, modals, tabs, helpers
  */
 
-// ───────────────────────────────────── TOAST ──────────────────────────────────
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+
 function toast(message, type = 'info', duration = 4000) {
-  const icons = { success: 'fa-circle-check', error: 'fa-circle-exclamation', info: 'fa-circle-info' };
+  const icons = {
+    success: 'fa-circle-check',
+    error:   'fa-circle-exclamation',
+    info:    'fa-circle-info',
+  };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
   el.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span>${message}</span>`;
@@ -17,22 +22,23 @@ function toast(message, type = 'info', duration = 4000) {
   }, duration);
 }
 
-// ───────────────────────────────────── MODALS ─────────────────────────────────
-function openModal(id) {
-  document.getElementById(id)?.classList.remove('hidden');
-}
-function closeModal(id) {
-  document.getElementById(id)?.classList.add('hidden');
-}
+// Alias
+function showToast(msg, type = 'info') { toast(msg, type); }
+
+// ─── MODALS ───────────────────────────────────────────────────────────────────
+
+function openModal(id) { document.getElementById(id)?.classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); }
 
 // Close on overlay click
-document.querySelectorAll('.modal-overlay').forEach(el => {
-  el.addEventListener('click', (e) => {
-    if (e.target === el) el.classList.add('hidden');
-  });
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('modal-overlay')) {
+    e.target.classList.add('hidden');
+  }
 });
 
-// ───────────────────────────────────── TABS ───────────────────────────────────
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -40,12 +46,13 @@ function showTab(name) {
   document.getElementById(`tab-${name}`)?.classList.remove('hidden');
   document.querySelector(`[data-tab="${name}"]`)?.classList.add('active');
 
-  if (name === 'servers') loadServers();
+  if (name === 'servers')     loadServers();
   if (name === 'connections') loadConnectionsGrouped();
-  if (name === 'users') loadUsers();
+  if (name === 'users')       loadUsers();
 }
 
-// ───────────────────────────────────── COPY ───────────────────────────────────
+// ─── COPY ─────────────────────────────────────────────────────────────────────
+
 async function copyText(text, btn) {
   try {
     await navigator.clipboard.writeText(text);
@@ -63,18 +70,30 @@ async function copyText(text, btn) {
   }
 }
 
-// ───────────────────────────────────── COUNTRY FLAGS ─────────────────────────
+// ─── ESCAPE HTML ──────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ─── COUNTRY FLAGS ────────────────────────────────────────────────────────────
+
 const COUNTRY_FLAGS = {
   RU: '🇷🇺', DE: '🇩🇪', NL: '🇳🇱', FI: '🇫🇮', FR: '🇫🇷',
-  GB: '🇬🇧', US: '🇺🇸', TR: '🇹🇷', PL: '🇵🇱',
-  '??': '🌍',
+  GB: '🇬🇧', US: '🇺🇸', TR: '🇹🇷', PL: '🇵🇱', '??': '🌍',
 };
 
 function getFlag(country) {
   return COUNTRY_FLAGS[country?.toUpperCase()] || '🌍';
 }
 
-// ───────────────────────────────────── STATUS HELPERS ─────────────────────────
+// ─── STATUS HELPERS ───────────────────────────────────────────────────────────
+
 function statusDot(status) {
   const cls = { online: 'online', offline: 'offline', unknown: 'unknown', deploying: 'deploying' };
   return `<span class="status-dot ${cls[status] || 'unknown'}"></span>`;
@@ -82,13 +101,13 @@ function statusDot(status) {
 
 function statusText(status) {
   const labels = {
-    online: '<span class="text-green-400">Online</span>',
-    offline: '<span class="text-red-400">Offline</span>',
-    unknown: '<span class="text-gray-500">Unknown</span>',
+    online:    '<span class="text-green-400">Online</span>',
+    offline:   '<span class="text-red-400">Offline</span>',
+    unknown:   '<span class="text-gray-500">Unknown</span>',
     deploying: '<span class="text-amber-400">Deploying...</span>',
-    active: '<span class="text-green-400">Active</span>',
-    inactive: '<span class="text-gray-500">Inactive</span>',
-    error: '<span class="text-red-400">Error</span>',
+    active:    '<span class="text-green-400">Active</span>',
+    inactive:  '<span class="text-gray-500">Inactive</span>',
+    error:     '<span class="text-red-400">Error</span>',
   };
   return labels[status] || status;
 }
@@ -96,28 +115,29 @@ function statusText(status) {
 function protocolLabel(proto) {
   const map = {
     vless_reality: { text: 'VLESS Reality', icon: 'fa-lock' },
-    trojan: { text: 'Trojan', icon: 'fa-shield-halved' },
-    naive_proxy: { text: 'NaiveProxy', icon: 'fa-globe' },
+    trojan:        { text: 'Trojan',         icon: 'fa-shield-halved' },
+    naive_proxy:   { text: 'NaiveProxy',     icon: 'fa-globe' },
   };
   return map[proto] || { text: proto, icon: 'fa-network-wired' };
 }
 
 function roleLabel(role) {
   const map = {
-    RU: '<span class="role-badge-ru">RU ENTRY</span>',
-    EU: '<span class="role-badge-eu">EU EXIT</span>',
+    RU:    '<span class="role-badge-ru">RU ENTRY</span>',
+    EU:    '<span class="role-badge-eu">EU EXIT</span>',
     MIXED: '<span class="role-badge-mixed">MIXED</span>',
   };
   return map[role] || role;
 }
 
-// ───────────────────────────────────── LOADING ────────────────────────────────
+// ─── LOADING STATE ────────────────────────────────────────────────────────────
+
 function setLoading(elementId, loading) {
   const el = document.getElementById(elementId);
   if (!el) return;
   if (loading) {
     el.dataset.originalHtml = el.innerHTML;
-    el.innerHTML = '<span class="spinner"></span>';
+    el.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
     el.disabled = true;
   } else {
     el.innerHTML = el.dataset.originalHtml || el.innerHTML;
@@ -125,31 +145,18 @@ function setLoading(elementId, loading) {
   }
 }
 
-// ───────────────────────────────────── AUTH ───────────────────────────────────
-// showLogin / showApp / logout are defined in app.js (they handle multi-screen logic)
-// Keep legacy stubs here for backward compat with servers.js / connections.js
-function _legacyShowLogin() {
-  if (window.showLogin) window.showLogin();
-}
+// ─── GLOBAL EXPORTS ───────────────────────────────────────────────────────────
 
-// Also alias showToast → toast
-function showToast(msg, type='info') { toast(msg, type); }
-
-// escapeHtml helper
-function escapeHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// Expose globally
-window.showTab = showTab;
-window.copyText = copyText;
-window.getFlag = getFlag;
-window.statusDot = statusDot;
-window.statusText = statusText;
+window.showTab      = showTab;
+window.toast        = toast;
+window.showToast    = showToast;
+window.openModal    = openModal;
+window.closeModal   = closeModal;
+window.copyText     = copyText;
+window.escapeHtml   = escapeHtml;
+window.getFlag      = getFlag;
+window.statusDot    = statusDot;
+window.statusText   = statusText;
 window.protocolLabel = protocolLabel;
-window.roleLabel = roleLabel;
-window.openModal = openModal;
-window.closeModal = closeModal;
-window.toast = toast;
-window.showToast = showToast;
-window.escapeHtml = escapeHtml;
+window.roleLabel    = roleLabel;
+window.setLoading   = setLoading;

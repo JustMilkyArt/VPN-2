@@ -52,11 +52,10 @@ const api = {
       return { ok: true, data: res.data, status: res.status };
     } catch (err) {
       if (err.response?.status === 401) {
-        // Only hard-logout if it's not a TOTP/login endpoint error
         const isAuthEndpoint = path.startsWith('/auth/');
         if (!isAuthEndpoint) {
           this.clearToken();
-          showLogin();
+          if (window.showLogin) window.showLogin();
         }
       }
       const detail = err.response?.data?.detail || err.message || 'Request failed';
@@ -65,14 +64,12 @@ const api = {
   },
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
-  async login(username, password, totpCode = null) {
-    const body = { username, password };
-    if (totpCode) body.totp_code = totpCode;
-    return this.request('POST', '/auth/login', body);
-  },
-
-  async totpVerify(tempToken, totpCode) {
-    return this.request('POST', '/auth/totp-verify', { temp_token: tempToken, totp_code: totpCode });
+  async login(username, password, totpCode) {
+    return this.request('POST', '/auth/login', {
+      username,
+      password,
+      totp_code: totpCode || '',
+    });
   },
 
   async me() {
@@ -88,14 +85,6 @@ const api = {
     });
   },
 
-  async bindTotp() {
-    return this.request('POST', '/auth/bind-totp');
-  },
-
-  async confirmTotp(totpCode) {
-    return this.request('POST', '/auth/confirm-totp', { totp_code: totpCode });
-  },
-
   // ─── Users ─────────────────────────────────────────────────────────────────
   async getUsers() {
     return this.request('GET', '/users/');
@@ -107,6 +96,10 @@ const api = {
 
   async updateUser(id, data) {
     return this.request('PUT', `/users/${id}`, data);
+  },
+
+  async setUserPassword(id, newPassword) {
+    return this.request('POST', `/users/${id}/set-password`, { new_password: newPassword });
   },
 
   async deleteUser(id) {

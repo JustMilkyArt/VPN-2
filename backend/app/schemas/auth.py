@@ -8,22 +8,13 @@ from app.models.admin_user import UserRole
 class LoginRequest(BaseModel):
     username: str
     password: str
-    totp_code: Optional[str] = None   # supplied when TOTP is already bound
+    totp_code: str          # always required
 
 
 class LoginResponse(BaseModel):
-    """
-    Two-phase login response.
-    phase="ok"   → full token issued, user is in.
-    phase="totp" → password correct but TOTP required; frontend must ask for code.
-    phase="force_change" → first login, must change credentials + bind TOTP.
-    """
-    phase: str                          # "ok" | "totp" | "force_change"
-    access_token: Optional[str] = None
+    phase: str              # always "ok" now
+    access_token: str
     token_type: str = "bearer"
-    # Returned only for phase=="force_change" so frontend can show TOTP setup
-    totp_qr: Optional[str] = None      # base64 data URI
-    totp_secret: Optional[str] = None  # raw base32 for manual entry
 
 
 class TokenResponse(BaseModel):
@@ -37,13 +28,13 @@ class ChangeCredentialsRequest(BaseModel):
     new_username: str
     new_password: str
     confirm_password: str
-    totp_code: str                      # always required when changing creds
+    totp_code: str
 
     @field_validator("confirm_password")
     @classmethod
     def passwords_match(cls, v, info):
         if "new_password" in info.data and v != info.data["new_password"]:
-            raise ValueError("Passwords do not match")
+            raise ValueError("Пароли не совпадают")
         return v
 
 
@@ -52,13 +43,12 @@ class ProfileResponse(BaseModel):
     username: str
     role: UserRole
     totp_enabled: bool
-    force_change_creds: bool
 
     class Config:
         from_attributes = True
 
 
-# ─── User CRUD (admin only) ───────────────────────────────────────────────────
+# ─── User CRUD ────────────────────────────────────────────────────────────────
 
 class AdminUserCreate(BaseModel):
     username: str
@@ -72,7 +62,6 @@ class AdminUserRead(BaseModel):
     role: UserRole
     is_active: bool
     totp_enabled: bool
-    force_change_creds: bool
     created_by_id: Optional[int] = None
     created_at: Optional[str] = None
 
@@ -91,6 +80,11 @@ class AdminUserUpdate(BaseModel):
     username: Optional[str] = None
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
+
+
+class AdminUserSetPassword(BaseModel):
+    """Used by admin to reset another user's password."""
+    new_password: str
 
 
 class RebindTotpResponse(BaseModel):

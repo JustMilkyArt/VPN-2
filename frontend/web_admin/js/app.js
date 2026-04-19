@@ -1,64 +1,36 @@
 /**
- * App initialization, auth flow (password → TOTP → main),
- * profile panel, change-credentials flow.
+ * App: auth flow (login = username + password + TOTP always),
+ * profile panel with change-credentials.
  */
 
-// ─── State ────────────────────────────────────────────────────────────────────
-let _tempToken = null;      // stored between login phases
+// ─── Show screens ─────────────────────────────────────────────────────────────
 
-// ─── Show/hide screens ────────────────────────────────────────────────────────
 function showLogin() {
   document.getElementById('login-screen').classList.remove('hidden');
-  document.getElementById('totp-screen').classList.add('hidden');
-  document.getElementById('force-change-screen').classList.add('hidden');
   document.getElementById('app').classList.add('hidden');
-  _tempToken = null;
-}
-
-function showTotpStep(tempToken) {
-  _tempToken = tempToken;
-  document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('totp-screen').classList.remove('hidden');
-  document.getElementById('totp-code-input').value = '';
-  document.getElementById('totp-code-input').focus();
-}
-
-function showForceChangeStep(tempToken, qrDataUri, secret) {
-  _tempToken = tempToken;
-  document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('force-change-screen').classList.remove('hidden');
-  // Show QR
-  if (qrDataUri) {
-    document.getElementById('fc-qr-img').src = qrDataUri;
-    document.getElementById('fc-secret-text').textContent = secret || '';
-    document.getElementById('fc-totp-section').classList.remove('hidden');
-  }
 }
 
 function showApp(user) {
   api.saveUser(user);
   document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('totp-screen').classList.add('hidden');
-  document.getElementById('force-change-screen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+
   document.getElementById('username-display').textContent = user.username;
 
-  // Role badge in header
-  const roleBadgeEl = document.getElementById('role-badge');
-  if (roleBadgeEl) {
-    const labels = { creator: 'Creator', head_admin: 'Гл. Админ', admin: 'Админ' };
-    roleBadgeEl.textContent = labels[user.role] || user.role;
-  }
+  const labels = { creator: 'Creator', head_admin: 'Гл. Админ', admin: 'Админ' };
+  const roleEl = document.getElementById('role-badge');
+  if (roleEl) roleEl.textContent = labels[user.role] || user.role;
 
-  // Show/hide Users tab based on role
+  // Users tab: visible only to creator / head_admin
   const usersTabBtn = document.getElementById('tab-btn-users');
   if (usersTabBtn) {
-    const canSeeUsers = user.role === 'creator' || user.role === 'head_admin';
-    usersTabBtn.classList.toggle('hidden', !canSeeUsers);
+    const canSee = user.role === 'creator' || user.role === 'head_admin';
+    usersTabBtn.classList.toggle('hidden', !canSee);
   }
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+
 async function initApp() {
   const token = api.getToken();
   if (token) {
@@ -74,125 +46,46 @@ async function initApp() {
   showLogin();
 }
 
-// ─── Login form (step 1: password) ───────────────────────────────────────────
+// ─── Login form ───────────────────────────────────────────────────────────────
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const username = document.getElementById('login-username').value.trim();
-  const password = document.getElementById('login-password').value;
-  const errorEl = document.getElementById('login-error');
+
+  const username  = document.getElementById('login-username').value.trim();
+  const password  = document.getElementById('login-password').value;
+  const totpCode  = document.getElementById('login-totp').value.trim();
+  const errorEl   = document.getElementById('login-error');
   const errorText = document.getElementById('login-error-text');
-  const btn = document.getElementById('login-btn');
+  const btn       = document.getElementById('login-btn');
 
   errorEl.classList.add('hidden');
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
   btn.disabled = true;
 
-  const res = await api.login(username, password);
+  const res = await api.login(username, password, totpCode);
 
   btn.innerHTML = '<i class="fas fa-right-to-bracket"></i> Войти';
   btn.disabled = false;
 
-  if (!res.ok) {
-    errorText.textContent = res.error || 'Неверный логин или пароль';
+  if (res.ok && res.data.phase === 'ok') {
+    api.setToken(res.data.access_token);
+    const me = await api.me();
+    if (me.ok) {
+      showApp(me.data);
+      showTab('servers');
+      startPolling();
+    }
+  } else {
+    errorText.textContent = res.error || 'Неверный логин, пароль или код';
     errorEl.classList.remove('hidden');
     document.getElementById('login-password').value = '';
-    return;
+    document.getElementById('login-totp').value = '';
+    document.getElementById('login-totp').focus();
   }
-
-  const { phase, access_token, totp_qr, totp_secret } = res.data;
-
-  if (phase === 'ok') {
-    api.setToken(access_token);
-    const me = await api.me();
-    if (me.ok) { showApp(me.data); showTab('servers'); startPolling(); }
-  } else if (phase === 'totp') {
-    api.setToken(access_token);    // temp token stored for totp-verify
-    showTotpStep(access_token);
-  } else if (phase === 'force_change') {
-    api.setToken(access_token);    // temp token for change-creds endpoint
-    showForceChangeStep(access_token, totp_qr, totp_secret);
-  }
-});
-
-// ─── TOTP step (step 2) ───────────────────────────────────────────────────────
-document.getElementById('totp-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const code = document.getElementById('totp-code-input').value.trim();
-  const errEl = document.getElementById('totp-error');
-  const btn = e.target.querySelector('[type=submit]');
-
-  errEl.classList.add('hidden');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-
-  const res = await api.totpVerify(_tempToken, code);
-
-  btn.disabled = false;
-  btn.innerHTML = '<i class="fas fa-shield-halved"></i> Подтвердить';
-
-  if (res.ok) {
-    api.setToken(res.data.access_token);
-    _tempToken = null;
-    const me = await api.me();
-    if (me.ok) { showApp(me.data); showTab('servers'); startPolling(); }
-  } else {
-    errEl.textContent = res.error || 'Неверный код';
-    errEl.classList.remove('hidden');
-    document.getElementById('totp-code-input').value = '';
-    document.getElementById('totp-code-input').focus();
-  }
-});
-
-document.getElementById('totp-back-btn')?.addEventListener('click', () => {
-  api.clearToken();
-  showLogin();
-});
-
-// ─── Force-change credentials (first login) ──────────────────────────────────
-document.getElementById('force-change-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const errEl = document.getElementById('fc-error');
-  const btn = e.target.querySelector('[type=submit]');
-
-  errEl.classList.add('hidden');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-
-  const res = await api.changeCreds(
-    fd.get('new_username').trim(),
-    fd.get('new_password'),
-    fd.get('confirm_password'),
-    fd.get('totp_code').trim(),
-  );
-
-  btn.disabled = false;
-  btn.innerHTML = '<i class="fas fa-check"></i> Сохранить и войти';
-
-  if (res.ok) {
-    // Re-login to get a proper full token with updated username
-    const loginRes = await api.login(
-      fd.get('new_username').trim(),
-      fd.get('new_password'),
-      fd.get('totp_code').trim()
-    );
-    if (loginRes.ok && loginRes.data.phase === 'ok') {
-      api.setToken(loginRes.data.access_token);
-    }
-    const me = await api.me();
-    if (me.ok) { showApp(me.data); showTab('servers'); startPolling(); }
-  } else {
-    errEl.textContent = res.error || 'Ошибка';
-    errEl.classList.remove('hidden');
-  }
-});
-
-document.getElementById('fc-copy-secret')?.addEventListener('click', () => {
-  const secret = document.getElementById('fc-secret-text').textContent;
-  navigator.clipboard.writeText(secret).then(() => showToast('Ключ скопирован', 'success'));
 });
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
+
 function logout() {
   stopPolling();
   api.clearToken();
@@ -200,68 +93,97 @@ function logout() {
 }
 
 // ─── Profile panel ────────────────────────────────────────────────────────────
+
 function showProfilePanel() {
   const user = api.getUser();
   if (!user) return;
+
   const panel = document.getElementById('profile-panel');
   document.getElementById('pp-username').textContent = user.username;
-  document.getElementById('pp-role').textContent =
-    ({ creator: 'Creator', head_admin: 'Главный Админ', admin: 'Админ' })[user.role] || user.role;
-  document.getElementById('pp-2fa-status').textContent = user.totp_enabled ? 'Включён ✓' : 'Не привязан';
+
+  const labels = { creator: 'Creator', head_admin: 'Главный Админ', admin: 'Админ' };
+  document.getElementById('pp-role').textContent = labels[user.role] || user.role;
+  document.getElementById('pp-2fa-status').textContent = user.totp_enabled ? 'Включён ✓' : 'Не настроен';
+
+  // Hide change-creds form when opening
+  document.getElementById('pp-change-creds-form').classList.add('hidden');
+  document.getElementById('pp-change-btn').classList.remove('hidden');
+
   panel.classList.toggle('hidden');
 }
 
 document.getElementById('profile-btn')?.addEventListener('click', showProfilePanel);
 
-// Profile: bind TOTP
-document.getElementById('pp-bind-totp-btn')?.addEventListener('click', async () => {
-  const res = await api.bindTotp();
-  if (res.ok) {
-    showTotpBindConfirmModal(res.data.totp_qr, res.data.totp_secret);
-  } else {
-    showToast(res.error, 'error');
-  }
+// Show/hide change-creds form
+document.getElementById('pp-change-btn')?.addEventListener('click', () => {
+  document.getElementById('pp-change-creds-form').classList.remove('hidden');
+  document.getElementById('pp-change-btn').classList.add('hidden');
+  document.getElementById('pp-new-username').value = api.getUser()?.username || '';
+  document.getElementById('pp-new-password').value = '';
+  document.getElementById('pp-confirm-password').value = '';
+  document.getElementById('pp-totp-code').value = '';
+  document.getElementById('pp-creds-error').classList.add('hidden');
 });
 
-function showTotpBindConfirmModal(qr, secret) {
-  document.getElementById('bind-qr-img').src = qr;
-  document.getElementById('bind-secret-text').textContent = secret;
-  document.getElementById('modal-bind-totp').classList.remove('hidden');
-  closePanel('profile-panel');
-}
-
-document.getElementById('bind-totp-copy')?.addEventListener('click', () => {
-  const s = document.getElementById('bind-secret-text').textContent;
-  navigator.clipboard.writeText(s).then(() => showToast('Ключ скопирован', 'success'));
+document.getElementById('pp-cancel-change')?.addEventListener('click', () => {
+  document.getElementById('pp-change-creds-form').classList.add('hidden');
+  document.getElementById('pp-change-btn').classList.remove('hidden');
 });
 
-document.getElementById('bind-totp-confirm-form')?.addEventListener('submit', async (e) => {
+// Submit change-creds
+document.getElementById('pp-change-creds-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const code = document.getElementById('bind-confirm-code').value.trim();
-  const errEl = document.getElementById('bind-totp-error');
-  errEl.classList.add('hidden');
+  const errEl = document.getElementById('pp-creds-error');
   const btn = e.target.querySelector('[type=submit]');
+  errEl.classList.add('hidden');
   btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
-  const res = await api.confirmTotp(code);
+  const newUsername = document.getElementById('pp-new-username').value.trim();
+  const newPassword = document.getElementById('pp-new-password').value;
+  const confirmPassword = document.getElementById('pp-confirm-password').value;
+  const totpCode = document.getElementById('pp-totp-code').value.trim();
+
+  if (newPassword !== confirmPassword) {
+    errEl.textContent = 'Пароли не совпадают';
+    errEl.classList.remove('hidden');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-check"></i> Сохранить';
+    return;
+  }
+
+  const res = await api.changeCreds(newUsername, newPassword, confirmPassword, totpCode);
+
   btn.disabled = false;
+  btn.innerHTML = '<i class="fas fa-check"></i> Сохранить';
 
   if (res.ok) {
     api.saveUser(res.data);
-    closeModal('modal-bind-totp');
-    showToast('Аутентификатор успешно привязан', 'success');
-    document.getElementById('pp-2fa-status').textContent = 'Включён ✓';
+    document.getElementById('username-display').textContent = res.data.username;
+    document.getElementById('pp-username').textContent = res.data.username;
+    document.getElementById('pp-change-creds-form').classList.add('hidden');
+    document.getElementById('pp-change-btn').classList.remove('hidden');
+    document.getElementById('profile-panel').classList.add('hidden');
+    showToast('Данные успешно изменены', 'success');
   } else {
-    errEl.textContent = res.error;
+    errEl.textContent = res.error || 'Ошибка';
     errEl.classList.remove('hidden');
   }
 });
 
-function closePanel(id) {
-  document.getElementById(id)?.classList.add('hidden');
-}
+// Close profile panel on outside click
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('profile-panel');
+  const btn = document.getElementById('profile-btn');
+  if (panel && !panel.classList.contains('hidden')) {
+    if (!panel.contains(e.target) && !btn.contains(e.target)) {
+      panel.classList.add('hidden');
+    }
+  }
+});
 
 // ─── Polling ──────────────────────────────────────────────────────────────────
+
 let pollingInterval = null;
 
 function startPolling() {
@@ -284,10 +206,11 @@ function stopPolling() {
 }
 
 // ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
-    closePanel('profile-panel');
+    document.getElementById('profile-panel')?.classList.add('hidden');
   }
   if (e.ctrlKey && e.key === '1') { e.preventDefault(); showTab('servers'); }
   if (e.ctrlKey && e.key === '2') { e.preventDefault(); showTab('connections'); }
@@ -295,6 +218,9 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  initApp();
-});
+
+document.addEventListener('DOMContentLoaded', initApp);
+
+window.showLogin = showLogin;
+window.showApp   = showApp;
+window.logout    = logout;

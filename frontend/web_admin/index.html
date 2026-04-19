@@ -28,11 +28,13 @@
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
 
 <!-- ══════════════════════════════════════════════════════
-  SCREEN 1: LOGIN
+  SCREEN: LOGIN
 ══════════════════════════════════════════════════════ -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
   <div class="w-full max-w-md px-4">
     <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+
+      <!-- Logo -->
       <div class="flex flex-col items-center mb-8">
         <div class="w-16 h-16 bg-brand-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
           <i class="fas fa-shield-halved text-3xl text-white"></i>
@@ -41,28 +43,42 @@
         <p class="text-gray-400 text-sm mt-1">Infrastructure Management System</p>
       </div>
 
+      <!-- Error -->
       <div id="login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
-        <i class="fas fa-circle-exclamation"></i>
+        <i class="fas fa-circle-exclamation flex-shrink-0"></i>
         <span id="login-error-text"></span>
       </div>
 
+      <!-- Form -->
       <form id="login-form" class="space-y-4">
         <div>
           <label class="block text-sm text-gray-400 mb-1">Логин</label>
           <div class="relative">
             <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
-            <input id="login-username" type="text" placeholder="admin"
+            <input id="login-username" type="text" placeholder="admin" autocomplete="username"
               class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
           </div>
         </div>
+
         <div>
           <label class="block text-sm text-gray-400 mb-1">Пароль</label>
           <div class="relative">
             <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
-            <input id="login-password" type="password" placeholder="••••••••"
+            <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password"
               class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
           </div>
         </div>
+
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">
+            <i class="fas fa-mobile-screen-button mr-1 text-brand-400"></i>
+            Код аутентификатора
+          </label>
+          <input id="login-totp" type="text" inputmode="numeric" maxlength="6"
+            placeholder="000000" autocomplete="one-time-code"
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-[0.4em] placeholder-gray-600 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
+        </div>
+
         <button type="submit" id="login-btn"
           class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 mt-2">
           <i class="fas fa-right-to-bracket"></i>
@@ -75,128 +91,14 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════
-  SCREEN 2: TOTP STEP
-══════════════════════════════════════════════════════ -->
-<div id="totp-screen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
-  <div class="w-full max-w-md px-4">
-    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
-      <div class="flex flex-col items-center mb-6">
-        <div class="w-14 h-14 bg-brand-600/20 border border-brand-600 rounded-2xl flex items-center justify-center mb-4">
-          <i class="fas fa-mobile-screen-button text-2xl text-brand-400"></i>
-        </div>
-        <h2 class="text-xl font-bold text-white">Двухфакторная аутентификация</h2>
-        <p class="text-gray-400 text-sm mt-1 text-center">Введите 6-значный код из приложения-аутентификатора</p>
-      </div>
-
-      <div id="totp-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
-        Неверный код
-      </div>
-
-      <form id="totp-form" class="space-y-4">
-        <div>
-          <label class="block text-sm text-gray-400 mb-1">Код подтверждения</label>
-          <input id="totp-code-input" type="text" inputmode="numeric" maxlength="6"
-            placeholder="000000" autocomplete="one-time-code"
-            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-2xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
-        </div>
-        <button type="submit"
-          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
-          <i class="fas fa-shield-halved"></i> Подтвердить
-        </button>
-        <button type="button" id="totp-back-btn"
-          class="w-full py-2.5 text-gray-400 hover:text-white text-sm transition">
-          ← Назад к входу
-        </button>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════
-  SCREEN 3: FORCE CHANGE CREDENTIALS (first login)
-══════════════════════════════════════════════════════ -->
-<div id="force-change-screen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900 py-8">
-  <div class="w-full max-w-lg px-4">
-    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
-      <div class="flex flex-col items-center mb-6">
-        <div class="w-14 h-14 bg-yellow-600/20 border border-yellow-600 rounded-2xl flex items-center justify-center mb-4">
-          <i class="fas fa-key text-2xl text-yellow-400"></i>
-        </div>
-        <h2 class="text-xl font-bold text-white">Первый вход — смена данных</h2>
-        <p class="text-gray-400 text-sm mt-1 text-center">Установите постоянные учётные данные и привяжите аутентификатор</p>
-      </div>
-
-      <!-- TOTP QR section -->
-      <div id="fc-totp-section" class="hidden mb-6 p-4 bg-gray-800/50 border border-gray-700 rounded-xl">
-        <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <i class="fas fa-qrcode text-brand-400"></i>
-          Шаг 1: Привяжите аутентификатор
-        </h3>
-        <p class="text-xs text-gray-400 mb-3">Отсканируйте QR в Google Authenticator, Aegis или 2FAS:</p>
-        <div class="flex justify-center mb-3">
-          <img id="fc-qr-img" src="" alt="TOTP QR" class="w-40 h-40 rounded-lg bg-white p-1">
-        </div>
-        <p class="text-xs text-gray-500 mb-1 text-center">или введите ключ вручную:</p>
-        <div class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
-          <code id="fc-secret-text" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
-          <button type="button" id="fc-copy-secret"
-            class="text-gray-500 hover:text-brand-400 transition p-1" title="Скопировать">
-            <i class="fas fa-copy text-xs"></i>
-          </button>
-        </div>
-      </div>
-
-      <div id="fc-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-
-      <form id="force-change-form" class="space-y-4">
-        <div class="border-t border-gray-700 pt-4">
-          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-            <i class="fas fa-user-pen text-brand-400"></i>
-            Шаг 2: Новые учётные данные
-          </h3>
-          <div class="space-y-3">
-            <div>
-              <label class="form-label">Новый логин</label>
-              <input name="new_username" type="text" class="form-input" required placeholder="Ваш логин">
-            </div>
-            <div>
-              <label class="form-label">Новый пароль</label>
-              <input name="new_password" type="password" class="form-input" required placeholder="Минимум 8 символов">
-            </div>
-            <div>
-              <label class="form-label">Повтор пароля</label>
-              <input name="confirm_password" type="password" class="form-input" required placeholder="Повторите пароль">
-            </div>
-          </div>
-        </div>
-
-        <div class="border-t border-gray-700 pt-4">
-          <h3 class="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-            <i class="fas fa-shield-halved text-brand-400"></i>
-            Шаг 3: Подтвердите код из приложения
-          </h3>
-          <input name="totp_code" type="text" inputmode="numeric" maxlength="6"
-            placeholder="000000" autocomplete="one-time-code"
-            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
-        </div>
-
-        <button type="submit"
-          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
-          <i class="fas fa-check"></i> Сохранить и войти
-        </button>
-      </form>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════
-  SCREEN 4: MAIN APP
+  MAIN APP
 ══════════════════════════════════════════════════════ -->
 <div id="app" class="hidden min-h-screen flex flex-col">
 
   <!-- TOP NAV -->
-  <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+  <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-40">
     <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
+
       <!-- Logo -->
       <div class="flex items-center gap-3 flex-shrink-0">
         <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
@@ -206,7 +108,7 @@
         <span class="hidden sm:block text-gray-600 text-xs">Infrastructure Manager</span>
       </div>
 
-      <!-- Tab navigation -->
+      <!-- Tabs -->
       <nav class="flex gap-1">
         <button onclick="showTab('servers')" data-tab="servers"
           class="tab-btn px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
@@ -225,48 +127,96 @@
         </button>
       </nav>
 
-      <!-- Profile -->
-      <div class="flex items-center gap-2 flex-shrink-0 relative">
+      <!-- Profile button -->
+      <div class="relative flex-shrink-0">
         <button id="profile-btn"
           class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-800 transition text-xs text-gray-300">
-          <i class="fas fa-circle-user text-gray-400"></i>
-          <span id="username-display">admin</span>
-          <span id="role-badge" class="px-1.5 py-0.5 bg-gray-700 rounded text-gray-400 text-xs"></span>
+          <i class="fas fa-circle-user text-gray-400 text-base"></i>
+          <span id="username-display" class="hidden sm:inline">admin</span>
+          <span id="role-badge" class="hidden sm:inline px-1.5 py-0.5 bg-gray-700 rounded text-gray-400 text-xs"></span>
           <i class="fas fa-chevron-down text-gray-500 text-xs"></i>
         </button>
+
+        <!-- Profile dropdown panel -->
+        <div id="profile-panel" class="hidden absolute right-0 top-full mt-2 z-50 w-80 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden">
+
+          <!-- User info -->
+          <div class="p-4 border-b border-gray-800 flex items-center gap-3">
+            <div class="w-10 h-10 bg-brand-700 rounded-xl flex items-center justify-center flex-shrink-0">
+              <i class="fas fa-user text-white text-sm"></i>
+            </div>
+            <div>
+              <div id="pp-username" class="font-semibold text-white text-sm"></div>
+              <div id="pp-role" class="text-xs text-gray-400"></div>
+            </div>
+          </div>
+
+          <!-- 2FA status -->
+          <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between text-sm">
+            <span class="text-gray-400 flex items-center gap-2">
+              <i class="fas fa-shield-halved text-brand-400"></i>Аутентификатор
+            </span>
+            <span id="pp-2fa-status" class="text-xs font-medium"></span>
+          </div>
+
+          <!-- Change credentials button -->
+          <div class="p-3">
+            <button id="pp-change-btn"
+              class="w-full py-2.5 px-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white rounded-lg text-sm transition flex items-center justify-center gap-2">
+              <i class="fas fa-user-pen"></i> Изменить данные
+            </button>
+
+            <!-- Change credentials form (hidden by default) -->
+            <form id="pp-change-creds-form" class="hidden mt-3 space-y-3">
+              <div>
+                <label class="form-label">Новый логин</label>
+                <input id="pp-new-username" type="text" class="form-input" autocomplete="off">
+              </div>
+              <div>
+                <label class="form-label">Новый пароль</label>
+                <input id="pp-new-password" type="password" class="form-input" placeholder="Минимум 8 символов" autocomplete="new-password">
+              </div>
+              <div>
+                <label class="form-label">Повтор пароля</label>
+                <input id="pp-confirm-password" type="password" class="form-input" autocomplete="new-password">
+              </div>
+              <div>
+                <label class="form-label">Код аутентификатора</label>
+                <input id="pp-totp-code" type="text" inputmode="numeric" maxlength="6"
+                  placeholder="000000" autocomplete="one-time-code"
+                  class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-lg text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 transition font-mono">
+              </div>
+              <div id="pp-creds-error" class="hidden p-2 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-xs"></div>
+              <div class="flex gap-2">
+                <button type="button" id="pp-cancel-change"
+                  class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm transition">
+                  Отмена
+                </button>
+                <button type="submit"
+                  class="flex-1 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-1">
+                  <i class="fas fa-check text-xs"></i> Сохранить
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Logout -->
+          <div class="px-3 pb-3">
+            <button onclick="logout()"
+              class="w-full py-2.5 px-3 bg-red-900/20 hover:bg-red-900/40 border border-red-800 text-red-400 rounded-lg text-sm transition flex items-center justify-center gap-2">
+              <i class="fas fa-right-from-bracket"></i> Выйти
+            </button>
+          </div>
+
+        </div><!-- /profile-panel -->
       </div>
     </div>
   </header>
 
-  <!-- PROFILE PANEL (dropdown) -->
-  <div id="profile-panel" class="hidden absolute right-4 top-14 z-50 w-72 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4 space-y-4">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 bg-brand-700 rounded-xl flex items-center justify-center">
-        <i class="fas fa-user text-white text-sm"></i>
-      </div>
-      <div>
-        <div id="pp-username" class="font-semibold text-white text-sm"></div>
-        <div id="pp-role" class="text-xs text-gray-400"></div>
-      </div>
-    </div>
-    <div class="text-xs text-gray-500 flex items-center gap-2">
-      <i class="fas fa-shield-halved"></i>
-      2FA: <span id="pp-2fa-status" class="text-gray-300"></span>
-    </div>
-    <button id="pp-bind-totp-btn"
-      class="w-full py-2 px-3 bg-yellow-900/20 hover:bg-yellow-900/40 border border-yellow-800 text-yellow-400 rounded-lg text-xs transition flex items-center justify-center gap-2">
-      <i class="fas fa-rotate"></i> Привязать / сменить аутентификатор
-    </button>
-    <button onclick="logout()"
-      class="w-full py-2 px-3 bg-red-900/20 hover:bg-red-900/40 border border-red-800 text-red-400 rounded-lg text-xs transition flex items-center justify-center gap-2">
-      <i class="fas fa-right-from-bracket"></i> Выйти
-    </button>
-  </div>
-
   <!-- MAIN CONTENT -->
   <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
 
-    <!-- ─── SERVERS TAB ─────────────────────────────────── -->
+    <!-- ─── SERVERS TAB ─────────────────────────────── -->
     <section id="tab-servers" class="tab-content">
       <div class="flex items-center justify-between mb-6">
         <div>
@@ -299,7 +249,7 @@
       </div>
     </section>
 
-    <!-- ─── CONNECTIONS TAB ────────────────────────────── -->
+    <!-- ─── CONNECTIONS TAB ─────────────────────────── -->
     <section id="tab-connections" class="tab-content hidden">
       <div class="flex items-center justify-between mb-6">
         <div>
@@ -324,7 +274,7 @@
       </div>
     </section>
 
-    <!-- ─── USERS TAB ──────────────────────────────────── -->
+    <!-- ─── USERS TAB ───────────────────────────────── -->
     <section id="tab-users" class="tab-content hidden">
       <div class="flex items-center justify-between mb-6">
         <div>
@@ -570,7 +520,7 @@
   </div>
 </div>
 
-<!-- CREATE USER MODAL -->
+<!-- CREATE USER -->
 <div id="modal-create-user" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
@@ -585,7 +535,7 @@
   </div>
 </div>
 
-<!-- TOTP ONE-TIME SHOW MODAL (after user create / rebind) -->
+<!-- TOTP ONE-TIME SHOW -->
 <div id="modal-totp-once" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
@@ -599,68 +549,22 @@
     <div class="p-6 space-y-4">
       <div class="p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-start gap-2">
         <i class="fas fa-triangle-exclamation mt-0.5 flex-shrink-0"></i>
-        <span>Эти данные показываются <strong>один раз</strong>. После закрытия окна QR-код и ключ недоступны.</span>
+        <span>Эти данные показываются <strong>один раз</strong>. После закрытия окна QR и ключ недоступны. Передайте пользователю лично.</span>
       </div>
-      <p class="text-sm text-gray-400">
-        Пользователь: <span id="totp-once-user" class="font-semibold text-white"></span>
-      </p>
-      <p class="text-xs text-gray-500">Передайте QR или ключ пользователю по защищённому каналу:</p>
+      <p class="text-sm text-gray-400">Пользователь: <span id="totp-once-user" class="font-semibold text-white"></span></p>
       <div class="flex justify-center">
         <img id="totp-once-qr" src="" alt="TOTP QR" class="w-44 h-44 rounded-lg bg-white p-2">
       </div>
       <div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
         <code id="totp-once-secret" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
-        <button onclick="copyTotpSecret()" class="text-gray-500 hover:text-brand-400 transition p-1">
+        <button onclick="copyTotpSecret()" class="text-gray-500 hover:text-brand-400 transition p-1" title="Скопировать">
           <i class="fas fa-copy text-xs"></i>
         </button>
       </div>
       <button onclick="closeModal('modal-totp-once')"
         class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
-        Закрыть (я сохранил ключ)
+        Я сохранил ключ
       </button>
-    </div>
-  </div>
-</div>
-
-<!-- BIND TOTP (profile self-bind) -->
-<div id="modal-bind-totp" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-mobile-screen-button text-brand-400"></i>Привязка аутентификатора
-      </h3>
-      <button onclick="closeModal('modal-bind-totp')" class="text-gray-500 hover:text-white transition p-1">
-        <i class="fas fa-xmark text-lg"></i>
-      </button>
-    </div>
-    <div class="p-6 space-y-4">
-      <div class="p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-start gap-2">
-        <i class="fas fa-triangle-exclamation mt-0.5 flex-shrink-0"></i>
-        <span>QR и ключ показываются <strong>один раз</strong>. Предыдущий TOTP аннулируется немедленно.</span>
-      </div>
-      <p class="text-xs text-gray-500">Отсканируйте QR в Google Authenticator, Aegis или 2FAS:</p>
-      <div class="flex justify-center">
-        <img id="bind-qr-img" src="" alt="QR" class="w-44 h-44 rounded-lg bg-white p-2">
-      </div>
-      <div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
-        <code id="bind-secret-text" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
-        <button id="bind-totp-copy" class="text-gray-500 hover:text-brand-400 transition p-1">
-          <i class="fas fa-copy text-xs"></i>
-        </button>
-      </div>
-      <div id="bind-totp-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-      <form id="bind-totp-confirm-form" class="space-y-3">
-        <div>
-          <label class="form-label">Введите код для подтверждения</label>
-          <input id="bind-confirm-code" type="text" inputmode="numeric" maxlength="6"
-            placeholder="000000" autocomplete="one-time-code"
-            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 transition font-mono">
-        </div>
-        <button type="submit"
-          class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-check"></i> Подтвердить привязку
-        </button>
-      </form>
     </div>
   </div>
 </div>
