@@ -60,10 +60,10 @@ function renderUserCard(u, currentUser) {
   const isMe   = currentUser && u.username === currentUser.username;
   const canEdit = !isMe && u.role !== 'creator';
 
-  // "Active" means: account is_active AND has logged in at least once (last_login not null)
+  // Status green only if user has actually logged in at least once
   const reallyActive = u.is_active && !!u.last_login;
-  // "2FA confirmed" means: totp_enabled AND has logged in at least once
-  const twoFaOk = u.totp_enabled && !!u.last_login;
+  // 2FA green as soon as totp_enabled=true (admin confirmed the code works)
+  const twoFaOk = !!u.totp_enabled;
 
   return `
   <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden ${!u.is_active ? 'opacity-60' : ''}">

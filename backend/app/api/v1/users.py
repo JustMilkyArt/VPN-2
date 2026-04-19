@@ -82,15 +82,17 @@ def create_user(
         raise HTTPException(status_code=400, detail="Логин уже занят")
 
     # TOTP secret generated immediately — admin hands QR to new user out-of-band
+    from datetime import datetime, timezone as _tz
     secret = generate_totp_secret()
     user = AdminUser(
         username=data.username,
         password_hash=get_password_hash(data.password),
         role=data.role,
         totp_secret=secret,
-        totp_enabled=True,          # active immediately — no separate confirmation needed
+        totp_enabled=False,         # confirmed only after admin verifies code via confirm-totp
         created_by_id=current_user.id,
         is_active=True,
+        created_at=datetime.now(_tz.utc),  # explicit value — not relying on server_default
     )
     db.add(user)
     db.commit()
@@ -250,10 +252,11 @@ def confirm_totp(
     if not code or not _verify_totp(user.totp_secret, code):
         raise HTTPException(status_code=400, detail="Неверный код. Попробуйте ещё раз.")
 
+    # Only mark totp_enabled=True — do NOT set last_login here.
+    # last_login is written only on real login (totp-verify endpoint).
+    # Active/status badge turns green only after the user actually logs in.
     user.totp_enabled = True
-    user.last_login = datetime.now(_tz.utc)
     db.commit()
-    db.refresh(user)
     return {"ok": True}
 
 
