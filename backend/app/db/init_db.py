@@ -13,6 +13,7 @@ def create_tables():
     import app.models.server       # noqa: F401
     import app.models.connection   # noqa: F401
     import app.models.admin_user   # noqa: F401
+    import app.models.session      # noqa: F401  ← ActiveSession
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created")
 

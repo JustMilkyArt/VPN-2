@@ -7,6 +7,9 @@
 // ─── Show screens ─────────────────────────────────────────────────────────────
 
 function showLogin() {
+  // Stop idle timer when going back to login
+  stopIdleTimer();
+
   // Clear all login fields on every show
   document.getElementById('login-username').value = '';
   document.getElementById('login-password').value = '';
@@ -36,6 +39,9 @@ function showApp(user) {
     const canSee = user.role === 'creator' || user.role === 'head_admin';
     usersTabBtn.classList.toggle('hidden', !canSee);
   }
+
+  // Start idle-timeout tracking
+  startIdleTimer();
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -45,7 +51,7 @@ async function initApp() {
   if (token) {
     const res = await api.me();
     if (res.ok) {
-      showApp(res.data);
+      showApp(res.data);   // startIdleTimer() is called inside showApp()
       showTab('servers');
       startPolling();
       return;
@@ -147,8 +153,10 @@ document.getElementById('totp-login-code').addEventListener('input', (e) => {
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
-function logout() {
+async function logout() {
   stopPolling();
+  stopIdleTimer();
+  await api.logoutServer();   // invalidate server-side session (best-effort)
   api.clearToken();
   api._tempToken = null;
   showLogin();
@@ -268,6 +276,12 @@ function stopPolling() {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    // Idle warning modal: Escape = "stay active" (same as clicking Continue)
+    const idleModal = document.getElementById('modal-idle-warning');
+    if (idleModal && !idleModal.classList.contains('hidden')) {
+      idleStayActive();
+      return;
+    }
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
     document.getElementById('modal-totp-login')?.classList.add('hidden');
     document.getElementById('profile-panel')?.classList.add('hidden');
@@ -277,11 +291,112 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === '3') { e.preventDefault(); showTab('users'); }
 });
 
+// ─── Idle Timeout ─────────────────────────────────────────────────────────────
+// Logic:
+//   - Total idle timeout: 10 minutes (matches server-side IDLE_TIMEOUT_SECONDS)
+//   - Warning shown at 9 minutes (1 minute before forced logout)
+//   - Any user activity (click, keydown, scroll, mousemove) resets the timer
+//   - "Continue" button in warning modal also resets timer
+//   - On timeout: server-side session invalidated, then local logout
+
+const IDLE_TOTAL_MS   = 10 * 60 * 1000;  // 10 min — must match server
+const IDLE_WARN_MS    =  9 * 60 * 1000;  // show warning at 9 min
+const IDLE_EVENTS     = ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'];
+
+let _idleTimer        = null;
+let _warnTimer        = null;
+let _countdownInterval= null;
+let _idleActive       = false;
+
+function startIdleTimer() {
+  if (_idleActive) return;
+  _idleActive = true;
+  _scheduleIdleTimers();
+
+  // Register activity listeners
+  IDLE_EVENTS.forEach(ev =>
+    document.addEventListener(ev, _onUserActivity, { passive: true })
+  );
+}
+
+function stopIdleTimer() {
+  _idleActive = false;
+  _clearIdleTimers();
+  IDLE_EVENTS.forEach(ev =>
+    document.removeEventListener(ev, _onUserActivity)
+  );
+  _hideIdleWarning();
+}
+
+function _scheduleIdleTimers() {
+  _clearIdleTimers();
+  _warnTimer  = setTimeout(_showIdleWarning,  IDLE_WARN_MS);
+  _idleTimer  = setTimeout(_forceIdleLogout,  IDLE_TOTAL_MS);
+}
+
+function _clearIdleTimers() {
+  if (_warnTimer)  { clearTimeout(_warnTimer);  _warnTimer  = null; }
+  if (_idleTimer)  { clearTimeout(_idleTimer);  _idleTimer  = null; }
+  if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+}
+
+function _onUserActivity() {
+  if (!_idleActive) return;
+  // Reset timers; hide warning if open
+  _scheduleIdleTimers();
+  _hideIdleWarning();
+}
+
+function _showIdleWarning() {
+  const modal = document.getElementById('modal-idle-warning');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  // Countdown: 60 → 0
+  let remaining = Math.round((IDLE_TOTAL_MS - IDLE_WARN_MS) / 1000);
+  const el = document.getElementById('idle-countdown');
+  if (el) el.textContent = remaining;
+
+  _countdownInterval = setInterval(() => {
+    remaining -= 1;
+    if (el) el.textContent = remaining;
+    if (remaining <= 0) {
+      clearInterval(_countdownInterval);
+      _countdownInterval = null;
+    }
+  }, 1000);
+}
+
+function _hideIdleWarning() {
+  const modal = document.getElementById('modal-idle-warning');
+  if (modal) modal.classList.add('hidden');
+  if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+}
+
+async function _forceIdleLogout() {
+  _hideIdleWarning();
+  stopIdleTimer();
+  stopPolling();
+  await api.logoutServer();
+  api.clearToken();
+  api._tempToken = null;
+  showLogin();
+  // Show info toast after login screen appears
+  setTimeout(() => showToast('Сессия завершена по истечении времени бездействия', 'info'), 300);
+}
+
+// Called from "Continue" button in warning modal
+function idleStayActive() {
+  _hideIdleWarning();
+  _scheduleIdleTimers();
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', initApp);
 
-window.showLogin      = showLogin;
-window.showApp        = showApp;
-window.logout         = logout;
+window.showLogin       = showLogin;
+window.showApp         = showApp;
+window.logout          = logout;
 window.cancelTotpLogin = cancelTotpLogin;
+window.idleStayActive  = idleStayActive;

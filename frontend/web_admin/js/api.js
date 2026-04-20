@@ -82,6 +82,11 @@ const api = {
     return this.request('GET', '/auth/me');
   },
 
+  async logoutServer() {
+    // Tell backend to invalidate the session (best-effort, ignore errors)
+    try { await this.request('POST', '/auth/logout'); } catch {}
+  },
+
   async changeCreds(newUsername, newPassword, confirmPassword, totpCode) {
     return this.request('POST', '/auth/change-creds', {
       new_username: newUsername,

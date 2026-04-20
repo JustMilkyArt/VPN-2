@@ -633,6 +633,28 @@
   </div>
 </div>
 
+<!-- IDLE TIMEOUT WARNING MODAL -->
+<div id="modal-idle-warning" class="hidden fixed inset-0 z-[300] flex items-center justify-center p-4"
+     style="background: rgba(3,7,18,0.8); backdrop-filter: blur(8px);">
+  <div class="bg-gray-900 border border-amber-700/60 rounded-2xl shadow-2xl w-full max-w-sm p-8 relative"
+       style="animation: slide-up 0.2s ease;">
+    <div class="flex flex-col items-center text-center mb-6">
+      <div class="w-14 h-14 bg-amber-900/40 border border-amber-700 rounded-2xl flex items-center justify-center mb-3">
+        <i class="fas fa-clock text-2xl text-amber-400"></i>
+      </div>
+      <h2 class="text-xl font-bold text-white">Сессия истекает</h2>
+      <p class="text-gray-400 text-sm mt-2">
+        Вы неактивны. Автоматический выход через
+        <span id="idle-countdown" class="font-mono font-bold text-amber-400">60</span> сек.
+      </p>
+    </div>
+    <button onclick="idleStayActive()"
+      class="w-full py-3 bg-brand-600 hover:bg-brand-500 rounded-xl text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+      <i class="fas fa-hand"></i> Продолжить работу
+    </button>
+  </div>
+</div>
+
 <!-- TOAST CONTAINER -->
 <div id="toast-container" class="fixed bottom-4 right-4 z-[100] space-y-2"></div>
 
