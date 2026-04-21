@@ -180,6 +180,29 @@ const api = {
   async getClientConfig(id) {
     return this.request('GET', `/connections/${id}/client-config`);
   },
+
+  // ─── Domains ───────────────────────────────────────────────────────────────
+  async getDomains() {
+    return this.request('GET', '/domains/');
+  },
+  async addDomain(data) {
+    return this.request('POST', '/domains/', data, { timeout: 20000 });
+  },
+  async deleteDomain(id) {
+    return this.request('DELETE', `/domains/${id}`);
+  },
+  async createSubdomain(domainId, data) {
+    return this.request('POST', `/domains/${domainId}/subdomains/`, data, { timeout: 15000 });
+  },
+  async getSubdomainStatus(domainId, subdomainId) {
+    return this.request('GET', `/domains/${domainId}/subdomains/${subdomainId}/status`);
+  },
+  async deleteSubdomain(domainId, subdomainId) {
+    return this.request('DELETE', `/domains/${domainId}/subdomains/${subdomainId}`);
+  },
+  async renewSubdomainSSL(domainId, subdomainId) {
+    return this.request('POST', `/domains/${domainId}/subdomains/${subdomainId}/renew-ssl`);
+  },
 };
 
 window.api = api;

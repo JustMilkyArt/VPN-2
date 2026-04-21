@@ -14,6 +14,7 @@ def create_tables():
     import app.models.connection   # noqa: F401
     import app.models.admin_user   # noqa: F401
     import app.models.session      # noqa: F401  ← ActiveSession
+    import app.models.domain       # noqa: F401  ← Domain, Subdomain
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created")
 

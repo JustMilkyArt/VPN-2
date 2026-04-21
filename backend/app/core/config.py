@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     PORT_RANGE_START: int = 10000
     PORT_RANGE_END: int = 65000
 
+    # Admin server SSH access (for domain/subdomain setup)
+    ADMIN_SERVER_IP: str = "127.0.0.1"
+    ADMIN_SSH_USER: str = "root"
+    ADMIN_SSH_PASSWORD: str = ""
+    ADMIN_SSH_PORT: int = 22
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

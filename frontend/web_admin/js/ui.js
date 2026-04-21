@@ -49,6 +49,7 @@ function showTab(name) {
   if (name === 'servers')     loadServers();
   if (name === 'connections') loadConnectionsGrouped();
   if (name === 'users')       loadUsers();
+  if (name === 'domains')     loadDomains();
 }
 
 // ─── COPY ─────────────────────────────────────────────────────────────────────

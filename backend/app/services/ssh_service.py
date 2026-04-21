@@ -81,6 +81,67 @@ class SSHClient:
         self.exec(f"chmod +x {remote_path}")
 
 
+class SSHService:
+    """
+    Simple SSH service for admin-server operations (domain setup, certbot, nginx).
+    Uses password or key authentication.
+    """
+
+    def __init__(self, host: str, user: str, password: str = None, port: int = 22, key: str = None):
+        self.host = host
+        self.user = user
+        self.password = password
+        self.port = port
+        self.key = key
+        self._client: Optional[paramiko.SSHClient] = None
+
+    def connect(self):
+        self._client = paramiko.SSHClient()
+        self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs = {
+            "hostname": self.host,
+            "port": self.port,
+            "username": self.user,
+            "timeout": settings.SSH_CONNECT_TIMEOUT,
+            "banner_timeout": 30,
+            "auth_timeout": 30,
+        }
+        if self.key:
+            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.key))
+            connect_kwargs["pkey"] = pkey
+        elif self.password:
+            connect_kwargs["password"] = self.password
+        self._client.connect(**connect_kwargs)
+        logger.info(f"SSHService connected to {self.host}:{self.port}")
+
+    def run(self, command: str, timeout: int = 120) -> str:
+        """Execute command, return combined stdout+stderr output."""
+        if not self._client:
+            raise RuntimeError("Not connected. Call connect() first.")
+        _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+        exit_code = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        combined = (out + err).strip()
+        if exit_code != 0:
+            logger.warning(f"SSHService command returned {exit_code}: {combined[:300]}")
+        return combined
+
+    def upload_text(self, content: str, remote_path: str):
+        """Upload text content to remote file via SFTP."""
+        sftp = self._client.open_sftp()
+        try:
+            with sftp.open(remote_path, "w") as f:
+                f.write(content)
+        finally:
+            sftp.close()
+
+    def close(self):
+        if self._client:
+            self._client.close()
+            self._client = None
+
+
 def test_connection(server: Server) -> Tuple[bool, str]:
     """Test SSH connection to a server. Returns (success, message)."""
     try:

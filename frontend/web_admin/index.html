@@ -147,6 +147,11 @@
           <i class="fas fa-network-wired text-xs"></i>
           <span class="hidden sm:inline">Подключения</span>
         </button>
+        <button id="tab-btn-domains" onclick="showTab('domains')" data-tab="domains"
+          class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-globe text-xs"></i>
+          <span class="hidden sm:inline">Домены</span>
+        </button>
         <button id="tab-btn-users" onclick="showTab('users')" data-tab="users"
           class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
           <i class="fas fa-users text-xs"></i>
@@ -299,6 +304,22 @@
           <i class="fas fa-plus mr-2"></i>Создать
         </button>
       </div>
+    </section>
+
+    <!-- ─── DOMAINS TAB ─────────────────────────────── -->
+    <section id="tab-domains" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Домены</h2>
+          <p class="text-gray-400 text-sm mt-0.5">DNS-записи, SSL-сертификаты, Nginx через Porkbun API</p>
+        </div>
+        <button onclick="showAddDomainModal()"
+          class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+          <i class="fas fa-plus text-xs"></i>
+          <span class="hidden sm:inline">Добавить домен</span>
+        </button>
+      </div>
+      <div id="domains-list" class="space-y-4"></div>
     </section>
 
     <!-- ─── USERS (MANAGEMENT) TAB ─────────────────── -->
@@ -633,6 +654,113 @@
   </div>
 </div>
 
+<!-- ADD DOMAIN MODAL -->
+<div id="modal-add-domain" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-globe text-brand-400"></i>Добавить домен
+      </h3>
+      <button onclick="closeAddDomainModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="p-3 bg-blue-900/30 border border-blue-800 rounded-lg text-blue-300 text-xs flex items-start gap-2">
+        <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+        <span>Укажите домен и API-ключи от Porkbun. Ключи можно создать на <a href="https://porkbun.com/account/api" target="_blank" class="underline">porkbun.com/account/api</a></span>
+      </div>
+      <div>
+        <label class="form-label">Домен</label>
+        <input id="add-domain-name" type="text" placeholder="milkyims.com" class="form-input" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label">Porkbun API Key</label>
+        <input id="add-domain-apikey" type="text" placeholder="pk1_..." class="form-input font-mono text-sm" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label">Porkbun Secret Key</label>
+        <input id="add-domain-secret" type="password" placeholder="sk1_..." class="form-input font-mono text-sm" autocomplete="off">
+      </div>
+      <div id="add-domain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeAddDomainModal()"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+        <button id="add-domain-btn" type="button" onclick="submitAddDomain()"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-check text-xs"></i>Добавить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE SUBDOMAIN MODAL -->
+<div id="modal-create-subdomain" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-sitemap text-brand-400"></i>Создать поддомен
+      </h3>
+      <button onclick="closeCreateSubdomainModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="text-sm text-gray-400">
+        Домен: <span id="subdomain-domain-name" class="font-semibold text-white"></span>
+      </div>
+      <div>
+        <label class="form-label">Имя поддомена</label>
+        <input id="subdomain-name-input" type="text" placeholder="admin" class="form-input" oninput="onSubdomainNameInput()" autocomplete="off">
+        <div class="mt-1 text-xs text-gray-400">
+          Полное имя: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
+        </div>
+      </div>
+      <div>
+        <label class="form-label">Назначение</label>
+        <div class="custom-select-wrap">
+          <select id="subdomain-type-select" class="form-input custom-select">
+            <option value="admin_panel">🖥 Админ-панель</option>
+            <option value="client_site">🌐 Клиентский сайт</option>
+            <option value="vpn">🔒 VPN</option>
+            <option value="none">— Без назначения</option>
+          </select>
+        </div>
+        <div class="mt-2 text-xs text-gray-400 space-y-1">
+          <div><span class="text-brand-400">Админ-панель</span> — создаст A-запись, SSL и настроит Nginx для переключения на HTTPS</div>
+          <div><span class="text-purple-400">Клиентский сайт</span> — зарезервирует поддомен (настройка позже)</div>
+          <div><span class="text-green-400">VPN</span> — зарезервирует поддомен для использования в подключениях</div>
+        </div>
+      </div>
+      <div id="create-subdomain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeCreateSubdomainModal()"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+        <button id="create-subdomain-btn" type="button" onclick="submitCreateSubdomain()"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-rocket text-xs"></i>Создать
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SETUP PROGRESS MODAL -->
+<div id="modal-setup-progress" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 id="progress-modal-title" class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-cog fa-spin text-brand-400"></i>Настройка поддомена
+      </h3>
+      <button onclick="closeProgressModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="progress-steps-container" class="p-6 space-y-1 max-h-[60vh] overflow-y-auto"></div>
+  </div>
+</div>
+
 <!-- IDLE TIMEOUT WARNING MODAL -->
 <div id="modal-idle-warning" class="hidden fixed inset-0 z-[300] flex items-center justify-center p-4"
      style="background: rgba(3,7,18,0.8); backdrop-filter: blur(8px);">
@@ -663,6 +791,7 @@
 <script src="js/servers.js"></script>
 <script src="js/connections.js"></script>
 <script src="js/users.js"></script>
+<script src="js/domains.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -34,11 +34,13 @@ function showApp(user) {
   const roleEl = document.getElementById('role-badge');
   if (roleEl) roleEl.textContent = labels[user.role] || user.role;
 
+  const canSeeAdminTabs = user.role === 'creator' || user.role === 'head_admin';
+
   const usersTabBtn = document.getElementById('tab-btn-users');
-  if (usersTabBtn) {
-    const canSee = user.role === 'creator' || user.role === 'head_admin';
-    usersTabBtn.classList.toggle('hidden', !canSee);
-  }
+  if (usersTabBtn) usersTabBtn.classList.toggle('hidden', !canSeeAdminTabs);
+
+  const domainsTabBtn = document.getElementById('tab-btn-domains');
+  if (domainsTabBtn) domainsTabBtn.classList.toggle('hidden', !canSeeAdminTabs);
 
   // Start idle-timeout tracking
   startIdleTimer();
