@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VPN Admin Panel</title>
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
@@ -366,15 +369,26 @@
       </button>
     </div>
     <form id="add-server-form" class="p-6 space-y-4">
+      <!-- Hint -->
+      <div class="p-3 bg-blue-900/30 border border-blue-800/60 rounded-lg text-blue-300 text-xs flex items-start gap-2">
+        <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+        <span>Укажите данные, которые вы получили при аренде сервера. Всё остальное панель настроит автоматически.</span>
+      </div>
+
       <div class="grid grid-cols-2 gap-4">
+        <!-- Name -->
         <div class="col-span-2">
-          <label class="form-label">Название</label>
+          <label class="form-label">Название сервера</label>
           <input name="name" type="text" placeholder="EU-DE-01" class="form-input" required>
         </div>
+
+        <!-- IP -->
         <div class="col-span-2">
-          <label class="form-label">IP адрес</label>
+          <label class="form-label">IP-адрес</label>
           <input name="ip" type="text" placeholder="1.2.3.4" class="form-input" required>
         </div>
+
+        <!-- Country + Role -->
         <div>
           <label class="form-label">Страна</label>
           <div class="custom-select-wrap">
@@ -388,6 +402,7 @@
               <option value="US">🇺🇸 США</option>
               <option value="TR">🇹🇷 Турция</option>
               <option value="PL">🇵🇱 Польша</option>
+              <option value="SE">🇸🇪 Швеция</option>
               <option value="??">🌍 Другая</option>
             </select>
           </div>
@@ -396,34 +411,40 @@
           <label class="form-label">Роль</label>
           <div class="custom-select-wrap">
             <select name="role" class="form-input custom-select">
-              <option value="EU">EU — Exit node</option>
-              <option value="RU">RU — Entry node</option>
+              <option value="EU">EU — Exit (выход)</option>
+              <option value="RU">RU — Entry (вход)</option>
               <option value="MIXED">Mixed</option>
             </select>
           </div>
         </div>
-        <div>
-          <label class="form-label">SSH пользователь</label>
-          <input name="ssh_user" type="text" value="root" class="form-input">
-        </div>
-        <div>
-          <label class="form-label">SSH порт</label>
-          <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
-        </div>
+
+        <!-- SSH password -->
         <div class="col-span-2">
-          <label class="form-label">Домен (для NaiveProxy/Trojan TLS)</label>
-          <input name="domain" type="text" placeholder="vpn.example.com" class="form-input">
-        </div>
-        <div class="col-span-2">
-          <label class="form-label">SSH приватный ключ (PEM)</label>
-          <textarea name="ssh_key" rows="4" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
-            class="form-input font-mono text-xs resize-none"></textarea>
-        </div>
-        <div class="col-span-2">
-          <label class="form-label">или SSH пароль</label>
-          <input name="ssh_password" type="password" class="form-input" placeholder="Пароль (если нет ключа)">
+          <label class="form-label">Пароль SSH</label>
+          <input name="ssh_password" type="password" class="form-input"
+                 placeholder="Пароль от сервера" autocomplete="off">
         </div>
       </div>
+
+      <!-- Advanced params toggle -->
+      <div>
+        <button type="button" onclick="toggleServerAdvanced()"
+          class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1">
+          <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform"></i>
+          <span>Дополнительные параметры</span>
+        </button>
+        <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-2 gap-4">
+          <div>
+            <label class="form-label">Пользователь SSH</label>
+            <input name="ssh_user" type="text" value="root" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">Порт SSH</label>
+            <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+          </div>
+        </div>
+      </div>
+
       <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('modal-add-server')"

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#3730a3"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="16" y1="2" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <!-- Shield shape -->
+  <path d="M16 4 L26 8 L26 17 C26 22.5 21.5 27 16 29 C10.5 27 6 22.5 6 17 L6 8 Z"
+        fill="url(#shield)" opacity="0.9"/>
+  <!-- Inner shield highlight -->
+  <path d="M16 6.5 L24 10 L24 17 C24 21.2 20.5 25 16 26.8 C11.5 25 8 21.2 8 17 L8 10 Z"
+        fill="white" opacity="0.12"/>
+  <!-- Lightning bolt -->
+  <path d="M18.5 9 L13 17.5 L16.5 17.5 L14 24 L20.5 14.5 L17 14.5 Z"
+        fill="white" opacity="0.95"/>
+</svg>

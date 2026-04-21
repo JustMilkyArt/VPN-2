@@ -29,6 +29,31 @@ ADMIN_SSH_USER = settings.ADMIN_SSH_USER
 ADMIN_SSH_PASSWORD = settings.ADMIN_SSH_PASSWORD
 ADMIN_SSH_PORT = settings.ADMIN_SSH_PORT
 
+# Nginx default_server block — drops all connections not matching a known domain
+# Placed in /etc/nginx/sites-available/default-drop
+NGINX_DEFAULT_DROP = """
+# Block direct IP access on port 80
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+# Block direct IP access on port 443
+server {
+    listen 443 default_server ssl;
+    listen [::]:443 default_server ssl;
+    server_name _;
+
+    # Self-signed cert just to satisfy nginx on 443
+    ssl_certificate     /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+
+    return 444;
+}
+"""
+
 # Nginx template for admin panel subdomain
 NGINX_ADMIN_TEMPLATE = """
 server {{
@@ -302,11 +327,40 @@ async def run_subdomain_setup(subdomain_id: int):
             ssh.close()
             return
 
+        # Step 6.5: Block direct IP access (only for admin_panel)
+        if stype == SubdomainType.admin_panel:
+            try:
+                _append_log(subdomain, "Блокировка доступа по IP", "running",
+                            "Настройка default_server 444")
+                _save(db, subdomain)
+
+                drop_path = "/etc/nginx/sites-available/default-drop"
+                drop_link = "/etc/nginx/sites-enabled/default-drop"
+
+                # Write the default-drop config via SFTP
+                ssh.upload_text(NGINX_DEFAULT_DROP, drop_path)
+                ssh.run(f"ln -sf {drop_path} {drop_link}")
+
+                # Remove the plain default site if it exists
+                ssh.run("rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true")
+
+                # Make sure snakeoil cert exists (standard Ubuntu package)
+                ssh.run("apt-get install -y -q ssl-cert 2>/dev/null || true")
+
+                _append_log(subdomain, "Блокировка доступа по IP", "ok",
+                            "Прямой доступ по IP заблокирован (порты 80 и 443 → 444)")
+                _save(db, subdomain)
+            except Exception as e:
+                # Non-fatal — log warning but continue
+                _append_log(subdomain, "Блокировка доступа по IP", "error",
+                            f"Предупреждение: {e} (не критично)")
+                _save(db, subdomain)
+
         # Step 7: Reload Nginx
         _append_log(subdomain, "Перезапуск Nginx", "running")
         _save(db, subdomain)
         try:
-            ssh.run("systemctl reload nginx")
+            ssh.run("nginx -t 2>&1 && systemctl reload nginx")
             _append_log(subdomain, "Перезапуск Nginx", "ok", "Nginx перезагружен")
             _save(db, subdomain)
         except Exception as e:

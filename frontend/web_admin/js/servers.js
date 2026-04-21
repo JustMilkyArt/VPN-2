@@ -149,9 +149,31 @@ async function checkAllServers() {
 }
 
 // ───────────────── ADD SERVER MODAL ─────────────────
+function toggleServerAdvanced() {
+  const fields = document.getElementById('server-advanced-fields');
+  const icon = document.getElementById('server-adv-icon');
+  const isHidden = fields.classList.contains('hidden');
+  if (isHidden) {
+    fields.classList.remove('hidden');
+    icon.classList.add('rotate-90');
+  } else {
+    fields.classList.add('hidden');
+    icon.classList.remove('rotate-90');
+  }
+}
+
 function showAddServerModal() {
   document.getElementById('add-server-form').reset();
   document.getElementById('add-server-error').classList.add('hidden');
+  // Reset advanced fields to defaults and hide
+  const fields = document.getElementById('server-advanced-fields');
+  const icon = document.getElementById('server-adv-icon');
+  fields.classList.add('hidden');
+  icon.classList.remove('rotate-90');
+  // Restore defaults
+  const form = document.getElementById('add-server-form');
+  form.querySelector('[name=ssh_user]').value = 'root';
+  form.querySelector('[name=ssh_port]').value = '22';
   openModal('modal-add-server');
 }
 
@@ -354,6 +376,7 @@ async function confirmDeleteServer(serverId, name) {
 }
 
 // Expose globally
+window.toggleServerAdvanced = toggleServerAdvanced;
 window.loadServers = loadServers;
 window.toggleServer = toggleServer;
 window.pingServer = pingServer;
