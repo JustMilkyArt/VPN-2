@@ -116,7 +116,8 @@ function statusText(status) {
 function protocolLabel(proto) {
   const map = {
     vless_reality: { text: 'VLESS Reality', icon: 'fa-lock' },
-    trojan:        { text: 'Trojan',         icon: 'fa-shield-halved' },
+    amnezia_wg:    { text: 'AmneziaWG',     icon: 'fa-shield-halved' },
+    trojan:        { text: 'Trojan',         icon: 'fa-bolt' },
     naive_proxy:   { text: 'NaiveProxy',     icon: 'fa-globe' },
   };
   return map[proto] || { text: proto, icon: 'fa-network-wired' };

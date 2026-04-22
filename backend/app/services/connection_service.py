@@ -68,6 +68,11 @@ def create_connection(db: Session, conn_data: ConnectionCreate) -> Tuple[Connect
         connection.uuid = generate_uuid()
     elif conn_data.protocol in (Protocol.TROJAN, Protocol.NAIVE_PROXY):
         connection.password = generate_password(32)
+    elif conn_data.protocol == Protocol.AMNEZIA_WG:
+        # Keys generated on-server during deploy; set defaults
+        connection.awg_junk_packet_count = 4
+        connection.awg_junk_packet_min_size = 40
+        connection.awg_junk_packet_max_size = 70
 
     db.add(connection)
     db.commit()
@@ -100,6 +105,8 @@ def _deploy_connection(db: Session, connection: Connection, server: Server, exit
         return deploy_service.deploy_trojan_connection(db, connection, server)
     elif connection.protocol == Protocol.NAIVE_PROXY:
         return deploy_service.deploy_naiveproxy_connection(db, connection, server)
+    elif connection.protocol == Protocol.AMNEZIA_WG:
+        return deploy_service.deploy_amnezia_wg_connection(db, connection, server)
     else:
         return False, f"Unknown protocol: {connection.protocol}"
 

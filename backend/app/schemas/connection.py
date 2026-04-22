@@ -29,18 +29,27 @@ class ConnectionUpdate(BaseModel):
 class ConnectionRead(ConnectionBase):
     id: int
     port: int
-    uuid: Optional[str]
-    password: Optional[str]
-    reality_public_key: Optional[str]
-    reality_private_key: Optional[str]
-    reality_short_id: Optional[str]
-    reality_server_name: Optional[str]
-    config_json: Optional[str]
-    client_link: Optional[str]
+    uuid: Optional[str] = None
+    password: Optional[str] = None
+    reality_public_key: Optional[str] = None
+    reality_private_key: Optional[str] = None
+    reality_short_id: Optional[str] = None
+    reality_server_name: Optional[str] = None
+    # AmneziaWG
+    wg_public_key: Optional[str] = None
+    wg_client_private_key: Optional[str] = None
+    wg_client_public_key: Optional[str] = None
+    wg_preshared_key: Optional[str] = None
+    wg_client_ip: Optional[str] = None
+    awg_junk_packet_count: Optional[int] = None
+    awg_junk_packet_min_size: Optional[int] = None
+    awg_junk_packet_max_size: Optional[int] = None
+    config_json: Optional[str] = None
+    client_link: Optional[str] = None
     status: ConnectionStatus
     is_active: bool
     created_at: datetime
-    updated_at: Optional[datetime]
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

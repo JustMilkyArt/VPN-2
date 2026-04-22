@@ -310,3 +310,18 @@ select option:checked,
   from { transform: translateY(12px); opacity: 0; }
   to   { transform: translateY(0);   opacity: 1; }
 }
+
+/* ─── AmneziaWG protocol badge ──────────────────────────────── */
+.protocol-badge.amnezia_wg {
+  background: #0f2b1e;
+  color: #6ee7b7;
+  border: 1px solid #065f46;
+}
+
+/* ─── Config format tabs ─────────────────────────────────────── */
+.config-tab-btn {
+  transition: background 0.15s, color 0.15s;
+}
+.config-tab-pane {
+  animation: fade-in 0.15s ease;
+}

@@ -8,6 +8,36 @@ from app.core.security import get_password_hash
 logger = logging.getLogger(__name__)
 
 
+def _migrate_add_columns():
+    """Add new columns to existing tables (SQLite ALTER TABLE migration)."""
+    from app.db.database import engine
+    import sqlalchemy as sa
+    try:
+        with engine.connect() as conn:
+            # Check existing columns in connections table
+            result = conn.execute(sa.text("PRAGMA table_info(connections)"))
+            existing = {row[1] for row in result.fetchall()}
+
+            new_cols = [
+                ("wg_private_key",           "VARCHAR(255)"),
+                ("wg_public_key",            "VARCHAR(255)"),
+                ("wg_preshared_key",         "VARCHAR(255)"),
+                ("wg_client_private_key",    "VARCHAR(255)"),
+                ("wg_client_public_key",     "VARCHAR(255)"),
+                ("wg_client_ip",             "VARCHAR(20)"),
+                ("awg_junk_packet_count",    "INTEGER DEFAULT 4"),
+                ("awg_junk_packet_min_size", "INTEGER DEFAULT 40"),
+                ("awg_junk_packet_max_size", "INTEGER DEFAULT 70"),
+            ]
+            for col_name, col_type in new_cols:
+                if col_name not in existing:
+                    conn.execute(sa.text(f"ALTER TABLE connections ADD COLUMN {col_name} {col_type}"))
+                    logger.info(f"Migration: added column connections.{col_name}")
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Migration warning (non-fatal): {e}")
+
+
 def create_tables():
     from app.db.database import Base, engine
     import app.models.server       # noqa: F401
@@ -16,6 +46,7 @@ def create_tables():
     import app.models.session      # noqa: F401  ← ActiveSession
     import app.models.domain       # noqa: F401  ← Domain, Subdomain
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
     logger.info("Database tables created")
 
 

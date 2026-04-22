@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, SmallInteger
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -9,6 +9,7 @@ class Protocol(str, enum.Enum):
     VLESS_REALITY = "vless_reality"
     TROJAN = "trojan"
     NAIVE_PROXY = "naive_proxy"
+    AMNEZIA_WG = "amnezia_wg"
 
 
 class ConnectionStatus(str, enum.Enum):
@@ -36,6 +37,18 @@ class Connection(Base):
     reality_private_key = Column(String(255), nullable=True)
     reality_short_id = Column(String(32), nullable=True)
     reality_server_name = Column(String(255), nullable=True, default="www.microsoft.com")
+
+    # AmneziaWG fields
+    wg_private_key = Column(String(255), nullable=True)   # server private key
+    wg_public_key = Column(String(255), nullable=True)    # server public key
+    wg_preshared_key = Column(String(255), nullable=True) # preshared key
+    wg_client_private_key = Column(String(255), nullable=True)
+    wg_client_public_key = Column(String(255), nullable=True)
+    wg_client_ip = Column(String(20), nullable=True)      # e.g. 10.8.0.2/32
+    # Amnezia junk packet obfuscation params
+    awg_junk_packet_count = Column(Integer, nullable=True, default=4)
+    awg_junk_packet_min_size = Column(Integer, nullable=True, default=40)
+    awg_junk_packet_max_size = Column(Integer, nullable=True, default=70)
 
     config_json = Column(Text, nullable=True)
     client_link = Column(Text, nullable=True)

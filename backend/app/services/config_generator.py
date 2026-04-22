@@ -327,3 +327,106 @@ def build_naiveproxy_client_config(server: str, port: int, password: str) -> str
         "log": ""
     }
     return json.dumps(config, indent=2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REALITY SNI — TOP-10 BEST DOMAINS
+# ─────────────────────────────────────────────────────────────────────────────
+
+REALITY_SNI_LIST = [
+    {"domain": "www.microsoft.com",     "note": "Microsoft — рекомендуется",  "best": True},
+    {"domain": "addons.mozilla.org",    "note": "Mozilla",                    "best": False},
+    {"domain": "www.swift.org",         "note": "Swift.org",                  "best": False},
+    {"domain": "www.apple.com",         "note": "Apple",                      "best": False},
+    {"domain": "www.amazon.com",        "note": "Amazon",                     "best": False},
+    {"domain": "aws.amazon.com",        "note": "AWS",                        "best": False},
+    {"domain": "telegram.org",          "note": "Telegram",                   "best": False},
+    {"domain": "www.cloudflare.com",    "note": "Cloudflare",                 "best": False},
+    {"domain": "www.digitalocean.com",  "note": "DigitalOcean",               "best": False},
+    {"domain": "www.lovelace.com",      "note": "Lovelace",                   "best": False},
+]
+
+REALITY_SNI_DEFAULT = "www.microsoft.com"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMNEZIA WIREGUARD CONFIG GENERATORS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def gen_awg_server_config(
+    server_private_key: str,
+    server_ip: str = "10.8.0.1/24",
+    listen_port: int = 51820,
+    clients: list = None,  # list of {pub_key, preshared_key, client_ip}
+    junk_packet_count: int = 4,
+    junk_packet_min_size: int = 40,
+    junk_packet_max_size: int = 70,
+) -> str:
+    """Generate AmneziaWG server wg0.conf"""
+    clients = clients or []
+    peers = ""
+    for c in clients:
+        peers += f"""
+[Peer]
+PublicKey = {c['pub_key']}
+PresharedKey = {c['preshared_key']}
+AllowedIPs = {c['client_ip']}/32
+"""
+    return f"""[Interface]
+PrivateKey = {server_private_key}
+Address = {server_ip}
+ListenPort = {listen_port}
+DNS = 1.1.1.1, 8.8.8.8
+
+# AmneziaWG obfuscation
+Jc = {junk_packet_count}
+Jmin = {junk_packet_min_size}
+Jmax = {junk_packet_max_size}
+S1 = 50
+S2 = 100
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+{peers}"""
+
+
+def gen_awg_client_config(
+    client_private_key: str,
+    client_ip: str,
+    server_public_key: str,
+    preshared_key: str,
+    server_endpoint: str,  # ip:port
+    dns: str = "1.1.1.1",
+    allowed_ips: str = "0.0.0.0/0, ::/0",
+    junk_packet_count: int = 4,
+    junk_packet_min_size: int = 40,
+    junk_packet_max_size: int = 70,
+) -> str:
+    """Generate AmneziaWG client config (.conf file)"""
+    return f"""[Interface]
+PrivateKey = {client_private_key}
+Address = {client_ip}/32
+DNS = {dns}
+
+# AmneziaWG obfuscation (must match server)
+Jc = {junk_packet_count}
+Jmin = {junk_packet_min_size}
+Jmax = {junk_packet_max_size}
+S1 = 50
+S2 = 100
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+
+[Peer]
+PublicKey = {server_public_key}
+PresharedKey = {preshared_key}
+Endpoint = {server_endpoint}
+AllowedIPs = {allowed_ips}
+PersistentKeepalive = 25
+"""

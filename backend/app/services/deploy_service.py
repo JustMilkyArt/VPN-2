@@ -17,6 +17,7 @@ from app.services.config_generator import (
     build_ru_xray_config, build_eu_xray_config,
     build_naiveproxy_caddy_config, build_naiveproxy_client_config,
     gen_vless_reality_client_link, gen_trojan_client_link,
+    gen_awg_server_config, gen_awg_client_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -428,6 +429,180 @@ def deploy_naiveproxy_connection(
         return True, "NaiveProxy deployed"
     except Exception as e:
         logger.error(f"NaiveProxy deploy error: {e}")
+        return False, str(e)
+
+
+AWG_INSTALL_SCRIPT = """#!/bin/bash
+set -e
+echo "[*] Installing AmneziaWG..."
+
+# Install amneziawg kernel module and tools
+apt-get update -qq
+apt-get install -y -qq software-properties-common
+
+# Add AmneziaWG PPA (Ubuntu) or build from source
+if add-apt-repository -y ppa:amnezia/ppa 2>/dev/null; then
+    apt-get update -qq
+    apt-get install -y -qq amneziawg amneziawg-tools
+else
+    # Fallback: install standard WireGuard (AmneziaWG-compatible mode)
+    apt-get install -y -qq wireguard wireguard-tools
+fi
+
+# Enable IP forwarding
+echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.conf
+sysctl -p
+
+echo "[+] AmneziaWG installed"
+"""
+
+
+def _wg_genkey_on_server(ssh) -> Tuple[str, str]:
+    """Generate WireGuard keypair on server, returns (private_key, public_key)."""
+    # Try awg first, fallback to wg
+    code, priv, _ = ssh.exec("awg genkey 2>/dev/null || wg genkey")
+    priv = priv.strip()
+    code2, pub, _ = ssh.exec(f"echo '{priv}' | awg pubkey 2>/dev/null || echo '{priv}' | wg pubkey")
+    pub = pub.strip()
+    return priv, pub
+
+
+def _wg_preshared_on_server(ssh) -> str:
+    code, psk, _ = ssh.exec("awg genpsk 2>/dev/null || wg genpsk")
+    return psk.strip()
+
+
+def _get_next_client_ip(db: Session, server_id: int) -> str:
+    """Get next available client IP in 10.8.0.x/24 subnet."""
+    existing = db.query(Connection).filter(
+        Connection.server_id == server_id,
+        Connection.protocol == Protocol.AMNEZIA_WG,
+        Connection.wg_client_ip.isnot(None),
+    ).all()
+    used = set()
+    for c in existing:
+        if c.wg_client_ip:
+            try:
+                last_octet = int(c.wg_client_ip.split(".")[3].split("/")[0])
+                used.add(last_octet)
+            except Exception:
+                pass
+    for i in range(2, 255):
+        if i not in used:
+            return f"10.8.0.{i}"
+    raise RuntimeError("No free client IPs in 10.8.0.0/24")
+
+
+def deploy_amnezia_wg_connection(
+    db: Session,
+    connection: Connection,
+    server: Server,
+) -> Tuple[bool, str]:
+    """Install AmneziaWG and deploy a WireGuard peer on server."""
+    try:
+        with SSHClient(server) as ssh:
+            # Install AWG if not present
+            code, _, _ = ssh.exec("which awg 2>/dev/null || which wg 2>/dev/null || echo NOT_FOUND")
+            # We check the output
+            _, check_out, _ = ssh.exec("which awg 2>/dev/null && echo AWG_OK || (which wg 2>/dev/null && echo WG_OK || echo NOT_FOUND)")
+            if "NOT_FOUND" in check_out:
+                code2, _, err2 = ssh.exec(AWG_INSTALL_SCRIPT, timeout=300)
+                if code2 != 0:
+                    return False, f"AmneziaWG install failed: {err2}"
+
+            # Generate server keypair (or reuse existing)
+            existing_server_conn = db.query(Connection).filter(
+                Connection.server_id == server.id,
+                Connection.protocol == Protocol.AMNEZIA_WG,
+                Connection.wg_private_key.isnot(None),
+                Connection.id != connection.id,
+            ).first()
+
+            if existing_server_conn and existing_server_conn.wg_private_key:
+                server_priv = existing_server_conn.wg_private_key
+                server_pub = existing_server_conn.wg_public_key
+            else:
+                server_priv, server_pub = _wg_genkey_on_server(ssh)
+
+            # Generate client keypair
+            client_priv, client_pub = _wg_genkey_on_server(ssh)
+            psk = _wg_preshared_on_server(ssh)
+
+            # Assign client IP
+            client_ip = _get_next_client_ip(db, server.id)
+
+            # Save to connection
+            connection.wg_private_key = server_priv
+            connection.wg_public_key = server_pub
+            connection.wg_preshared_key = psk
+            connection.wg_client_private_key = client_priv
+            connection.wg_client_public_key = client_pub
+            connection.wg_client_ip = client_ip
+            connection.awg_junk_packet_count = connection.awg_junk_packet_count or 4
+            connection.awg_junk_packet_min_size = connection.awg_junk_packet_min_size or 40
+            connection.awg_junk_packet_max_size = connection.awg_junk_packet_max_size or 70
+
+            # Get all peers for this server
+            all_awg = db.query(Connection).filter(
+                Connection.server_id == server.id,
+                Connection.protocol == Protocol.AMNEZIA_WG,
+                Connection.is_active == True,
+                Connection.wg_client_public_key.isnot(None),
+            ).all()
+
+            clients_list = []
+            for c in all_awg:
+                if c.wg_client_public_key and c.wg_client_ip:
+                    clients_list.append({
+                        "pub_key": c.wg_client_public_key,
+                        "preshared_key": c.wg_preshared_key or "",
+                        "client_ip": c.wg_client_ip,
+                    })
+            # Add current
+            clients_list.append({
+                "pub_key": client_pub,
+                "preshared_key": psk,
+                "client_ip": client_ip,
+            })
+
+            # Generate and upload server config
+            server_conf = gen_awg_server_config(
+                server_private_key=server_priv,
+                listen_port=connection.port,
+                clients=clients_list,
+                junk_packet_count=connection.awg_junk_packet_count,
+                junk_packet_min_size=connection.awg_junk_packet_min_size,
+                junk_packet_max_size=connection.awg_junk_packet_max_size,
+            )
+            ssh.upload_file(server_conf, "/etc/amnezia/amneziawg/wg0.conf")
+            ssh.exec("mkdir -p /etc/amnezia/amneziawg || mkdir -p /etc/wireguard")
+
+            # Try AWG first, fallback to WireGuard
+            ssh.upload_file(server_conf, "/etc/amnezia/amneziawg/wg0.conf")
+            code3, _, _ = ssh.exec(
+                "systemctl enable awg-quick@wg0 2>/dev/null && awg-quick down wg0 2>/dev/null; awg-quick up wg0 2>/dev/null"
+                " || (cp /etc/amnezia/amneziawg/wg0.conf /etc/wireguard/wg0.conf && "
+                "systemctl enable wg-quick@wg0 && wg-quick down wg0 2>/dev/null; wg-quick up wg0)"
+            )
+
+            # Generate client config
+            client_conf = gen_awg_client_config(
+                client_private_key=client_priv,
+                client_ip=client_ip,
+                server_public_key=server_pub,
+                preshared_key=psk,
+                server_endpoint=f"{server.ip}:{connection.port}",
+                junk_packet_count=connection.awg_junk_packet_count,
+                junk_packet_min_size=connection.awg_junk_packet_min_size,
+                junk_packet_max_size=connection.awg_junk_packet_max_size,
+            )
+            connection.config_json = client_conf
+            connection.client_link = f"awg://peer?pub={server_pub}&endpoint={server.ip}:{connection.port}"
+
+            return True, "AmneziaWG deployed"
+    except Exception as e:
+        logger.error(f"AmneziaWG deploy error: {e}")
         return False, str(e)
 
 

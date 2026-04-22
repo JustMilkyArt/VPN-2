@@ -11,6 +11,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <link rel="stylesheet" href="css/app.css">
   <script>
     tailwind.config = {
@@ -474,6 +475,7 @@
 </div>
 
 <!-- ADD CONNECTION -->
+<!-- ADD CONNECTION -->
 <div id="modal-add-connection" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
@@ -485,54 +487,78 @@
       </button>
     </div>
     <form id="add-connection-form" class="p-6 space-y-4">
+      <!-- Name -->
       <div>
         <label class="form-label">Название</label>
-        <input name="name" type="text" placeholder="VLESS-DE-01" class="form-input" required>
+        <input name="name" type="text" id="conn-name-input" placeholder="VLESS-DE-01" class="form-input" required>
       </div>
+
+      <!-- Server -->
       <div>
-        <label class="form-label">Шаг 1: Сервер</label>
+        <label class="form-label">Сервер</label>
         <div class="custom-select-wrap">
           <select name="server_id" id="conn-server-select" class="form-input custom-select" required>
             <option value="">— Выберите сервер —</option>
           </select>
         </div>
       </div>
+
+      <!-- Protocol -->
       <div>
-        <label class="form-label">Шаг 2: Протокол</label>
+        <label class="form-label">Протокол</label>
         <div class="custom-select-wrap">
           <select name="protocol" id="conn-protocol-select" class="form-input custom-select" required>
             <option value="">— Выберите протокол —</option>
-            <option value="vless_reality">🔒 VLESS + Reality (рекомендуется)</option>
-            <option value="trojan">🛡️ Trojan</option>
+            <option value="vless_reality" selected>🔒 VLESS + Reality (рекомендуется)</option>
+            <option value="amnezia_wg">🛡️ AmneziaWG</option>
+            <option value="trojan">⚡ Trojan</option>
             <option value="naive_proxy">🌐 NaiveProxy</option>
           </select>
         </div>
       </div>
-      <div id="conn-exit-server-block" class="hidden">
-        <label class="form-label">EU Exit node (опционально)</label>
+
+      <!-- SNI block (VLESS+Reality only) -->
+      <div id="conn-sni-block" class="hidden">
+        <label class="form-label flex items-center gap-2">
+          Reality SNI
+          <span class="text-xs text-gray-500 font-normal">— домен для маскировки</span>
+        </label>
         <div class="custom-select-wrap">
-          <select name="exit_server_id" id="conn-exit-select" class="form-input custom-select">
-            <option value="">— Прямой выход —</option>
+          <select name="reality_server_name" id="conn-sni-select" class="form-input custom-select">
           </select>
         </div>
-        <p class="text-gray-500 text-xs mt-1">Для RU → EU цепочки выберите EU-сервер</p>
+        <p class="text-gray-500 text-xs mt-1.5">
+          <i class="fas fa-star text-yellow-400 mr-1"></i>Рекомендуемый выбран автоматически
+        </p>
       </div>
-      <div id="conn-sni-block" class="hidden">
-        <label class="form-label">Reality SNI</label>
-        <input name="reality_server_name" type="text" value="www.microsoft.com" class="form-input">
+
+      <!-- Exit server block (for cascade RU→EU, optional) -->
+      <div id="conn-exit-server-block" class="hidden">
+        <label class="form-label flex items-center gap-2">
+          EU Exit-сервер
+          <span class="text-xs text-gray-500 font-normal">— для каскада RU → EU</span>
+        </label>
+        <div class="custom-select-wrap">
+          <select name="exit_server_id" id="conn-exit-select" class="form-input custom-select">
+            <option value="">— Прямой выход (без каскада) —</option>
+          </select>
+        </div>
       </div>
-      <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400">
-        <i class="fas fa-info-circle text-brand-400 mr-1"></i>
-        Шаг 3 — автоматически: ключи, порт, конфигурация деплоятся через SSH
+
+      <!-- Info hint -->
+      <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400 space-y-1">
+        <div><i class="fas fa-info-circle text-brand-400 mr-1"></i>Ключи, порт и конфиг деплоятся автоматически через SSH</div>
+        <div id="conn-proto-hint" class="text-gray-500"></div>
       </div>
+
       <div id="add-connection-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
       <div id="add-connection-progress" class="hidden p-3 bg-brand-900/50 border border-brand-700 rounded-lg text-brand-300 text-sm flex items-center gap-2">
-        <i class="fas fa-spinner fa-spin"></i><span>Деплой подключения...</span>
+        <i class="fas fa-spinner fa-spin"></i><span>Деплой подключения на сервер...</span>
       </div>
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal('modal-add-connection')"
           class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
-        <button type="submit"
+        <button type="submit" id="conn-submit-btn"
           class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
           <i class="fas fa-rocket text-xs"></i>Создать и задеплоить
         </button>
@@ -543,10 +569,10 @@
 
 <!-- CLIENT CONFIG -->
 <div id="modal-client-config" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between p-6 border-b border-gray-800">
       <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-qrcode text-brand-400"></i>Конфигурация клиента
+        <i class="fas fa-key text-brand-400"></i>Конфигурация клиента
       </h3>
       <button onclick="closeModal('modal-client-config')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>

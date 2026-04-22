@@ -7,8 +7,15 @@ from app.api.deps import get_current_user
 from app.models.admin_user import AdminUser
 from app.schemas.connection import ConnectionCreate, ConnectionUpdate, ConnectionRead
 from app.services import connection_service
+from app.services.config_generator import REALITY_SNI_LIST
 
 router = APIRouter(prefix="/connections", tags=["connections"])
+
+
+@router.get("/sni-list", summary="Get top Reality SNI domains")
+def get_sni_list(_: AdminUser = Depends(get_current_user)):
+    """Return ranked list of best SNI domains for VLESS+Reality."""
+    return REALITY_SNI_LIST
 
 
 @router.get("/", response_model=List[ConnectionRead])
@@ -114,9 +121,20 @@ def get_client_config(
         "port": conn.port,
         "client_link": conn.client_link,
         "config_json": conn.config_json,
+        # VLESS+Reality
         "uuid": conn.uuid,
-        "password": conn.password,
         "reality_public_key": conn.reality_public_key,
         "reality_short_id": conn.reality_short_id,
         "reality_server_name": conn.reality_server_name,
+        # Trojan / NaiveProxy
+        "password": conn.password,
+        # AmneziaWG
+        "wg_public_key": conn.wg_public_key,
+        "wg_client_private_key": conn.wg_client_private_key,
+        "wg_client_public_key": conn.wg_client_public_key,
+        "wg_preshared_key": conn.wg_preshared_key,
+        "wg_client_ip": conn.wg_client_ip,
+        "awg_junk_packet_count": conn.awg_junk_packet_count,
+        "awg_junk_packet_min_size": conn.awg_junk_packet_min_size,
+        "awg_junk_packet_max_size": conn.awg_junk_packet_max_size,
     }

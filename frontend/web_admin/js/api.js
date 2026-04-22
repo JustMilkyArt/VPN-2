@@ -180,6 +180,9 @@ const api = {
   async getClientConfig(id) {
     return this.request('GET', `/connections/${id}/client-config`);
   },
+  async getSniList() {
+    return this.request('GET', '/connections/sni-list');
+  },
 
   // ─── Domains ───────────────────────────────────────────────────────────────
   async getDomains() {
