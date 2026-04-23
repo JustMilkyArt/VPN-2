@@ -6,13 +6,13 @@ let serversData = [];
 
 // ───────────────── LOAD SERVERS ─────────────────
 async function loadServers() {
-  const grid = document.getElementById('servers-grid');
+  const container = document.getElementById('servers-grid');
   const empty = document.getElementById('servers-empty');
-  grid.innerHTML = `<div class="col-span-full flex justify-center py-8"><span class="spinner"></span></div>`;
+  container.innerHTML = `<div class="col-span-full flex justify-center py-8"><span class="spinner"></span></div>`;
 
   const res = await api.getServers();
   if (!res.ok) {
-    grid.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">
+    container.innerHTML = `<div class="col-span-full text-center text-red-400 py-8">
       <i class="fas fa-circle-exclamation mr-2"></i>Ошибка загрузки: ${res.error}
     </div>`;
     return;
@@ -21,89 +21,206 @@ async function loadServers() {
   serversData = res.data;
 
   if (serversData.length === 0) {
-    grid.innerHTML = '';
+    container.innerHTML = '';
     empty.classList.remove('hidden');
     return;
   }
 
   empty.classList.add('hidden');
-  grid.innerHTML = serversData.map(renderServerCard).join('');
+  renderServerSections(container);
+
+  // Автопинг всех серверов при загрузке
+  silentCheckAllServers();
+
+  // Для серверов с неизвестной страной — определяем по IP
+  serversData.forEach(server => {
+    if (!server.country || server.country === '??') {
+      resolveCountryForCard(server.id, server.ip);
+    }
+  });
+}
+
+// ───────────────── RENDER SECTIONS RU / EU ─────────────────
+function renderServerSections(container) {
+  const eu = serversData.filter(s => s.role === 'EU');
+  const ru = serversData.filter(s => s.role === 'RU');
+
+  // RU — слева (первой), EU — справа (второй)
+  const sections = [];
+
+  if (ru.length > 0) {
+    sections.push(`
+    <div class="server-section">
+      <div class="server-section-header">
+        <svg width="18" height="18" viewBox="0 0 72 72" style="flex-shrink:0;opacity:0.9">
+          <clipPath id="rc"><circle cx="36" cy="36" r="34"/></clipPath>
+          <rect x="0" y="0" width="72" height="24" fill="#f0f0f0" clip-path="url(#rc)"/>
+          <rect x="0" y="24" width="72" height="24" fill="#0039a6" clip-path="url(#rc)"/>
+          <rect x="0" y="48" width="72" height="24" fill="#d52b1e" clip-path="url(#rc)"/>
+          <circle cx="36" cy="36" r="34" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+        </svg>
+        <span class="server-section-title">RU Entry</span>
+        <span class="server-section-count">${ru.length}</span>
+      </div>
+      <div class="server-cards-list">
+        ${ru.map(renderServerCard).join('')}
+      </div>
+    </div>`);
+  }
+
+  if (eu.length > 0) {
+    sections.push(`
+    <div class="server-section">
+      <div class="server-section-header">
+        <svg width="18" height="18" viewBox="0 0 72 72" style="flex-shrink:0;opacity:0.8">
+          <circle cx="36" cy="36" r="34" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+          <ellipse cx="36" cy="36" rx="34" ry="13" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.6"/>
+          <line x1="2" y1="36" x2="70" y2="36" stroke="#60a5fa" stroke-width="0.8" opacity="0.6"/>
+          <ellipse cx="36" cy="36" rx="13" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.6"/>
+        </svg>
+        <span class="server-section-title">EU Exit</span>
+        <span class="server-section-count">${eu.length}</span>
+      </div>
+      <div class="server-cards-list">
+        ${eu.map(renderServerCard).join('')}
+      </div>
+    </div>`);
+  }
+
+  // Два блока рядом (если оба есть), иначе один во всю ширину
+  if (sections.length === 2) {
+    container.innerHTML = `<div class="server-sections-grid">${sections.join('')}</div>`;
+  } else {
+    container.innerHTML = `<div class="server-sections-single">${sections.join('')}</div>`;
+  }
+}
+
+// ───────────────── SILENT AUTO-PING ON TAB OPEN ─────────────
+async function silentCheckAllServers() {
+  for (const server of serversData) {
+    try {
+      const res = await api.pingServer(server.id);
+      if (!res.ok) continue;
+      const { reachable, latency_ms } = res.data;
+      const newStatus = reachable ? 'online' : 'offline';
+
+      // Обновляем точку и текст статуса на карточке без перерендера
+      const dot  = document.getElementById(`status-dot-${server.id}`);
+      const txt  = document.getElementById(`status-text-${server.id}`);
+      const ping = document.getElementById(`ping-val-${server.id}`);
+
+      if (dot) {
+        dot.className = `status-dot ${newStatus}`;
+      }
+      if (txt) {
+        txt.className = reachable ? 'text-green-400 text-xs font-medium' : 'text-red-400 text-xs font-medium';
+        txt.textContent = reachable ? 'Online' : 'Offline';
+      }
+      if (ping && latency_ms !== null) {
+        ping.textContent = `пинг: ${latency_ms} ms`;
+        ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
+        ping.classList.remove('hidden');
+      }
+
+      // Обновляем локальный кеш
+      server.status = newStatus;
+    } catch (_) { /* игнорируем */ }
+  }
 }
 
 // ───────────────── SERVER CARD ─────────────────
 function renderServerCard(server) {
-  const flag = getFlag(server.country);
-  const services = [];
-  if (server.xray_installed)       services.push('<span class="text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded">Xray</span>');
-  if (server.naiveproxy_installed) services.push('<span class="text-xs bg-green-900/50 text-green-300 border border-green-800 px-2 py-0.5 rounded">NaiveProxy</span>');
-  if (server.awg_installed)        services.push('<span class="text-xs bg-purple-900/50 text-purple-300 border border-purple-800 px-2 py-0.5 rounded">AmneziaWG</span>');
-  if (server.warp_installed)       services.push('<span class="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-2 py-0.5 rounded">WARP</span>');
+  const flag      = getFlag(server.country);
+  const isOnline  = server.status === 'online';
+  const isOffline = server.status === 'offline';
 
   return `
 <div class="server-card" id="server-card-${server.id}">
-  <!-- Header -->
-  <div class="flex items-start justify-between mb-3">
-    <div class="flex items-center gap-2.5">
-      <div class="flex items-center justify-center w-9 h-7 flex-shrink-0">${flag}</div>
-      <div>
-        <div class="font-semibold text-white text-sm leading-tight">${server.name}</div>
-        <div class="text-gray-500 text-xs mt-0.5 font-mono">${server.ip}</div>
-      </div>
+
+  <!-- Шапка: флаг+название слева, статус справа -->
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.875rem;">
+
+    <!-- Флаг + название -->
+    <div style="display:flex;align-items:center;gap:0.625rem;min-width:0;flex:1;">
+      <div id="server-flag-${server.id}" style="flex-shrink:0;">${flag}</div>
+      <span style="font-weight:600;color:#f9fafb;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${server.name}</span>
     </div>
-    <div class="flex items-center gap-1.5">
-      ${roleLabel(server.role)}
-      ${statusDot(server.status)}
+
+    <!-- Статус справа -->
+    <div style="display:flex;align-items:center;gap:0.35rem;flex-shrink:0;">
+      <span id="status-dot-${server.id}" class="status-dot ${server.status}"></span>
+      <span id="status-text-${server.id}" style="font-size:0.72rem;font-weight:600;color:${isOnline ? '#4ade80' : isOffline ? '#f87171' : '#6b7280'};">${isOnline ? 'Online' : isOffline ? 'Offline' : 'Unknown'}</span>
     </div>
+
   </div>
 
-  <!-- Status row -->
-  <div class="flex items-center gap-2 text-xs mb-3">
-    ${statusText(server.status)}
-    ${server.domain ? `<span class="text-gray-700">·</span><span class="text-gray-500 truncate max-w-[120px]">${server.domain}</span>` : ''}
+  <!-- IP -->
+  <div style="margin-bottom:0.25rem;">
+    <span style="font-family:monospace;font-size:0.8rem;color:#4b5563;">${server.ip}</span>
   </div>
 
-  <!-- Services badges -->
-  ${services.length > 0
-    ? `<div class="flex flex-wrap gap-1 mb-3">${services.join('')}</div>`
-    : '<div class="mb-3 text-xs text-gray-600 italic">Сервисы не установлены</div>'}
+  <!-- Латентность (появляется после пинга) -->
+  <div style="margin-bottom:0.875rem;min-height:1.1rem;">
+    <span id="ping-val-${server.id}" class="hidden" style="font-size:0.75rem;font-weight:500;"></span>
+  </div>
 
-  <!-- Action buttons -->
-  <div class="flex items-center justify-end gap-1 border-t border-gray-800 pt-3 mt-3">
+  <!-- Кнопки -->
+  <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.25rem;border-top:1px solid #1f2937;padding-top:0.625rem;">
     <button onclick="pingServer(${server.id})" class="action-btn" title="Пинг">
       <i class="fas fa-satellite-dish"></i>
     </button>
-    <button onclick="showServerDetail(${server.id})" class="action-btn" title="Детали">
-      <i class="fas fa-circle-info"></i>
-    </button>
-    <button onclick="showInstallModal(${server.id})" class="action-btn success" title="Установить стек">
-      <i class="fas fa-download"></i>
-    </button>
-    <button onclick="showServerSettings(${server.id})" class="action-btn" title="Настройки">
-      <i class="fas fa-gear"></i>
+    <button onclick="showServerDetail(${server.id})" class="action-btn" title="Настройки">
+      <i class="fas fa-sliders"></i>
     </button>
     <button onclick="confirmDeleteServer(${server.id}, '${server.name}')" class="action-btn danger" title="Удалить">
       <i class="fas fa-trash"></i>
     </button>
   </div>
-</div>
-  `;
+
+</div>`;
 }
 
 // ───────────────── PING SERVER ─────────────────
 async function pingServer(serverId) {
-  toast('Проверяю соединение...', 'info', 3000);
+  // Анимируем кнопку пинга
+  const card = document.getElementById(`server-card-${serverId}`);
+  const btn  = card?.querySelector('[title="Пинг"]');
+  if (btn) { btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;"></span>'; btn.disabled = true; }
+
   const res = await api.pingServer(serverId);
+
+  if (btn) { btn.innerHTML = '<i class="fas fa-satellite-dish"></i>'; btn.disabled = false; }
+
   if (res.ok) {
     const { reachable, message, latency_ms } = res.data;
-    const latencyStr = latency_ms !== null ? ` — ${latency_ms} мс` : '';
+
+    // Обновляем карточку без перерендера
+    const dot  = document.getElementById(`status-dot-${serverId}`);
+    const txt  = document.getElementById(`status-text-${serverId}`);
+    const ping = document.getElementById(`ping-val-${serverId}`);
+
+    if (dot) dot.className = `status-dot ${reachable ? 'online' : 'offline'}`;
+    if (txt) {
+      txt.style.color  = reachable ? '#4ade80' : '#f87171';
+      txt.textContent  = reachable ? 'Online' : 'Offline';
+    }
+    if (ping) {
+      if (latency_ms !== null) {
+        ping.textContent = `пинг: ${latency_ms} ms`;
+        ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
+        ping.classList.remove('hidden');
+      }
+    }
+
+    const latencyStr = latency_ms !== null ? ` — ${latency_ms} ms` : '';
     toast(
-      reachable
-        ? `✓ Сервер доступен${latencyStr}`
-        : `✗ Недоступен: ${message}`,
-      reachable ? 'success' : 'error',
-      5000
+      reachable ? `✓ Доступен${latencyStr}` : `✗ Недоступен: ${message}`,
+      reachable ? 'success' : 'error', 4000
     );
-    loadServers();
+
+    // Обновляем кеш
+    const srv = serversData.find(s => s.id === serverId);
+    if (srv) srv.status = reachable ? 'online' : 'offline';
   } else {
     toast(`Ошибка: ${res.error}`, 'error');
   }
@@ -148,8 +265,20 @@ function toggleServerAdvanced() {
 function selectRole(role) {
   document.querySelector('#add-server-form [name=role][value=EU]').checked = (role === 'EU');
   document.querySelector('#add-server-form [name=role][value=RU]').checked = (role === 'RU');
-  document.getElementById('role-card-eu').classList.toggle('role-card-active', role === 'EU');
-  document.getElementById('role-card-ru').classList.toggle('role-card-active', role === 'RU');
+
+  const euBtn = document.getElementById('role-card-eu');
+  const ruBtn = document.getElementById('role-card-ru');
+
+  // Сброс стилей
+  const base = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;padding:1.5rem 1rem;border-radius:0.875rem;cursor:pointer;width:100%;transition:all 0.2s;';
+  const active = base + 'border:2px solid #6366f1;background:#1e1b4b;box-shadow:0 0 0 2px #6366f1,0 4px 24px rgba(99,102,241,0.35);opacity:1;';
+  const dim    = base + 'border:2px solid #374151;background:#111827;opacity:0.4;';
+
+  euBtn.style.cssText = (role === 'EU') ? active : dim;
+  ruBtn.style.cssText = (role === 'RU') ? active : dim;
+
+  // Показываем поля формы
+  document.getElementById('server-fields').classList.remove('hidden');
 }
 
 function showAddServerModal() {
@@ -157,15 +286,46 @@ function showAddServerModal() {
   document.getElementById('add-server-error').classList.add('hidden');
   document.getElementById('add-server-geo').classList.add('hidden');
   document.getElementById('add-server-country').value = '??';
+  // Скрываем поля — видны только кнопки выбора роли
+  document.getElementById('server-fields').classList.add('hidden');
   // Reset SSH defaults
   document.querySelector('#add-server-form [name=ssh_user]').value = 'root';
   document.querySelector('#add-server-form [name=ssh_port]').value = '22';
   // Hide advanced
   document.getElementById('server-advanced-fields').classList.add('hidden');
   document.getElementById('server-adv-icon').classList.remove('rotate-90');
-  // Reset role to EU
-  selectRole('EU');
+  // Сбрасываем кнопки роли в нейтральное состояние
+  const baseStyle = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;padding:1.5rem 1rem;border-radius:0.875rem;border:2px solid #374151;background:#111827;cursor:pointer;width:100%;transition:all 0.2s;opacity:1;';
+  document.getElementById('role-card-eu').style.cssText = baseStyle;
+  document.getElementById('role-card-ru').style.cssText = baseStyle;
+  document.querySelector('#add-server-form [name=role][value=EU]').checked = false;
+  document.querySelector('#add-server-form [name=role][value=RU]').checked = false;
   openModal('modal-add-server');
+}
+
+// ───────── Автодетект страны для карточки сервера (если country = '??') ─────────
+async function resolveCountryForCard(serverId, ip) {
+  try {
+    const resp = await fetch(`https://ipwho.is/${ip}`);
+    const data = await resp.json();
+    if (!data.success || !data.country_code) return;
+
+    const code  = data.country_code.toUpperCase();
+    const lower = code.toLowerCase();
+
+    // Обновляем флаг на карточке
+    const flagEl = document.getElementById(`server-flag-${serverId}`);
+    if (flagEl) {
+      flagEl.innerHTML = `<img src="https://flagcdn.com/32x24/${lower}.png" alt="${code}" class="country-flag">`;
+    }
+
+    // Сохраняем в БД через API
+    await api.updateServer(serverId, { country: code });
+
+    // Обновляем локальный кеш
+    const srv = serversData.find(s => s.id === serverId);
+    if (srv) srv.country = code;
+  } catch (_) { /* тихо игнорируем */ }
 }
 
 // Auto-detect country by IP — показываем флаг через flagcdn.com
@@ -191,17 +351,15 @@ async function detectIpInfo() {
     geoText.textContent = 'Определяю страну...';
 
     try {
-      const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
+      const resp = await fetch(`https://ipwho.is/${ip}`);
       const data = await resp.json();
 
-      if (data.status === 'success') {
-        const code = data.countryCode.toLowerCase(); // 'de', 'ru', 'nl'...
+      if (data.success && data.country_code) {
+        const code = data.country_code.toLowerCase();
         const name = data.country;
 
-        // Сохраняем код страны в скрытое поле
-        countryInput.value = data.countryCode.toUpperCase();
+        countryInput.value = data.country_code.toUpperCase();
 
-        // Флаг через flagcdn.com
         flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
         flagImg.alt = name;
         geoText.textContent = name;

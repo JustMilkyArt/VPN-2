@@ -48,12 +48,68 @@
   background: #111827;
   border: 1px solid #1f2937;
   border-radius: 1rem;
-  padding: 1.25rem;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  padding: 1.125rem 1.25rem;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
 }
 .server-card:hover {
   border-color: #374151;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  transform: translateY(-1px);
+}
+
+/* Server sections layout: два блока рядом или один во всю ширину */
+.server-sections-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+.server-sections-single {
+  display: block;
+}
+
+/* Карточки в столбик, полная ширина колонки */
+.server-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.server-cards-list .server-card {
+  width: 100%;
+  min-width: unset;
+}
+
+/* Server section headers (EU / RU segments) */
+.server-section {
+  margin-bottom: 0;
+}
+.server-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid #1f2937;
+}
+.server-section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+.server-section-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #1f2937;
+  color: #6b7280;
+  border: 1px solid #374151;
 }
 
 /* Status indicator */
@@ -331,34 +387,41 @@ select option:checked,
 }
 
 /* ─── Role cards (add server form) ──────────────────────────── */
-.role-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+button.role-card {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
   text-align: center;
-  padding: 1.25rem 0.75rem;
+  width: 100%;
+  padding: 1.5rem 1rem;
   border-radius: 1rem;
   border: 2px solid #374151;
   background: #111827;
-  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s;
-  user-select: none;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
   cursor: pointer;
   gap: 0.75rem;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, opacity 0.2s;
+  user-select: none;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.role-card:hover {
-  border-color: #4f46e5;
+button.role-card:hover {
+  border-color: #6366f1;
   background: #1a1740;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(99,102,241,0.25);
 }
-.role-card-active {
-  border-color: #6366f1 !important;
+button.role-card.role-card-dim {
+  opacity: 0.35;
+}
+button.role-card.role-card-active {
+  border: 2px solid #6366f1 !important;
   background: #1e1b4b !important;
-  box-shadow: 0 0 0 1px #6366f1, 0 4px 24px rgba(99,102,241,0.3) !important;
-  transform: translateY(-1px);
-}
-.role-card-active .role-icon-bg {
-  box-shadow: 0 0 20px rgba(99,102,241,0.5);
+  box-shadow: 0 0 0 2px #6366f1, 0 4px 24px rgba(99,102,241,0.35);
+  opacity: 1 !important;
 }
 
 /* SVG icon container inside role card */
@@ -369,9 +432,9 @@ select option:checked,
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: box-shadow 0.2s;
   overflow: hidden;
   flex-shrink: 0;
+  pointer-events: none;
 }
 
 /* ─── Config format tabs ─────────────────────────────────────── */
