@@ -61,30 +61,38 @@
   transform: translateY(-1px);
 }
 
+/* #servers-grid — враппер, растягиваем на всю ширину */
+#servers-grid {
+  display: block;
+  width: 100%;
+}
+
 /* Server sections layout: секции друг под другом во всю ширину */
 .server-sections-grid,
 .server-sections-single {
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  width: 100%;
 }
 
-/* Карточки — сетка внутри секции */
+/* Карточки — 5 колонок во всю ширину секции */
 .server-cards-list {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 1rem;
+  width: 100%;
 }
-@media (max-width: 1400px) {
+@media (max-width: 1100px) {
   .server-cards-list { grid-template-columns: repeat(4, 1fr); }
 }
-@media (max-width: 1024px) {
+@media (max-width: 860px) {
   .server-cards-list { grid-template-columns: repeat(3, 1fr); }
 }
-@media (max-width: 700px) {
+@media (max-width: 600px) {
   .server-cards-list { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 480px) {
+@media (max-width: 400px) {
   .server-cards-list { grid-template-columns: 1fr; }
 }
 .server-cards-list .server-card {
