@@ -250,7 +250,7 @@
   </header>
 
   <!-- MAIN CONTENT -->
-  <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+  <main class="flex-1 max-w-screen-2xl mx-auto w-full px-6 py-6">
 
     <!-- ─── SERVERS TAB ─────────────────────────────── -->
     <section id="tab-servers" class="tab-content">
@@ -272,7 +272,7 @@
           </button>
         </div>
       </div>
-      <div id="servers-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+      <div id="servers-grid" class="flex gap-6"></div>
       <div id="servers-empty" class="hidden text-center py-16">
         <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
           <i class="fas fa-server text-3xl text-gray-600"></i>
@@ -372,114 +372,68 @@
     <form id="add-server-form" class="p-6 space-y-6">
 
       <!-- ШАГ 1: Роль — только это видно при открытии -->
-      <div>
-        <div class="text-center mb-4">
-          <p class="text-sm text-gray-400">Выберите роль сервера</p>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
+      <div id="role-step">
+        <p style="text-align:center;color:#9ca3af;font-size:0.875rem;margin-bottom:1rem;">Выберите роль сервера</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
 
           <!-- EU.Exit -->
-          <button type="button" id="role-card-eu"
-            class="role-card role-card-active"
-            onclick="selectRole('EU')">
-            <input type="radio" name="role" value="EU" class="hidden" checked>
-            <div class="role-icon-bg">
-              <!-- Globe SVG -->
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
-                <defs>
-                  <radialGradient id="globeBg" cx="40%" cy="35%" r="65%">
-                    <stop offset="0%" stop-color="#1e40af"/>
-                    <stop offset="100%" stop-color="#0c1a4d"/>
-                  </radialGradient>
-                  <radialGradient id="globeShine" cx="35%" cy="30%" r="50%">
-                    <stop offset="0%" stop-color="rgba(255,255,255,0.18)"/>
-                    <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
-                  </radialGradient>
-                </defs>
-                <!-- Background circle -->
-                <circle cx="36" cy="36" r="34" fill="url(#globeBg)" stroke="#3b82f6" stroke-width="1.5"/>
-                <!-- Latitude lines -->
-                <ellipse cx="36" cy="36" rx="34" ry="12" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
-                <ellipse cx="36" cy="36" rx="34" ry="22" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.4"/>
-                <!-- Equator -->
-                <line x1="2" y1="36" x2="70" y2="36" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
-                <!-- Longitude lines -->
-                <ellipse cx="36" cy="36" rx="12" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
-                <ellipse cx="36" cy="36" rx="22" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.35"/>
-                <!-- Vertical center line -->
-                <line x1="36" y1="2" x2="36" y2="70" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
-                <!-- Continents (simplified) -->
-                <!-- Europe/Africa -->
-                <path d="M32 16 Q35 14 37 17 Q40 19 39 23 Q38 26 35 25 Q33 24 31 26 Q29 28 30 31 Q31 34 29 36 Q27 34 26 30 Q25 26 27 22 Z" fill="#22c55e" opacity="0.85"/>
-                <!-- Americas -->
-                <path d="M18 22 Q20 20 22 22 Q24 24 23 28 Q22 32 20 35 Q18 38 17 35 Q15 32 16 27 Z" fill="#22c55e" opacity="0.75"/>
-                <!-- Asia -->
-                <path d="M41 18 Q46 16 50 19 Q54 22 52 27 Q50 31 47 30 Q44 28 43 24 Q41 22 41 18 Z" fill="#22c55e" opacity="0.8"/>
-                <!-- Australia -->
-                <path d="M50 42 Q54 41 56 44 Q57 47 54 49 Q51 50 49 47 Q47 44 50 42 Z" fill="#22c55e" opacity="0.75"/>
-                <!-- Network nodes -->
-                <circle cx="36" cy="36" r="2" fill="#93c5fd" opacity="0.9"/>
-                <circle cx="20" cy="28" r="1.5" fill="#93c5fd" opacity="0.7"/>
-                <circle cx="50" cy="24" r="1.5" fill="#93c5fd" opacity="0.7"/>
-                <circle cx="42" cy="48" r="1.5" fill="#93c5fd" opacity="0.7"/>
-                <!-- Network lines -->
-                <line x1="36" y1="36" x2="20" y2="28" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
-                <line x1="36" y1="36" x2="50" y2="24" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
-                <line x1="36" y1="36" x2="42" y2="48" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
-                <!-- Shine overlay -->
-                <circle cx="36" cy="36" r="34" fill="url(#globeShine)"/>
-                <!-- Outer glow ring -->
-                <circle cx="36" cy="36" r="34" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.4"/>
-              </svg>
-            </div>
-            <div>
-              <div class="font-bold text-sm tracking-wide text-white">EU.Exit</div>
-              <div class="text-xs text-gray-500 mt-0.5">Выходной сервер</div>
-            </div>
+          <button type="button" id="role-card-eu" onclick="selectRole('EU')"
+            style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;
+                   padding:1.5rem 1rem;border-radius:0.875rem;border:2px solid #374151;
+                   background:#111827;cursor:pointer;width:100%;transition:all 0.2s;">
+            <input type="radio" name="role" value="EU" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="68" height="68" style="pointer-events:none;flex-shrink:0;">
+              <defs>
+                <radialGradient id="gBg" cx="40%" cy="35%" r="65%">
+                  <stop offset="0%" stop-color="#1e40af"/>
+                  <stop offset="100%" stop-color="#0c1a4d"/>
+                </radialGradient>
+              </defs>
+              <circle cx="36" cy="36" r="34" fill="url(#gBg)" stroke="#3b82f6" stroke-width="1.5"/>
+              <ellipse cx="36" cy="36" rx="34" ry="13" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="34" ry="23" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.4"/>
+              <line x1="2" y1="36" x2="70" y2="36" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="13" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="23" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.35"/>
+              <line x1="36" y1="2" x2="36" y2="70" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <path d="M32 16 Q35 14 37 17 Q40 19 39 23 Q38 26 35 25 Q33 24 31 26 Q29 28 30 31 Q31 34 29 36 Q27 34 26 30 Q25 26 27 22 Z" fill="#22c55e" opacity="0.85"/>
+              <path d="M18 22 Q20 20 22 22 Q24 24 23 28 Q22 32 20 35 Q18 38 17 35 Q15 32 16 27 Z" fill="#22c55e" opacity="0.75"/>
+              <path d="M41 18 Q46 16 50 19 Q54 22 52 27 Q50 31 47 30 Q44 28 43 24 Q41 22 41 18 Z" fill="#22c55e" opacity="0.8"/>
+              <path d="M50 42 Q54 41 56 44 Q57 47 54 49 Q51 50 49 47 Q47 44 50 42 Z" fill="#22c55e" opacity="0.75"/>
+              <circle cx="36" cy="36" r="2" fill="#93c5fd" opacity="0.9"/>
+              <circle cx="20" cy="28" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <circle cx="50" cy="24" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <circle cx="42" cy="48" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <line x1="36" y1="36" x2="20" y2="28" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+              <line x1="36" y1="36" x2="50" y2="24" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+              <line x1="36" y1="36" x2="42" y2="48" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+            </svg>
+            <span style="color:#fff;font-weight:700;font-size:0.9rem;pointer-events:none;">EU.Exit</span>
           </button>
 
           <!-- RU.Entry -->
-          <button type="button" id="role-card-ru"
-            class="role-card"
-            onclick="selectRole('RU')">
-            <input type="radio" name="role" value="RU" class="hidden">
-            <div class="role-icon-bg">
-              <!-- Russian flag SVG (tricolor circle) -->
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
-                <defs>
-                  <clipPath id="circleClip">
-                    <circle cx="36" cy="36" r="34"/>
-                  </clipPath>
-                  <radialGradient id="flagShine" cx="35%" cy="30%" r="55%">
-                    <stop offset="0%" stop-color="rgba(255,255,255,0.2)"/>
-                    <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
-                  </radialGradient>
-                </defs>
-                <!-- White stripe (top) -->
-                <rect x="2" y="2" width="70" height="24" fill="#f0f0f0" clip-path="url(#circleClip)"/>
-                <!-- Blue stripe (middle) -->
-                <rect x="2" y="24" width="70" height="24" fill="#0039a6" clip-path="url(#circleClip)"/>
-                <!-- Red stripe (bottom) -->
-                <rect x="2" y="46" width="70" height="26" fill="#d52b1e" clip-path="url(#circleClip)"/>
-                <!-- Shine -->
-                <circle cx="36" cy="36" r="34" fill="url(#flagShine)"/>
-                <!-- Border -->
-                <circle cx="36" cy="36" r="34" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
-                <!-- Subtle inner shadow -->
-                <circle cx="36" cy="36" r="33" fill="none" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>
-              </svg>
-            </div>
-            <div>
-              <div class="font-bold text-sm tracking-wide text-white">RU.Entry</div>
-              <div class="text-xs text-gray-500 mt-0.5">Входной сервер</div>
-            </div>
+          <button type="button" id="role-card-ru" onclick="selectRole('RU')"
+            style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;
+                   padding:1.5rem 1rem;border-radius:0.875rem;border:2px solid #374151;
+                   background:#111827;cursor:pointer;width:100%;transition:all 0.2s;">
+            <input type="radio" name="role" value="RU" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="68" height="68" style="pointer-events:none;flex-shrink:0;">
+              <defs>
+                <clipPath id="ruClip"><circle cx="36" cy="36" r="34"/></clipPath>
+              </defs>
+              <rect x="0" y="0" width="72" height="24" fill="#f0f0f0" clip-path="url(#ruClip)"/>
+              <rect x="0" y="24" width="72" height="24" fill="#0039a6" clip-path="url(#ruClip)"/>
+              <rect x="0" y="48" width="72" height="24" fill="#d52b1e" clip-path="url(#ruClip)"/>
+              <circle cx="36" cy="36" r="34" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+            </svg>
+            <span style="color:#fff;font-weight:700;font-size:0.9rem;pointer-events:none;">RU.Entry</span>
           </button>
 
         </div>
       </div>
 
       <!-- ШАГ 2: Поля (появляются после выбора роли) -->
-      <div id="server-fields" class="space-y-4">
+      <div id="server-fields" class="space-y-4 hidden">
 
         <!-- Название -->
         <div>

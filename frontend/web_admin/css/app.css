@@ -72,13 +72,16 @@
 /* Карточки — сетка внутри секции */
 .server-cards-list {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1rem;
 }
-@media (max-width: 1024px) {
+@media (max-width: 1280px) {
+  .server-cards-list { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 900px) {
   .server-cards-list { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 640px) {
+@media (max-width: 560px) {
   .server-cards-list { grid-template-columns: 1fr; }
 }
 .server-cards-list .server-card {
