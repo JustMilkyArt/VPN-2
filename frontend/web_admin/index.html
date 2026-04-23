@@ -369,89 +369,77 @@
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <form id="add-server-form" class="p-6 space-y-4">
-      <!-- Hint -->
-      <div class="p-3 bg-blue-900/30 border border-blue-800/60 rounded-lg text-blue-300 text-xs flex items-start gap-2">
-        <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
-        <span>Укажите данные, которые вы получили при аренде сервера. Всё остальное панель настроит автоматически.</span>
-      </div>
+    <form id="add-server-form" class="p-6 space-y-5">
 
-      <div class="grid grid-cols-2 gap-4">
-        <!-- Name -->
-        <div class="col-span-2">
-          <label class="form-label">Название сервера</label>
-          <input name="name" type="text" placeholder="EU-DE-01" class="form-input" required>
-        </div>
-
-        <!-- IP + auto-detect -->
-        <div class="col-span-2">
-          <label class="form-label">IP-адрес</label>
-          <input name="ip" id="add-server-ip" type="text" placeholder="1.2.3.4" class="form-input"
-                 required oninput="detectIpInfo()">
-          <div class="flex items-center gap-2 mt-1.5">
-            <span id="add-server-country-flag" class="text-lg leading-none"></span>
-            <span id="add-server-role-hint" class="text-xs text-gray-500"></span>
-          </div>
-        </div>
-
-        <!-- Country + Role (auto-filled, can adjust manually) -->
-        <div>
-          <label class="form-label">Страна <span class="text-gray-600 font-normal">(авто)</span></label>
-          <div class="custom-select-wrap">
-            <select name="country" class="form-input custom-select">
-              <option value="DE">🇩🇪 Германия</option>
-              <option value="NL">🇳🇱 Нидерланды</option>
-              <option value="FI">🇫🇮 Финляндия</option>
-              <option value="FR">🇫🇷 Франция</option>
-              <option value="GB">🇬🇧 Британия</option>
-              <option value="RU">🇷🇺 Россия</option>
-              <option value="US">🇺🇸 США</option>
-              <option value="TR">🇹🇷 Турция</option>
-              <option value="PL">🇵🇱 Польша</option>
-              <option value="SE">🇸🇪 Швеция</option>
-              <option value="??">🌍 Другая</option>
-            </select>
-          </div>
-        </div>
-        <div>
-          <label class="form-label">Роль <span class="text-gray-600 font-normal">(авто)</span></label>
-          <div class="custom-select-wrap">
-            <select name="role" class="form-input custom-select">
-              <option value="EU">EU — Exit (выход)</option>
-              <option value="RU">RU — Entry (вход)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- SSH password -->
-        <div class="col-span-2">
-          <label class="form-label">Пароль SSH</label>
-          <input name="ssh_password" type="password" class="form-input"
-                 placeholder="Пароль от сервера" autocomplete="off">
-        </div>
-      </div>
-
-      <!-- Advanced params toggle -->
+      <!-- Шаг 1: Название -->
       <div>
-        <button type="button" onclick="toggleServerAdvanced()"
-          class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1">
-          <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform"></i>
-          <span>Дополнительные параметры</span>
-        </button>
-        <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-2 gap-4">
-          <div>
+        <label class="form-label">Название сервера</label>
+        <input name="name" type="text" placeholder="EU-DE-01" class="form-input" required>
+        <p class="text-xs text-gray-600 mt-1">Любое удобное имя для идентификации</p>
+      </div>
+
+      <!-- Шаг 2: Роль — выбор карточками -->
+      <div>
+        <label class="form-label">Роль сервера</label>
+        <div class="grid grid-cols-2 gap-3 mt-1">
+          <label id="role-card-eu" class="role-card role-card-active cursor-pointer" onclick="selectRole('EU')">
+            <input type="radio" name="role" value="EU" class="hidden" checked>
+            <div class="text-2xl mb-1">🌍</div>
+            <div class="font-semibold text-sm text-white">EU — Exit</div>
+            <div class="text-xs text-gray-400 mt-0.5">Выходной сервер<br>Европа / любая страна</div>
+          </label>
+          <label id="role-card-ru" class="role-card cursor-pointer" onclick="selectRole('RU')">
+            <input type="radio" name="role" value="RU" class="hidden">
+            <div class="text-2xl mb-1">🇷🇺</div>
+            <div class="font-semibold text-sm text-white">RU — Entry</div>
+            <div class="text-xs text-gray-400 mt-0.5">Входной сервер<br>Россия</div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Шаг 3: IP -->
+      <div>
+        <label class="form-label">IP-адрес</label>
+        <input name="ip" id="add-server-ip" type="text" placeholder="1.2.3.4" class="form-input"
+               required oninput="detectIpInfo()">
+        <div class="flex items-center gap-2 mt-1.5 min-h-[18px]">
+          <span id="add-server-country-flag" class="text-base leading-none"></span>
+          <span id="add-server-role-hint" class="text-xs text-gray-500"></span>
+        </div>
+        <!-- скрытое поле страны — заполняется автоматически -->
+        <select name="country" id="add-server-country" class="hidden">
+          <option value="DE">DE</option><option value="NL">NL</option>
+          <option value="FI">FI</option><option value="FR">FR</option>
+          <option value="GB">GB</option><option value="RU">RU</option>
+          <option value="US">US</option><option value="TR">TR</option>
+          <option value="PL">PL</option><option value="SE">SE</option>
+          <option value="??" selected>??</option>
+        </select>
+      </div>
+
+      <!-- Шаг 4: SSH данные -->
+      <div class="space-y-3">
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
             <label class="form-label">Пользователь SSH</label>
-            <input name="ssh_user" type="text" value="root" class="form-input">
+            <input name="ssh_user" type="text" value="root" class="form-input" required>
+            <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
           </div>
           <div>
             <label class="form-label">Порт SSH</label>
-            <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+            <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input" required>
+            <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
           </div>
+        </div>
+        <div>
+          <label class="form-label">Пароль SSH</label>
+          <input name="ssh_password" type="password" class="form-input"
+                 placeholder="Пароль от сервера" autocomplete="off" required>
         </div>
       </div>
 
       <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-      <div class="flex gap-3 pt-2">
+      <div class="flex gap-3 pt-1">
         <button type="button" onclick="closeModal('modal-add-server')"
           class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
         <button type="submit"

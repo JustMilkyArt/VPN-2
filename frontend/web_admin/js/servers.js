@@ -145,19 +145,25 @@ function toggleServerAdvanced() {
   }
 }
 
+function selectRole(role) {
+  // Update radio inputs
+  document.querySelector('#add-server-form [name=role][value=EU]').checked = (role === 'EU');
+  document.querySelector('#add-server-form [name=role][value=RU]').checked = (role === 'RU');
+  // Update card styles
+  document.getElementById('role-card-eu').classList.toggle('role-card-active', role === 'EU');
+  document.getElementById('role-card-ru').classList.toggle('role-card-active', role === 'RU');
+}
+
 function showAddServerModal() {
   document.getElementById('add-server-form').reset();
   document.getElementById('add-server-error').classList.add('hidden');
   document.getElementById('add-server-country-flag').textContent = '';
   document.getElementById('add-server-role-hint').textContent = '';
-  // Reset advanced fields
-  const fields = document.getElementById('server-advanced-fields');
-  const icon = document.getElementById('server-adv-icon');
-  fields.classList.add('hidden');
-  icon.classList.remove('rotate-90');
-  const form = document.getElementById('add-server-form');
-  form.querySelector('[name=ssh_user]').value = 'root';
-  form.querySelector('[name=ssh_port]').value = '22';
+  // Reset SSH defaults
+  document.querySelector('#add-server-form [name=ssh_user]').value = 'root';
+  document.querySelector('#add-server-form [name=ssh_port]').value = '22';
+  // Reset role to EU
+  selectRole('EU');
   openModal('modal-add-server');
 }
 
@@ -166,8 +172,7 @@ async function detectIpInfo() {
   const ip = document.getElementById('add-server-ip').value.trim();
   const flagEl = document.getElementById('add-server-country-flag');
   const hintEl = document.getElementById('add-server-role-hint');
-  const countrySelect = document.querySelector('#add-server-form [name=country]');
-  const roleSelect = document.querySelector('#add-server-form [name=role]');
+  const countrySelect = document.getElementById('add-server-country'); // скрытый select
 
   if (!ip || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
     flagEl.textContent = '';
@@ -176,43 +181,39 @@ async function detectIpInfo() {
   }
 
   flagEl.textContent = '⏳';
-  hintEl.textContent = 'Определяю...';
+  hintEl.textContent = 'Определяю страну...';
+  hintEl.className = 'text-xs text-gray-500';
 
   try {
     const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
     const data = await resp.json();
     if (data.status === 'success') {
-      const code = data.countryCode;  // e.g. "DE", "RU"
+      const code = data.countryCode;
       const name = data.country;
 
-      // Set country select
+      // Заполняем скрытый select страны
       let matched = false;
       for (const opt of countrySelect.options) {
-        if (opt.value === code) {
-          opt.selected = true;
-          matched = true;
-          break;
-        }
+        if (opt.value === code) { opt.selected = true; matched = true; break; }
       }
       if (!matched) countrySelect.value = '??';
 
-      // Set role: RU → Entry, all others → Exit
+      // Автоматически выставляем роль: RU → Entry, всё остальное → Exit
       const role = (code === 'RU') ? 'RU' : 'EU';
-      roleSelect.value = role;
+      selectRole(role);
 
-      const flag = getFlag(code);
-      flagEl.textContent = flag;
-      hintEl.textContent = `${name} · ${role === 'RU' ? 'RU Entry (вход)' : 'EU Exit (выход)'}`;
-      hintEl.className = 'text-xs mt-1 ' + (role === 'RU' ? 'text-blue-400' : 'text-green-400');
+      flagEl.textContent = getFlag(code);
+      hintEl.textContent = `${name} · роль автоматически выбрана`;
+      hintEl.className = 'text-xs ' + (role === 'RU' ? 'text-orange-400' : 'text-green-400');
     } else {
       flagEl.textContent = '🌍';
-      hintEl.textContent = 'Страна не определена';
-      hintEl.className = 'text-xs mt-1 text-gray-500';
+      hintEl.textContent = 'Страна не определена — выберите роль вручную';
+      hintEl.className = 'text-xs text-gray-500';
     }
   } catch {
     flagEl.textContent = '';
-    hintEl.textContent = 'Ошибка определения IP';
-    hintEl.className = 'text-xs mt-1 text-red-400';
+    hintEl.textContent = 'Не удалось определить страну';
+    hintEl.className = 'text-xs text-red-400';
   }
 }
 
@@ -554,6 +555,7 @@ async function confirmDeleteServer(serverId, name) {
 }
 
 // Expose globally
+window.selectRole              = selectRole;
 window.toggleServerAdvanced    = toggleServerAdvanced;
 window.detectIpInfo            = detectIpInfo;
 window.loadServers             = loadServers;

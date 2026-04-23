@@ -318,6 +318,29 @@ select option:checked,
   border: 1px solid #065f46;
 }
 
+/* ─── Role cards (add server form) ──────────────────────────── */
+.role-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 1rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 2px solid #374151;
+  background: #1f2937;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.role-card:hover {
+  border-color: #4f46e5;
+  background: #1e1b4b;
+}
+.role-card-active {
+  border-color: #6366f1 !important;
+  background: #1e1b4b !important;
+  box-shadow: 0 0 0 1px #6366f1;
+}
+
 /* ─── Config format tabs ─────────────────────────────────────── */
 .config-tab-btn {
   transition: background 0.15s, color 0.15s;
