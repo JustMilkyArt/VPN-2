@@ -84,13 +84,13 @@ function escapeHtml(str) {
 
 // ─── COUNTRY FLAGS ────────────────────────────────────────────────────────────
 
-const COUNTRY_FLAGS = {
-  RU: '🇷🇺', DE: '🇩🇪', NL: '🇳🇱', FI: '🇫🇮', FR: '🇫🇷',
-  GB: '🇬🇧', US: '🇺🇸', TR: '🇹🇷', PL: '🇵🇱', '??': '🌍',
-};
-
 function getFlag(country) {
-  return COUNTRY_FLAGS[country?.toUpperCase()] || '🌍';
+  const code = country?.toUpperCase();
+  if (!code || code === '??') {
+    return '<span class="flag-globe" title="Unknown">🌍</span>';
+  }
+  const lower = code.toLowerCase();
+  return `<img src="https://flagcdn.com/32x24/${lower}.png" alt="${code}" title="${code}" class="country-flag" onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<span title=&quot;${code}&quot;>🌍</span>')">`;
 }
 
 // ─── STATUS HELPERS ───────────────────────────────────────────────────────────

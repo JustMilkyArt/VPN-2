@@ -44,7 +44,7 @@ function renderServerCard(server) {
   <!-- Header -->
   <div class="flex items-start justify-between mb-3">
     <div class="flex items-center gap-2.5">
-      <div class="text-2xl leading-none">${flag}</div>
+      <div class="flex items-center justify-center w-9 h-7 flex-shrink-0">${flag}</div>
       <div>
         <div class="font-semibold text-white text-sm leading-tight">${server.name}</div>
         <div class="text-gray-500 text-xs mt-0.5 font-mono">${server.ip}</div>
@@ -146,10 +146,8 @@ function toggleServerAdvanced() {
 }
 
 function selectRole(role) {
-  // Update radio inputs
   document.querySelector('#add-server-form [name=role][value=EU]').checked = (role === 'EU');
   document.querySelector('#add-server-form [name=role][value=RU]').checked = (role === 'RU');
-  // Update card styles
   document.getElementById('role-card-eu').classList.toggle('role-card-active', role === 'EU');
   document.getElementById('role-card-ru').classList.toggle('role-card-active', role === 'RU');
 }
@@ -157,64 +155,65 @@ function selectRole(role) {
 function showAddServerModal() {
   document.getElementById('add-server-form').reset();
   document.getElementById('add-server-error').classList.add('hidden');
-  document.getElementById('add-server-country-flag').textContent = '';
-  document.getElementById('add-server-role-hint').textContent = '';
+  document.getElementById('add-server-geo').classList.add('hidden');
+  document.getElementById('add-server-country').value = '??';
   // Reset SSH defaults
   document.querySelector('#add-server-form [name=ssh_user]').value = 'root';
   document.querySelector('#add-server-form [name=ssh_port]').value = '22';
+  // Hide advanced
+  document.getElementById('server-advanced-fields').classList.add('hidden');
+  document.getElementById('server-adv-icon').classList.remove('rotate-90');
   // Reset role to EU
   selectRole('EU');
   openModal('modal-add-server');
 }
 
-// Auto-detect country and role by IP
+// Auto-detect country by IP — показываем флаг через flagcdn.com
+let _ipDetectTimer = null;
 async function detectIpInfo() {
   const ip = document.getElementById('add-server-ip').value.trim();
-  const flagEl = document.getElementById('add-server-country-flag');
-  const hintEl = document.getElementById('add-server-role-hint');
-  const countrySelect = document.getElementById('add-server-country'); // скрытый select
+  const geoEl  = document.getElementById('add-server-geo');
+  const flagImg = document.getElementById('add-server-flag-img');
+  const geoText = document.getElementById('add-server-geo-text');
+  const countryInput = document.getElementById('add-server-country');
 
+  // Дебаунс — запрашиваем только когда IP введён полностью
+  clearTimeout(_ipDetectTimer);
   if (!ip || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-    flagEl.textContent = '';
-    hintEl.textContent = '';
+    geoEl.classList.add('hidden');
+    countryInput.value = '??';
     return;
   }
 
-  flagEl.textContent = '⏳';
-  hintEl.textContent = 'Определяю страну...';
-  hintEl.className = 'text-xs text-gray-500';
+  _ipDetectTimer = setTimeout(async () => {
+    geoEl.classList.remove('hidden');
+    flagImg.src = '';
+    geoText.textContent = 'Определяю страну...';
 
-  try {
-    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
-    const data = await resp.json();
-    if (data.status === 'success') {
-      const code = data.countryCode;
-      const name = data.country;
+    try {
+      const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
+      const data = await resp.json();
 
-      // Заполняем скрытый select страны
-      let matched = false;
-      for (const opt of countrySelect.options) {
-        if (opt.value === code) { opt.selected = true; matched = true; break; }
+      if (data.status === 'success') {
+        const code = data.countryCode.toLowerCase(); // 'de', 'ru', 'nl'...
+        const name = data.country;
+
+        // Сохраняем код страны в скрытое поле
+        countryInput.value = data.countryCode.toUpperCase();
+
+        // Флаг через flagcdn.com
+        flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
+        flagImg.alt = name;
+        geoText.textContent = name;
+        geoText.className = 'text-xs text-gray-300';
+      } else {
+        geoEl.classList.add('hidden');
+        countryInput.value = '??';
       }
-      if (!matched) countrySelect.value = '??';
-
-      // Автоматически выставляем роль: RU → Entry, всё остальное → Exit
-      const role = (code === 'RU') ? 'RU' : 'EU';
-      selectRole(role);
-
-      flagEl.textContent = getFlag(code);
-      hintEl.textContent = `${name} · роль автоматически выбрана`;
-      hintEl.className = 'text-xs ' + (role === 'RU' ? 'text-orange-400' : 'text-green-400');
-    } else {
-      flagEl.textContent = '🌍';
-      hintEl.textContent = 'Страна не определена — выберите роль вручную';
-      hintEl.className = 'text-xs text-gray-500';
+    } catch {
+      geoEl.classList.add('hidden');
     }
-  } catch {
-    flagEl.textContent = '';
-    hintEl.textContent = 'Не удалось определить страну';
-    hintEl.className = 'text-xs text-red-400';
-  }
+  }, 600); // ждём 600мс после последнего ввода
 }
 
 document.getElementById('add-server-form').addEventListener('submit', async (e) => {
@@ -275,7 +274,7 @@ async function showServerDetail(serverId) {
     </div>
     <div>
       <div class="text-gray-500 text-xs mb-1">Страна</div>
-      <div>${getFlag(server.country)} ${server.country}</div>
+      <div class="flex items-center gap-2">${getFlag(server.country)}<span class="text-white text-sm">${server.country}</span></div>
     </div>
     <div>
       <div class="text-gray-500 text-xs mb-1">Роль</div>

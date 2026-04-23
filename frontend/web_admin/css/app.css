@@ -318,27 +318,60 @@ select option:checked,
   border: 1px solid #065f46;
 }
 
+/* ─── Country flag images ────────────────────────────────────── */
+.country-flag {
+  width: 32px;
+  height: 24px;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 /* ─── Role cards (add server form) ──────────────────────────── */
 .role-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 1rem 0.75rem;
-  border-radius: 0.75rem;
+  padding: 1.25rem 0.75rem;
+  border-radius: 1rem;
   border: 2px solid #374151;
-  background: #1f2937;
-  transition: border-color 0.15s, background 0.15s;
+  background: #111827;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s;
   user-select: none;
+  cursor: pointer;
+  gap: 0.75rem;
 }
 .role-card:hover {
   border-color: #4f46e5;
-  background: #1e1b4b;
+  background: #1a1740;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(99,102,241,0.25);
 }
 .role-card-active {
   border-color: #6366f1 !important;
   background: #1e1b4b !important;
-  box-shadow: 0 0 0 1px #6366f1;
+  box-shadow: 0 0 0 1px #6366f1, 0 4px 24px rgba(99,102,241,0.3) !important;
+  transform: translateY(-1px);
+}
+.role-card-active .role-icon-bg {
+  box-shadow: 0 0 20px rgba(99,102,241,0.5);
+}
+
+/* SVG icon container inside role card */
+.role-icon-bg {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: box-shadow 0.2s;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 /* ─── Config format tabs ─────────────────────────────────────── */

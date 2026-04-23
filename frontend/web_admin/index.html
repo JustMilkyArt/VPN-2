@@ -369,79 +369,178 @@
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <form id="add-server-form" class="p-6 space-y-5">
+    <form id="add-server-form" class="p-6 space-y-6">
 
-      <!-- Шаг 1: Название -->
+      <!-- ШАГ 1: Роль — только это видно при открытии -->
       <div>
-        <label class="form-label">Название сервера</label>
-        <input name="name" type="text" placeholder="EU-DE-01" class="form-input" required>
-        <p class="text-xs text-gray-600 mt-1">Любое удобное имя для идентификации</p>
-      </div>
+        <div class="text-center mb-4">
+          <p class="text-sm text-gray-400">Выберите роль сервера</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
 
-      <!-- Шаг 2: Роль — выбор карточками -->
-      <div>
-        <label class="form-label">Роль сервера</label>
-        <div class="grid grid-cols-2 gap-3 mt-1">
-          <label id="role-card-eu" class="role-card role-card-active cursor-pointer" onclick="selectRole('EU')">
+          <!-- EU.Exit -->
+          <button type="button" id="role-card-eu"
+            class="role-card role-card-active"
+            onclick="selectRole('EU')">
             <input type="radio" name="role" value="EU" class="hidden" checked>
-            <div class="text-2xl mb-1">🌍</div>
-            <div class="font-semibold text-sm text-white">EU — Exit</div>
-            <div class="text-xs text-gray-400 mt-0.5">Выходной сервер<br>Европа / любая страна</div>
-          </label>
-          <label id="role-card-ru" class="role-card cursor-pointer" onclick="selectRole('RU')">
+            <div class="role-icon-bg">
+              <!-- Globe SVG -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
+                <defs>
+                  <radialGradient id="globeBg" cx="40%" cy="35%" r="65%">
+                    <stop offset="0%" stop-color="#1e40af"/>
+                    <stop offset="100%" stop-color="#0c1a4d"/>
+                  </radialGradient>
+                  <radialGradient id="globeShine" cx="35%" cy="30%" r="50%">
+                    <stop offset="0%" stop-color="rgba(255,255,255,0.18)"/>
+                    <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+                  </radialGradient>
+                </defs>
+                <!-- Background circle -->
+                <circle cx="36" cy="36" r="34" fill="url(#globeBg)" stroke="#3b82f6" stroke-width="1.5"/>
+                <!-- Latitude lines -->
+                <ellipse cx="36" cy="36" rx="34" ry="12" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+                <ellipse cx="36" cy="36" rx="34" ry="22" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.4"/>
+                <!-- Equator -->
+                <line x1="2" y1="36" x2="70" y2="36" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+                <!-- Longitude lines -->
+                <ellipse cx="36" cy="36" rx="12" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+                <ellipse cx="36" cy="36" rx="22" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.35"/>
+                <!-- Vertical center line -->
+                <line x1="36" y1="2" x2="36" y2="70" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+                <!-- Continents (simplified) -->
+                <!-- Europe/Africa -->
+                <path d="M32 16 Q35 14 37 17 Q40 19 39 23 Q38 26 35 25 Q33 24 31 26 Q29 28 30 31 Q31 34 29 36 Q27 34 26 30 Q25 26 27 22 Z" fill="#22c55e" opacity="0.85"/>
+                <!-- Americas -->
+                <path d="M18 22 Q20 20 22 22 Q24 24 23 28 Q22 32 20 35 Q18 38 17 35 Q15 32 16 27 Z" fill="#22c55e" opacity="0.75"/>
+                <!-- Asia -->
+                <path d="M41 18 Q46 16 50 19 Q54 22 52 27 Q50 31 47 30 Q44 28 43 24 Q41 22 41 18 Z" fill="#22c55e" opacity="0.8"/>
+                <!-- Australia -->
+                <path d="M50 42 Q54 41 56 44 Q57 47 54 49 Q51 50 49 47 Q47 44 50 42 Z" fill="#22c55e" opacity="0.75"/>
+                <!-- Network nodes -->
+                <circle cx="36" cy="36" r="2" fill="#93c5fd" opacity="0.9"/>
+                <circle cx="20" cy="28" r="1.5" fill="#93c5fd" opacity="0.7"/>
+                <circle cx="50" cy="24" r="1.5" fill="#93c5fd" opacity="0.7"/>
+                <circle cx="42" cy="48" r="1.5" fill="#93c5fd" opacity="0.7"/>
+                <!-- Network lines -->
+                <line x1="36" y1="36" x2="20" y2="28" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+                <line x1="36" y1="36" x2="50" y2="24" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+                <line x1="36" y1="36" x2="42" y2="48" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+                <!-- Shine overlay -->
+                <circle cx="36" cy="36" r="34" fill="url(#globeShine)"/>
+                <!-- Outer glow ring -->
+                <circle cx="36" cy="36" r="34" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.4"/>
+              </svg>
+            </div>
+            <div>
+              <div class="font-bold text-sm tracking-wide text-white">EU.Exit</div>
+              <div class="text-xs text-gray-500 mt-0.5">Выходной сервер</div>
+            </div>
+          </button>
+
+          <!-- RU.Entry -->
+          <button type="button" id="role-card-ru"
+            class="role-card"
+            onclick="selectRole('RU')">
             <input type="radio" name="role" value="RU" class="hidden">
-            <div class="text-2xl mb-1">🇷🇺</div>
-            <div class="font-semibold text-sm text-white">RU — Entry</div>
-            <div class="text-xs text-gray-400 mt-0.5">Входной сервер<br>Россия</div>
-          </label>
+            <div class="role-icon-bg">
+              <!-- Russian flag SVG (tricolor circle) -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
+                <defs>
+                  <clipPath id="circleClip">
+                    <circle cx="36" cy="36" r="34"/>
+                  </clipPath>
+                  <radialGradient id="flagShine" cx="35%" cy="30%" r="55%">
+                    <stop offset="0%" stop-color="rgba(255,255,255,0.2)"/>
+                    <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+                  </radialGradient>
+                </defs>
+                <!-- White stripe (top) -->
+                <rect x="2" y="2" width="70" height="24" fill="#f0f0f0" clip-path="url(#circleClip)"/>
+                <!-- Blue stripe (middle) -->
+                <rect x="2" y="24" width="70" height="24" fill="#0039a6" clip-path="url(#circleClip)"/>
+                <!-- Red stripe (bottom) -->
+                <rect x="2" y="46" width="70" height="26" fill="#d52b1e" clip-path="url(#circleClip)"/>
+                <!-- Shine -->
+                <circle cx="36" cy="36" r="34" fill="url(#flagShine)"/>
+                <!-- Border -->
+                <circle cx="36" cy="36" r="34" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+                <!-- Subtle inner shadow -->
+                <circle cx="36" cy="36" r="33" fill="none" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>
+              </svg>
+            </div>
+            <div>
+              <div class="font-bold text-sm tracking-wide text-white">RU.Entry</div>
+              <div class="text-xs text-gray-500 mt-0.5">Входной сервер</div>
+            </div>
+          </button>
+
         </div>
       </div>
 
-      <!-- Шаг 3: IP -->
-      <div>
-        <label class="form-label">IP-адрес</label>
-        <input name="ip" id="add-server-ip" type="text" placeholder="1.2.3.4" class="form-input"
-               required oninput="detectIpInfo()">
-        <div class="flex items-center gap-2 mt-1.5 min-h-[18px]">
-          <span id="add-server-country-flag" class="text-base leading-none"></span>
-          <span id="add-server-role-hint" class="text-xs text-gray-500"></span>
-        </div>
-        <!-- скрытое поле страны — заполняется автоматически -->
-        <select name="country" id="add-server-country" class="hidden">
-          <option value="DE">DE</option><option value="NL">NL</option>
-          <option value="FI">FI</option><option value="FR">FR</option>
-          <option value="GB">GB</option><option value="RU">RU</option>
-          <option value="US">US</option><option value="TR">TR</option>
-          <option value="PL">PL</option><option value="SE">SE</option>
-          <option value="??" selected>??</option>
-        </select>
-      </div>
+      <!-- ШАГ 2: Поля (появляются после выбора роли) -->
+      <div id="server-fields" class="space-y-4">
 
-      <!-- Шаг 4: SSH данные -->
-      <div class="space-y-3">
-        <div class="grid grid-cols-3 gap-3">
-          <div class="col-span-2">
-            <label class="form-label">Пользователь SSH</label>
-            <input name="ssh_user" type="text" value="root" class="form-input" required>
-            <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
-          </div>
-          <div>
-            <label class="form-label">Порт SSH</label>
-            <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input" required>
-            <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
+        <!-- Название -->
+        <div>
+          <label class="form-label">Название сервера</label>
+          <input name="name" type="text" id="add-server-name"
+                 placeholder="EU-DE-01" class="form-input" required>
+        </div>
+
+        <!-- IP -->
+        <div>
+          <label class="form-label">IP-адрес</label>
+          <input name="ip" id="add-server-ip" type="text"
+                 placeholder="1.2.3.4" class="form-input" required
+                 oninput="detectIpInfo()">
+          <!-- Результат определения страны -->
+          <div id="add-server-geo" class="hidden mt-2 flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
+            <img id="add-server-flag-img" src="" alt="" class="w-6 h-4 rounded-sm object-cover">
+            <span id="add-server-geo-text" class="text-xs text-gray-400"></span>
           </div>
         </div>
+
+        <!-- Пароль SSH -->
         <div>
           <label class="form-label">Пароль SSH</label>
           <input name="ssh_password" type="password" class="form-input"
                  placeholder="Пароль от сервера" autocomplete="off" required>
         </div>
+
+        <!-- Дополнительно (скрыто) -->
+        <div>
+          <button type="button" onclick="toggleServerAdvanced()"
+            class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1 w-full">
+            <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform duration-200"></i>
+            <span>Дополнительные параметры</span>
+          </button>
+          <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-3 gap-3">
+            <div class="col-span-2">
+              <label class="form-label">Пользователь SSH</label>
+              <input name="ssh_user" type="text" value="root" class="form-input">
+              <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
+            </div>
+            <div>
+              <label class="form-label">Порт SSH</label>
+              <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+              <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
+            </div>
+          </div>
+        </div>
+
       </div>
 
+      <!-- скрытое поле страны — заполняется автоматически -->
+      <input type="hidden" name="country" id="add-server-country" value="??">
+
       <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-      <div class="flex gap-3 pt-1">
+
+      <div class="flex gap-3">
         <button type="button" onclick="closeModal('modal-add-server')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Отмена
+        </button>
         <button type="submit"
           class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
           <i class="fas fa-plus text-xs"></i>Добавить
