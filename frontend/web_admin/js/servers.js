@@ -116,10 +116,16 @@ async function silentCheckAllServers() {
         txt.className = reachable ? 'text-green-400 text-xs font-medium' : 'text-red-400 text-xs font-medium';
         txt.textContent = reachable ? 'Online' : 'Offline';
       }
-      if (ping && latency_ms !== null) {
-        ping.textContent = `пинг: ${latency_ms} ms`;
-        ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
-        ping.classList.remove('hidden');
+      if (ping) {
+        if (latency_ms !== null) {
+          ping.textContent = `${latency_ms} ms`;
+          ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
+          ping.classList.remove('hidden');
+        } else if (!reachable) {
+          ping.textContent = 'недоступен';
+          ping.style.color = '#6b7280';
+          ping.classList.remove('hidden');
+        }
       }
 
       // Обновляем локальный кеш
@@ -160,8 +166,8 @@ function renderServerCard(server) {
   </div>
 
   <!-- Латентность (появляется после пинга) -->
-  <div style="margin-bottom:0.875rem;min-height:1.1rem;">
-    <span id="ping-val-${server.id}" class="hidden" style="font-size:0.75rem;font-weight:500;"></span>
+  <div style="margin-bottom:0.75rem;min-height:1rem;">
+    <span id="ping-val-${server.id}" class="hidden" style="font-size:0.7rem;color:#6b7280;"></span>
   </div>
 
   <!-- Кнопки -->
@@ -206,8 +212,12 @@ async function pingServer(serverId) {
     }
     if (ping) {
       if (latency_ms !== null) {
-        ping.textContent = `пинг: ${latency_ms} ms`;
+        ping.textContent = `${latency_ms} ms`;
         ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
+        ping.classList.remove('hidden');
+      } else if (!reachable) {
+        ping.textContent = 'недоступен';
+        ping.style.color = '#6b7280';
         ping.classList.remove('hidden');
       }
     }

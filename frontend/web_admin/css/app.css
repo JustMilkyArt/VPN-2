@@ -61,22 +61,25 @@
   transform: translateY(-1px);
 }
 
-/* Server sections layout: два блока рядом или один во всю ширину */
-.server-sections-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2rem;
-  align-items: start;
-}
+/* Server sections layout: секции друг под другом во всю ширину */
+.server-sections-grid,
 .server-sections-single {
-  display: block;
-}
-
-/* Карточки в столбик, полная ширина колонки */
-.server-cards-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 2rem;
+}
+
+/* Карточки — сетка внутри секции */
+.server-cards-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+@media (max-width: 1024px) {
+  .server-cards-list { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .server-cards-list { grid-template-columns: 1fr; }
 }
 .server-cards-list .server-card {
   width: 100%;
