@@ -34,10 +34,10 @@ async function loadServers() {
 function renderServerCard(server) {
   const flag = getFlag(server.country);
   const services = [];
-  if (server.xray_installed) services.push('<span class="text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded">Xray</span>');
+  if (server.xray_installed)       services.push('<span class="text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded">Xray</span>');
   if (server.naiveproxy_installed) services.push('<span class="text-xs bg-green-900/50 text-green-300 border border-green-800 px-2 py-0.5 rounded">NaiveProxy</span>');
-  if (server.trojan_installed) services.push('<span class="text-xs bg-red-900/50 text-red-300 border border-red-800 px-2 py-0.5 rounded">Trojan</span>');
-  if (server.warp_installed) services.push('<span class="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-2 py-0.5 rounded">WARP</span>');
+  if (server.awg_installed)        services.push('<span class="text-xs bg-purple-900/50 text-purple-300 border border-purple-800 px-2 py-0.5 rounded">AmneziaWG</span>');
+  if (server.warp_installed)       services.push('<span class="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-2 py-0.5 rounded">WARP</span>');
 
   return `
 <div class="server-card" id="server-card-${server.id}">
@@ -59,54 +59,34 @@ function renderServerCard(server) {
   <!-- Status row -->
   <div class="flex items-center gap-2 text-xs mb-3">
     ${statusText(server.status)}
-    <span class="text-gray-700">·</span>
-    <span class="text-gray-500">SSH :${server.ssh_port}</span>
     ${server.domain ? `<span class="text-gray-700">·</span><span class="text-gray-500 truncate max-w-[120px]">${server.domain}</span>` : ''}
   </div>
 
   <!-- Services badges -->
-  ${services.length > 0 ? `<div class="flex flex-wrap gap-1 mb-3">${services.join('')}</div>` : 
-    '<div class="mb-3 text-xs text-gray-600 italic">Сервисы не установлены</div>'}
+  ${services.length > 0
+    ? `<div class="flex flex-wrap gap-1 mb-3">${services.join('')}</div>`
+    : '<div class="mb-3 text-xs text-gray-600 italic">Сервисы не установлены</div>'}
 
-  <!-- Active toggle -->
-  <div class="flex items-center justify-between border-t border-gray-800 pt-3 mt-3">
-    <label class="flex items-center gap-2 cursor-pointer">
-      <label class="toggle-switch">
-        <input type="checkbox" ${server.is_active ? 'checked' : ''} onchange="toggleServer(${server.id}, this.checked)">
-        <span class="toggle-slider"></span>
-      </label>
-      <span class="text-xs text-gray-400">${server.is_active ? 'Включён' : 'Отключён'}</span>
-    </label>
-
-    <!-- Action buttons -->
-    <div class="flex items-center gap-1">
-      <button onclick="pingServer(${server.id})" class="action-btn" title="Проверить связь">
-        <i class="fas fa-satellite-dish"></i>
-      </button>
-      <button onclick="showServerDetail(${server.id})" class="action-btn" title="Детали">
-        <i class="fas fa-circle-info"></i>
-      </button>
-      <button onclick="showInstallModal(${server.id})" class="action-btn success" title="Установить стек">
-        <i class="fas fa-download"></i>
-      </button>
-      <button onclick="confirmDeleteServer(${server.id}, '${server.name}')" class="action-btn danger" title="Удалить">
-        <i class="fas fa-trash"></i>
-      </button>
-    </div>
+  <!-- Action buttons -->
+  <div class="flex items-center justify-end gap-1 border-t border-gray-800 pt-3 mt-3">
+    <button onclick="pingServer(${server.id})" class="action-btn" title="Пинг">
+      <i class="fas fa-satellite-dish"></i>
+    </button>
+    <button onclick="showServerDetail(${server.id})" class="action-btn" title="Детали">
+      <i class="fas fa-circle-info"></i>
+    </button>
+    <button onclick="showInstallModal(${server.id})" class="action-btn success" title="Установить стек">
+      <i class="fas fa-download"></i>
+    </button>
+    <button onclick="showServerSettings(${server.id})" class="action-btn" title="Настройки">
+      <i class="fas fa-gear"></i>
+    </button>
+    <button onclick="confirmDeleteServer(${server.id}, '${server.name}')" class="action-btn danger" title="Удалить">
+      <i class="fas fa-trash"></i>
+    </button>
   </div>
 </div>
   `;
-}
-
-// ───────────────── TOGGLE SERVER ─────────────────
-async function toggleServer(id, active) {
-  const res = await api.updateServer(id, { is_active: active });
-  if (res.ok) {
-    toast(`Сервер ${active ? 'включён' : 'отключён'}`, 'success');
-  } else {
-    toast(`Ошибка: ${res.error}`, 'error');
-    loadServers();
-  }
 }
 
 // ───────────────── PING SERVER ─────────────────
@@ -114,9 +94,12 @@ async function pingServer(serverId) {
   toast('Проверяю соединение...', 'info', 3000);
   const res = await api.pingServer(serverId);
   if (res.ok) {
-    const { reachable, message, status } = res.data;
+    const { reachable, message, latency_ms } = res.data;
+    const latencyStr = latency_ms !== null ? ` — ${latency_ms} мс` : '';
     toast(
-      reachable ? `✓ Сервер доступен (${status})` : `✗ Недоступен: ${message}`,
+      reachable
+        ? `✓ Сервер доступен${latencyStr}`
+        : `✗ Недоступен: ${message}`,
       reachable ? 'success' : 'error',
       5000
     );
@@ -165,16 +148,72 @@ function toggleServerAdvanced() {
 function showAddServerModal() {
   document.getElementById('add-server-form').reset();
   document.getElementById('add-server-error').classList.add('hidden');
-  // Reset advanced fields to defaults and hide
+  document.getElementById('add-server-country-flag').textContent = '';
+  document.getElementById('add-server-role-hint').textContent = '';
+  // Reset advanced fields
   const fields = document.getElementById('server-advanced-fields');
   const icon = document.getElementById('server-adv-icon');
   fields.classList.add('hidden');
   icon.classList.remove('rotate-90');
-  // Restore defaults
   const form = document.getElementById('add-server-form');
   form.querySelector('[name=ssh_user]').value = 'root';
   form.querySelector('[name=ssh_port]').value = '22';
   openModal('modal-add-server');
+}
+
+// Auto-detect country and role by IP
+async function detectIpInfo() {
+  const ip = document.getElementById('add-server-ip').value.trim();
+  const flagEl = document.getElementById('add-server-country-flag');
+  const hintEl = document.getElementById('add-server-role-hint');
+  const countrySelect = document.querySelector('#add-server-form [name=country]');
+  const roleSelect = document.querySelector('#add-server-form [name=role]');
+
+  if (!ip || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+    flagEl.textContent = '';
+    hintEl.textContent = '';
+    return;
+  }
+
+  flagEl.textContent = '⏳';
+  hintEl.textContent = 'Определяю...';
+
+  try {
+    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
+    const data = await resp.json();
+    if (data.status === 'success') {
+      const code = data.countryCode;  // e.g. "DE", "RU"
+      const name = data.country;
+
+      // Set country select
+      let matched = false;
+      for (const opt of countrySelect.options) {
+        if (opt.value === code) {
+          opt.selected = true;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) countrySelect.value = '??';
+
+      // Set role: RU → Entry, all others → Exit
+      const role = (code === 'RU') ? 'RU' : 'EU';
+      roleSelect.value = role;
+
+      const flag = getFlag(code);
+      flagEl.textContent = flag;
+      hintEl.textContent = `${name} · ${role === 'RU' ? 'RU Entry (вход)' : 'EU Exit (выход)'}`;
+      hintEl.className = 'text-xs mt-1 ' + (role === 'RU' ? 'text-blue-400' : 'text-green-400');
+    } else {
+      flagEl.textContent = '🌍';
+      hintEl.textContent = 'Страна не определена';
+      hintEl.className = 'text-xs mt-1 text-gray-500';
+    }
+  } catch {
+    flagEl.textContent = '';
+    hintEl.textContent = 'Ошибка определения IP';
+    hintEl.className = 'text-xs mt-1 text-red-400';
+  }
 }
 
 document.getElementById('add-server-form').addEventListener('submit', async (e) => {
@@ -182,7 +221,6 @@ document.getElementById('add-server-form').addEventListener('submit', async (e) 
   const form = e.target;
   const data = Object.fromEntries(new FormData(form).entries());
 
-  // Type coercions
   data.ssh_port = parseInt(data.ssh_port) || 22;
   if (!data.ssh_key) delete data.ssh_key;
   if (!data.ssh_password) delete data.ssh_password;
@@ -219,7 +257,6 @@ async function showServerDetail(serverId) {
 
   title.innerHTML = `<i class="fas fa-server text-brand-400"></i> ${server.name}`;
 
-  // Get system info
   const infoRes = await api.serverInfo(serverId);
   const info = infoRes.ok ? infoRes.data.system_info : {};
 
@@ -232,7 +269,7 @@ async function showServerDetail(serverId) {
       <div class="font-mono text-white text-sm">${server.ip}</div>
     </div>
     <div>
-      <div class="text-gray-500 text-xs mb-1">SSH пользователь</div>
+      <div class="text-gray-500 text-xs mb-1">SSH</div>
       <div class="font-mono text-white text-sm">${server.ssh_user}:${server.ssh_port}</div>
     </div>
     <div>
@@ -254,10 +291,10 @@ async function showServerDetail(serverId) {
   <div class="bg-gray-800 rounded-lg p-3">
     <div class="text-gray-400 text-xs font-semibold mb-2 uppercase tracking-wider">Система</div>
     <div class="grid grid-cols-2 gap-2 text-xs">
-      ${info.os ? `<div><span class="text-gray-500">ОС:</span> <span class="text-gray-300">${info.os}</span></div>` : ''}
+      ${info.os       ? `<div><span class="text-gray-500">ОС:</span> <span class="text-gray-300">${info.os}</span></div>` : ''}
       ${info.cpu_cores ? `<div><span class="text-gray-500">CPU:</span> <span class="text-gray-300">${info.cpu_cores} ядер</span></div>` : ''}
-      ${info.memory ? `<div><span class="text-gray-500">RAM:</span> <span class="text-gray-300">${info.memory} MB</span></div>` : ''}
-      ${info.uptime ? `<div><span class="text-gray-500">Uptime:</span> <span class="text-gray-300">${info.uptime}</span></div>` : ''}
+      ${info.memory   ? `<div><span class="text-gray-500">RAM:</span> <span class="text-gray-300">${info.memory} MB</span></div>` : ''}
+      ${info.uptime   ? `<div><span class="text-gray-500">Uptime:</span> <span class="text-gray-300">${info.uptime}</span></div>` : ''}
     </div>
   </div>` : ''}
 
@@ -267,7 +304,7 @@ async function showServerDetail(serverId) {
     <div class="grid grid-cols-2 gap-2 text-xs">
       ${renderServiceBadge('Xray-core', server.xray_installed)}
       ${renderServiceBadge('NaiveProxy', server.naiveproxy_installed)}
-      ${renderServiceBadge('Trojan', server.trojan_installed)}
+      ${renderServiceBadge('AmneziaWG', server.awg_installed)}
       ${renderServiceBadge('WARP', server.warp_installed)}
     </div>
   </div>
@@ -278,7 +315,7 @@ async function showServerDetail(serverId) {
       <i class="fas fa-satellite-dish"></i> Пинг
     </button>
     <button onclick="restartServerServices(${serverId})" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-gray-300 transition flex items-center gap-1.5">
-      <i class="fas fa-rotate"></i> Restart
+      <i class="fas fa-rotate"></i> Рестарт сервисов
     </button>
     <button onclick="redeployServerConfig(${serverId})" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-gray-300 transition flex items-center gap-1.5">
       <i class="fas fa-upload"></i> Redeploy
@@ -286,7 +323,11 @@ async function showServerDetail(serverId) {
     <button onclick="showInstallModal(${serverId})" class="px-3 py-2 bg-green-900/50 hover:bg-green-900 border border-green-800 rounded-lg text-xs text-green-300 transition flex items-center gap-1.5">
       <i class="fas fa-download"></i> Установить стек
     </button>
-    <button onclick="confirmDeleteServer(${serverId}, '${server.name}'); closeModal('modal-server-detail')" 
+    <button onclick="closeModal('modal-server-detail'); showServerSettings(${serverId})"
+      class="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-xs text-gray-300 transition flex items-center gap-1.5">
+      <i class="fas fa-gear"></i> Настройки
+    </button>
+    <button onclick="confirmDeleteServer(${serverId}, '${server.name}'); closeModal('modal-server-detail')"
       class="px-3 py-2 bg-red-900/50 hover:bg-red-900 border border-red-800 rounded-lg text-xs text-red-300 transition flex items-center gap-1.5">
       <i class="fas fa-trash"></i> Удалить
     </button>
@@ -312,18 +353,20 @@ function showInstallModal(serverId) {
 
 async function confirmInstallStack() {
   const serverId = document.getElementById('install-server-id').value;
-  const installXray = document.getElementById('install-xray').checked;
-  const installWarp = document.getElementById('install-warp').checked;
+  const installXray    = document.getElementById('install-xray').checked;
+  const installNaive   = document.getElementById('install-naive').checked;
+  const installAwg     = document.getElementById('install-awg').checked;
+  const installWarp    = document.getElementById('install-warp').checked;
 
   const outputEl = document.getElementById('install-output');
   outputEl.classList.remove('hidden');
-  outputEl.textContent = 'Установка... это может занять 2-5 минут...';
+  outputEl.textContent = 'Установка... это может занять 2–5 минут...';
 
   const res = await api.installStack(serverId, {
-    install_xray: installXray,
-    install_naiveproxy: false,
-    install_trojan: false,
-    install_warp: installWarp,
+    install_xray:       installXray,
+    install_naiveproxy: installNaive,
+    install_awg:        installAwg,
+    install_warp:       installWarp,
   });
 
   if (res.ok) {
@@ -338,6 +381,141 @@ async function confirmInstallStack() {
   } else {
     outputEl.textContent = `Ошибка: ${res.error}`;
     toast(`Ошибка установки: ${res.error}`, 'error');
+  }
+}
+
+// ───────────────── SERVER SETTINGS ─────────────────
+function showServerSettings(serverId) {
+  const server = serversData.find(s => s.id === serverId);
+  if (!server) return;
+
+  document.getElementById('settings-server-id').value = serverId;
+  document.getElementById('settings-server-title').textContent = server.name;
+
+  // Fill edit fields
+  document.getElementById('settings-name').value    = server.name;
+  document.getElementById('settings-domain').value  = server.domain || '';
+  document.getElementById('settings-notes').value   = server.notes || '';
+
+  // Uninstall checkboxes — only show installed ones
+  document.getElementById('uninst-xray-wrap').classList.toggle('hidden', !server.xray_installed);
+  document.getElementById('uninst-naive-wrap').classList.toggle('hidden', !server.naiveproxy_installed);
+  document.getElementById('uninst-awg-wrap').classList.toggle('hidden', !server.awg_installed);
+  document.getElementById('uninst-warp-wrap').classList.toggle('hidden', !server.warp_installed);
+  document.getElementById('uninst-xray').checked = false;
+  document.getElementById('uninst-naive').checked = false;
+  document.getElementById('uninst-awg').checked   = false;
+  document.getElementById('uninst-warp').checked  = false;
+
+  // Clear password/key fields
+  document.getElementById('settings-new-password').value  = '';
+  document.getElementById('settings-ssh-pubkey').value    = '';
+  document.getElementById('settings-action-msg').textContent = '';
+
+  openModal('modal-server-settings');
+}
+
+async function saveServerInfo() {
+  const serverId = document.getElementById('settings-server-id').value;
+  const name   = document.getElementById('settings-name').value.trim();
+  const domain = document.getElementById('settings-domain').value.trim();
+  const notes  = document.getElementById('settings-notes').value.trim();
+
+  const res = await api.updateServer(serverId, {
+    name:   name || undefined,
+    domain: domain || undefined,
+    notes:  notes || undefined,
+  });
+  if (res.ok) {
+    toast('Настройки сохранены', 'success');
+    loadServers();
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
+  }
+}
+
+async function rebootServerAction() {
+  const serverId = document.getElementById('settings-server-id').value;
+  const server   = serversData.find(s => s.id === parseInt(serverId));
+  if (!confirm(`Перезагрузить сервер "${server?.name}"?\n\nСервер будет недоступен ~30–60 секунд.`)) return;
+
+  toast('Отправляю команду перезагрузки...', 'info', 3000);
+  const res = await api.rebootServer(serverId);
+  if (res.ok) {
+    toast(`✓ ${res.data.message}`, 'success', 6000);
+    loadServers();
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
+  }
+}
+
+async function changeServerPasswordAction() {
+  const serverId    = document.getElementById('settings-server-id').value;
+  const newPassword = document.getElementById('settings-new-password').value;
+
+  if (!newPassword || newPassword.length < 8) {
+    toast('Пароль должен быть не менее 8 символов', 'error');
+    return;
+  }
+
+  toast('Меняю пароль...', 'info', 3000);
+  const res = await api.changeServerPassword(serverId, newPassword);
+  if (res.ok) {
+    document.getElementById('settings-new-password').value = '';
+    toast(`✓ ${res.data.message}`, 'success');
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
+  }
+}
+
+async function addServerSSHKeyAction() {
+  const serverId = document.getElementById('settings-server-id').value;
+  const pubKey   = document.getElementById('settings-ssh-pubkey').value.trim();
+
+  if (!pubKey || !pubKey.startsWith('ssh-')) {
+    toast('Введите корректный публичный SSH-ключ (начинается с ssh-rsa или ssh-ed25519)', 'error');
+    return;
+  }
+
+  toast('Добавляю SSH-ключ...', 'info', 3000);
+  const res = await api.addServerSSHKey(serverId, pubKey);
+  if (res.ok) {
+    document.getElementById('settings-ssh-pubkey').value = '';
+    toast(`✓ ${res.data.message}`, 'success');
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
+  }
+}
+
+async function uninstallStackAction() {
+  const serverId = document.getElementById('settings-server-id').value;
+  const xray  = document.getElementById('uninst-xray').checked;
+  const naive = document.getElementById('uninst-naive').checked;
+  const awg   = document.getElementById('uninst-awg').checked;
+  const warp  = document.getElementById('uninst-warp').checked;
+
+  if (!xray && !naive && !awg && !warp) {
+    toast('Выберите хотя бы один сервис для удаления', 'error');
+    return;
+  }
+
+  const names = [xray && 'Xray', naive && 'NaiveProxy', awg && 'AmneziaWG', warp && 'WARP'].filter(Boolean);
+  if (!confirm(`Удалить ${names.join(', ')} с сервера?\n\nВсе активные подключения через эти сервисы перестанут работать.`)) return;
+
+  toast('Удаляю сервисы...', 'info', 5000);
+  const res = await api.uninstallStack(serverId, {
+    uninstall_xray:       xray,
+    uninstall_naiveproxy: naive,
+    uninstall_awg:        awg,
+    uninstall_warp:       warp,
+  });
+
+  if (res.ok) {
+    toast(`✓ ${res.data.message}`, 'success');
+    closeModal('modal-server-settings');
+    loadServers();
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
   }
 }
 
@@ -376,15 +554,21 @@ async function confirmDeleteServer(serverId, name) {
 }
 
 // Expose globally
-window.toggleServerAdvanced = toggleServerAdvanced;
-window.loadServers = loadServers;
-window.toggleServer = toggleServer;
-window.pingServer = pingServer;
-window.checkAllServers = checkAllServers;
-window.showAddServerModal = showAddServerModal;
-window.showServerDetail = showServerDetail;
-window.showInstallModal = showInstallModal;
-window.confirmInstallStack = confirmInstallStack;
-window.confirmDeleteServer = confirmDeleteServer;
-window.restartServerServices = restartServerServices;
-window.redeployServerConfig = redeployServerConfig;
+window.toggleServerAdvanced    = toggleServerAdvanced;
+window.detectIpInfo            = detectIpInfo;
+window.loadServers             = loadServers;
+window.pingServer              = pingServer;
+window.checkAllServers         = checkAllServers;
+window.showAddServerModal      = showAddServerModal;
+window.showServerDetail        = showServerDetail;
+window.showInstallModal        = showInstallModal;
+window.confirmInstallStack     = confirmInstallStack;
+window.showServerSettings      = showServerSettings;
+window.saveServerInfo          = saveServerInfo;
+window.rebootServerAction      = rebootServerAction;
+window.changeServerPasswordAction = changeServerPasswordAction;
+window.addServerSSHKeyAction   = addServerSSHKeyAction;
+window.uninstallStackAction    = uninstallStackAction;
+window.confirmDeleteServer     = confirmDeleteServer;
+window.restartServerServices   = restartServerServices;
+window.redeployServerConfig    = redeployServerConfig;

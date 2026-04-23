@@ -158,6 +158,93 @@ def test_connection(server: Server) -> Tuple[bool, str]:
         return False, f"Connection error: {str(e)}"
 
 
+def ping_with_latency(server: Server) -> Tuple[bool, str, Optional[float]]:
+    """Test SSH connection and measure latency in ms. Returns (success, message, latency_ms)."""
+    try:
+        start = time.time()
+        with SSHClient(server) as ssh:
+            code, out, err = ssh.exec("echo 'ping'", timeout=10)
+            elapsed = (time.time() - start) * 1000  # ms
+            if code == 0:
+                return True, "Connection successful", round(elapsed, 1)
+            return False, f"Command failed: {err}", None
+    except paramiko.AuthenticationException:
+        return False, "Authentication failed", None
+    except paramiko.NoValidConnectionsError as e:
+        return False, f"Cannot connect: {e}", None
+    except Exception as e:
+        return False, f"Connection error: {str(e)}", None
+
+
+def reboot_server(server: Server) -> Tuple[bool, str]:
+    """Send reboot command to server via SSH."""
+    try:
+        with SSHClient(server) as ssh:
+            # nohup reboot so SSH doesn't wait for exit
+            ssh.exec("nohup reboot &>/dev/null & sleep 1", timeout=15)
+            return True, "Reboot command sent. Server will be back in ~30-60 seconds."
+    except Exception as e:
+        # Connection may drop immediately after reboot — that's OK
+        if "Connection reset" in str(e) or "No existing session" in str(e) or "EOF" in str(e):
+            return True, "Reboot command sent. Server will be back in ~30-60 seconds."
+        return False, f"Error: {str(e)}"
+
+
+def change_ssh_password(server: Server, new_password: str) -> Tuple[bool, str]:
+    """Change SSH user password on remote server."""
+    try:
+        with SSHClient(server) as ssh:
+            # Use chpasswd — works without interactive prompt
+            cmd = f"echo '{server.ssh_user}:{new_password}' | chpasswd"
+            code, out, err = ssh.exec(cmd, timeout=15)
+            if code == 0:
+                return True, f"Password changed for user {server.ssh_user}"
+            return False, f"Failed to change password: {err}"
+    except Exception as e:
+        return False, f"SSH error: {str(e)}"
+
+
+def add_ssh_key(server: Server, public_key: str) -> Tuple[bool, str]:
+    """Add SSH public key to authorized_keys on remote server."""
+    try:
+        with SSHClient(server) as ssh:
+            cmd = f"""
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+echo '{public_key.strip()}' >> ~/.ssh/authorized_keys
+sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+echo 'done'
+"""
+            code, out, err = ssh.exec(cmd, timeout=15)
+            if code == 0 and "done" in out:
+                return True, "SSH public key added to authorized_keys"
+            return False, f"Failed: {err}"
+    except Exception as e:
+        return False, f"SSH error: {str(e)}"
+
+
+def uninstall_stack(server: Server, services: list) -> Tuple[bool, str]:
+    """Uninstall specified VPN services from server."""
+    results = []
+    try:
+        with SSHClient(server) as ssh:
+            if "xray" in services:
+                ssh.exec("systemctl stop xray; systemctl disable xray; rm -rf /usr/local/bin/xray /usr/local/etc/xray /etc/systemd/system/xray.service; systemctl daemon-reload", timeout=30)
+                results.append("xray removed")
+            if "naiveproxy" in services:
+                ssh.exec("systemctl stop caddy-naive; systemctl disable caddy-naive; rm -rf /usr/local/bin/caddy /etc/caddy-naive /etc/systemd/system/caddy-naive.service; systemctl daemon-reload", timeout=30)
+                results.append("naiveproxy removed")
+            if "awg" in services:
+                ssh.exec("systemctl stop awg-quick@wg0 || systemctl stop wg-quick@wg0; apt-get remove -y amneziawg wireguard 2>/dev/null; rm -rf /etc/amnezia /etc/wireguard", timeout=60)
+                results.append("amneziawg removed")
+            if "warp" in services:
+                ssh.exec("warp-cli --accept-tos disconnect; systemctl stop warp-svc; apt-get remove -y cloudflare-warp 2>/dev/null", timeout=30)
+                results.append("warp removed")
+        return True, ", ".join(results) if results else "Nothing to uninstall"
+    except Exception as e:
+        return False, f"SSH error: {str(e)}"
+
+
 def get_server_info(server: Server) -> dict:
     """Get basic server info (CPU, RAM, uptime)."""
     try:

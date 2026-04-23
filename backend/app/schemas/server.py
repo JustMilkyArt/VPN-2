@@ -39,7 +39,7 @@ class ServerRead(ServerBase):
     is_active: bool
     xray_installed: bool
     naiveproxy_installed: bool
-    trojan_installed: bool
+    awg_installed: bool
     warp_installed: bool
     created_at: datetime
     updated_at: Optional[datetime]
@@ -55,5 +55,24 @@ class ServerStatusUpdate(BaseModel):
 class ServerInstallRequest(BaseModel):
     install_xray: bool = True
     install_naiveproxy: bool = False
-    install_trojan: bool = False
+    install_awg: bool = False
     install_warp: bool = False
+
+
+class ServerRebootRequest(BaseModel):
+    pass
+
+
+class ServerChangePasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, description="New SSH password")
+
+
+class ServerChangeSSHKeyRequest(BaseModel):
+    ssh_key: str = Field(..., description="New SSH private key (PEM format)")
+
+
+class ServerUninstallStackRequest(BaseModel):
+    uninstall_xray: bool = False
+    uninstall_naiveproxy: bool = False
+    uninstall_awg: bool = False
+    uninstall_warp: bool = False

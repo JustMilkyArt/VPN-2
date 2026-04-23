@@ -34,6 +34,18 @@ def _migrate_add_columns():
                     conn.execute(sa.text(f"ALTER TABLE connections ADD COLUMN {col_name} {col_type}"))
                     logger.info(f"Migration: added column connections.{col_name}")
             conn.commit()
+
+            # Migrate servers table
+            result2 = conn.execute(sa.text("PRAGMA table_info(servers)"))
+            srv_cols = {row[1] for row in result2.fetchall()}
+            srv_new_cols = [
+                ("awg_installed", "BOOLEAN DEFAULT 0"),
+            ]
+            for col_name, col_type in srv_new_cols:
+                if col_name not in srv_cols:
+                    conn.execute(sa.text(f"ALTER TABLE servers ADD COLUMN {col_name} {col_type}"))
+                    logger.info(f"Migration: added column servers.{col_name}")
+            conn.commit()
     except Exception as e:
         logger.warning(f"Migration warning (non-fatal): {e}")
 

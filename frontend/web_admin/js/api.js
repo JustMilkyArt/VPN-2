@@ -160,6 +160,18 @@ const api = {
   async redeployServer(id) {
     return this.request('POST', `/servers/${id}/redeploy`, null, { timeout: 120000 });
   },
+  async rebootServer(id) {
+    return this.request('POST', `/servers/${id}/reboot`, null, { timeout: 30000 });
+  },
+  async changeServerPassword(id, newPassword) {
+    return this.request('POST', `/servers/${id}/change-password`, { new_password: newPassword }, { timeout: 30000 });
+  },
+  async addServerSSHKey(id, sshKey) {
+    return this.request('POST', `/servers/${id}/add-ssh-key`, { ssh_key: sshKey }, { timeout: 30000 });
+  },
+  async uninstallStack(id, data) {
+    return this.request('POST', `/servers/${id}/uninstall-stack`, data, { timeout: 120000 });
+  },
 
   // ─── Connections ───────────────────────────────────────────────────────────
   async getConnectionsGrouped() {

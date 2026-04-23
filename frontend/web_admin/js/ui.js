@@ -127,7 +127,6 @@ function roleLabel(role) {
   const map = {
     RU:    '<span class="role-badge-ru">RU ENTRY</span>',
     EU:    '<span class="role-badge-eu">EU EXIT</span>',
-    MIXED: '<span class="role-badge-mixed">MIXED</span>',
   };
   return map[role] || role;
 }

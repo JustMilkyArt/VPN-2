@@ -6,9 +6,15 @@ from app.db.database import get_db
 from app.api.deps import get_current_user
 from app.models.admin_user import AdminUser
 from app.models.server import Server
-from app.schemas.server import ServerCreate, ServerUpdate, ServerRead, ServerInstallRequest
+from app.schemas.server import (
+    ServerCreate, ServerUpdate, ServerRead, ServerInstallRequest,
+    ServerChangePasswordRequest, ServerChangeSSHKeyRequest, ServerUninstallStackRequest
+)
 from app.services import server_service, deploy_service
-from app.services.ssh_service import test_connection
+from app.services.ssh_service import (
+    test_connection, ping_with_latency, reboot_server,
+    change_ssh_password, add_ssh_key, uninstall_stack
+)
 
 router = APIRouter(prefix="/servers", tags=["servers"])
 
@@ -69,7 +75,7 @@ def delete_server(
     server_service.delete_server(db, server)
 
 
-@router.post("/{server_id}/ping", summary="Test SSH connection")
+@router.post("/{server_id}/ping", summary="Test SSH connection with latency")
 def ping_server(
     server_id: int,
     db: Session = Depends(get_db),
@@ -78,14 +84,20 @@ def ping_server(
     server = server_service.get_server(db, server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
-    status_result = server_service.check_server_status(db, server)
-    ok, msg = test_connection(server)
+
+    ok, msg, latency_ms = ping_with_latency(server)
+
+    # Update status in DB
+    from app.models.server import ServerStatus
+    server.status = ServerStatus.ONLINE if ok else ServerStatus.OFFLINE
+    db.commit()
+
     return {
         "server_id": server_id,
-        "status": status_result,
+        "reachable": ok,
         "message": msg,
-        "reachable": ok
+        "latency_ms": latency_ms,
+        "status": server.status
     }
 
 
@@ -105,28 +117,39 @@ def server_info(
 def install_stack(
     server_id: int,
     install_req: ServerInstallRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: AdminUser = Depends(get_current_user)
 ):
     server = server_service.get_server(db, server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
+
     results = {}
-    
+
     if install_req.install_xray:
         ok, msg = deploy_service.install_xray(server)
         results["xray"] = {"success": ok, "message": msg}
         if ok:
             server.xray_installed = True
-    
+
+    if install_req.install_naiveproxy:
+        ok, msg = deploy_service.install_naiveproxy(server)
+        results["naiveproxy"] = {"success": ok, "message": msg}
+        if ok:
+            server.naiveproxy_installed = True
+
+    if install_req.install_awg:
+        ok, msg = deploy_service.install_amnezia_wg(server)
+        results["awg"] = {"success": ok, "message": msg}
+        if ok:
+            server.awg_installed = True
+
     if install_req.install_warp:
         ok, msg = deploy_service.install_warp(server)
         results["warp"] = {"success": ok, "message": msg}
         if ok:
             server.warp_installed = True
-    
+
     db.commit()
     return {"server_id": server_id, "results": results}
 
@@ -140,7 +163,7 @@ def restart_services(
     server = server_service.get_server(db, server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
+
     ok, msg = deploy_service.restart_services(server)
     return {"success": ok, "message": msg}
 
@@ -154,8 +177,103 @@ def redeploy_server(
     server = server_service.get_server(db, server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
-    
+
     ok, msg = deploy_service.redeploy_server_config(db, server)
+    return {"success": ok, "message": msg}
+
+
+@router.post("/{server_id}/reboot", summary="Reboot the server OS")
+def reboot_server_endpoint(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    ok, msg = reboot_server(server)
+    if ok:
+        # Mark as unknown while it reboots
+        from app.models.server import ServerStatus
+        server.status = ServerStatus.UNKNOWN
+        db.commit()
+    return {"success": ok, "message": msg}
+
+
+@router.post("/{server_id}/change-password", summary="Change SSH user password")
+def change_password_endpoint(
+    server_id: int,
+    req: ServerChangePasswordRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    ok, msg = change_ssh_password(server, req.new_password)
+    if ok:
+        # Update stored password in DB
+        server.ssh_password = req.new_password
+        db.commit()
+    return {"success": ok, "message": msg}
+
+
+@router.post("/{server_id}/add-ssh-key", summary="Add SSH public key to server")
+def add_ssh_key_endpoint(
+    server_id: int,
+    req: ServerChangeSSHKeyRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    ok, msg = add_ssh_key(server, req.ssh_key)
+    if ok:
+        # Store public key reference in notes (private key stored separately if needed)
+        server.ssh_key = req.ssh_key
+        db.commit()
+    return {"success": ok, "message": msg}
+
+
+@router.post("/{server_id}/uninstall-stack", summary="Remove VPN services from server")
+def uninstall_stack_endpoint(
+    server_id: int,
+    req: ServerUninstallStackRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    services = []
+    if req.uninstall_xray:
+        services.append("xray")
+    if req.uninstall_naiveproxy:
+        services.append("naiveproxy")
+    if req.uninstall_awg:
+        services.append("awg")
+    if req.uninstall_warp:
+        services.append("warp")
+
+    if not services:
+        raise HTTPException(status_code=400, detail="No services selected for uninstall")
+
+    ok, msg = uninstall_stack(server, services)
+    if ok:
+        if req.uninstall_xray:
+            server.xray_installed = False
+        if req.uninstall_naiveproxy:
+            server.naiveproxy_installed = False
+        if req.uninstall_awg:
+            server.awg_installed = False
+        if req.uninstall_warp:
+            server.warp_installed = False
+        db.commit()
     return {"success": ok, "message": msg}
 
 

@@ -8,7 +8,6 @@ from app.db.database import Base
 class ServerRole(str, enum.Enum):
     RU = "RU"
     EU = "EU"
-    MIXED = "MIXED"
 
 
 class ServerStatus(str, enum.Enum):
@@ -38,7 +37,7 @@ class Server(Base):
 
     xray_installed = Column(Boolean, default=False)
     naiveproxy_installed = Column(Boolean, default=False)
-    trojan_installed = Column(Boolean, default=False)
+    awg_installed = Column(Boolean, default=False)
     warp_installed = Column(Boolean, default=False)
 
     domain = Column(String(255), nullable=True)
