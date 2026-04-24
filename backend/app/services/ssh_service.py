@@ -159,30 +159,36 @@ def test_connection(server: Server) -> Tuple[bool, str]:
 
 
 def speed_test(server: Server) -> Optional[float]:
-    """Measure download speed in Mbit/s via SSH curl (small file, short timeout)."""
-    # Try multiple CDN URLs in order — first available wins
+    """Measure download speed in Mbit/s by running curl ON the VPN server via SSH.
+    
+    This measures the actual network throughput of the VPN server itself,
+    not the admin server. Uses multiple CDN URLs, tries each in order.
+    """
+    # 10 MB file for more accurate measurement on fast servers
     test_urls = [
+        "http://speedtest.tele2.net/10MB.zip",
         "http://speedtest.tele2.net/1MB.zip",
-        "http://ipv4.download.thinkbroadband.com/1MB.zip",
-        "http://proof.ovh.net/files/1Mb.dat",
+        "http://proof.ovh.net/files/10Mb.dat",
+        "http://ipv4.download.thinkbroadband.com/10MB.zip",
     ]
     try:
         with SSHClient(server) as ssh:
             for url in test_urls:
                 cmd = (
-                    f"curl -o /dev/null -s --max-time 6 --connect-timeout 3 "
+                    f"curl -o /dev/null -s --max-time 15 --connect-timeout 4 "
                     f"-w '%{{speed_download}}' '{url}'"
                 )
-                code, out, _ = ssh.exec(cmd, timeout=10)
+                code, out, _ = ssh.exec(cmd, timeout=20)
                 out = out.strip().strip("'")
                 if code == 0 and out:
                     try:
                         bytes_per_sec = float(out)
                         mbit = round(bytes_per_sec * 8 / 1_000_000, 1)
                         if mbit > 0:
+                            logger.info(f"Speed test for {server.ip}: {mbit} Mbit/s via {url}")
                             return mbit
                     except ValueError:
-                        pass
+                        continue
     except Exception as e:
         logger.warning(f"Speed test failed for {server.ip}: {e}")
     return None
