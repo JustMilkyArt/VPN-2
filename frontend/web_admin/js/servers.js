@@ -77,6 +77,9 @@ async function loadServers() {
   // Автопинг всех серверов при загрузке
   silentCheckAllServers();
 
+  // Статистика подключений для каждого сервера
+  serversData.forEach(server => loadConnStats(server.id));
+
   // Для серверов с неизвестной страной — определяем по IP
   serversData.forEach(server => {
     if (!server.country || server.country === '??') {
@@ -207,8 +210,13 @@ function renderServerCard(server) {
   </div>
 
   <!-- Пинг (появляется после обновления) -->
-  <div style="margin-bottom:0.625rem;min-height:1rem;">
+  <div style="margin-bottom:0.25rem;min-height:1rem;">
     <span id="ping-val-${server.id}" class="hidden" style="font-size:0.72rem;color:#6b7280;"></span>
+  </div>
+
+  <!-- Статистика подключений -->
+  <div style="margin-bottom:0.625rem;min-height:1rem;">
+    <span id="conn-stats-${server.id}" style="font-size:0.72rem;color:#6b7280;">загрузка...</span>
   </div>
 
   <!-- Кнопки -->
@@ -225,6 +233,28 @@ function renderServerCard(server) {
   </div>
 
 </div>`;
+}
+
+// ───────────────── CONNECTION STATS ─────────────────
+async function loadConnStats(serverId) {
+  const el = document.getElementById(`conn-stats-${serverId}`);
+  if (!el) return;
+  const res = await api.serverStats(serverId);
+  if (!res.ok) { el.textContent = ''; return; }
+  const { active, total, protocols } = res.data;
+  // Строка протоколов: «AWG ×2, Xray ×1»
+  const protoStr = Object.entries(protocols)
+    .map(([p, n]) => `${p.toUpperCase()}${n > 1 ? ' ×' + n : ''}`)
+    .join(', ');
+  if (total === 0) {
+    el.textContent = 'нет подключений';
+    el.style.color = '#4b5563';
+  } else {
+    el.innerHTML = `<i class="fas fa-users" style="margin-right:3px;"></i>`
+      + `<span style="color:${active > 0 ? '#4ade80' : '#6b7280'}">${active} акт.</span>`
+      + ` / ${total} всего`
+      + (protoStr ? `<span style="color:#4b5563;"> · ${protoStr}</span>` : '');
+  }
 }
 
 // ───────────────── PING SERVER ─────────────────
@@ -1106,6 +1136,7 @@ window.toggleServerAdvanced       = toggleServerAdvanced;
 window.detectIpInfo               = detectIpInfo;
 window.loadServers                = loadServers;
 window.pingServer                 = pingServer;
+window.loadConnStats              = loadConnStats;
 window.checkAllServers            = checkAllServers;
 window.showAddServerModal         = showAddServerModal;
 window.showServerDetail           = showServerDetail;

@@ -145,6 +145,9 @@ const api = {
   async pingServer(id) {
     return this.request('POST', `/servers/${id}/ping`, null, { timeout: 30000 });
   },
+  async serverStats(id) {
+    return this.request('GET', `/servers/${id}/stats`);
+  },
 
   async checkAllServers() {
     return this.request('POST', '/servers/check-all-status', null, { timeout: 60000 });

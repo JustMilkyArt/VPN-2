@@ -102,6 +102,36 @@ def ping_server(
 
 
 
+@router.get("/{server_id}/stats", summary="Get connection statistics for server")
+def server_stats(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    from app.models.connection import Connection, ConnectionStatus
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    all_conns = db.query(Connection).filter(Connection.server_id == server_id).all()
+    active = [c for c in all_conns if c.status == ConnectionStatus.ACTIVE]
+
+    # Разбивка по протоколам
+    proto_counts = {}
+    for c in active:
+        p = c.protocol or "unknown"
+        proto_counts[p] = proto_counts.get(p, 0) + 1
+
+    return {
+        "server_id": server_id,
+        "total": len(all_conns),
+        "active": len(active),
+        "inactive": len([c for c in all_conns if c.status == ConnectionStatus.INACTIVE]),
+        "error": len([c for c in all_conns if c.status == ConnectionStatus.ERROR]),
+        "protocols": proto_counts,
+    }
+
+
 @router.get("/{server_id}/info", summary="Get server system info")
 def server_info(
     server_id: int,
