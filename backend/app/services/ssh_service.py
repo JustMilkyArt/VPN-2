@@ -452,16 +452,21 @@ def harden_server(server: Server) -> Tuple[bool, str]:
             ssh_port = server.ssh_port or 22
 
             steps = [
-                ("update",    "apt-get update -qq"),
-                ("fail2ban",  "apt-get install -y fail2ban -qq"),
-                ("f2b-start", "systemctl enable fail2ban && systemctl start fail2ban"),
-                ("ufw-inst",  "apt-get install -y ufw -qq"),
-                ("ufw-ssh",   f"ufw allow {ssh_port}/tcp"),
-                ("ufw-80",    "ufw allow 80/tcp"),
-                ("ufw-443",   "ufw allow 443/tcp"),
-                ("ufw-wg1",   "ufw allow 51820/udp"),
-                ("ufw-wg2",   "ufw allow 51821/udp"),
-                ("ufw-on",    "echo 'y' | ufw enable"),
+                ("update",       "apt-get update -qq"),
+                ("fail2ban",     "apt-get install -y fail2ban -qq"),
+                ("f2b-start",    "systemctl enable fail2ban && systemctl start fail2ban"),
+                ("ufw-inst",     "apt-get install -y ufw -qq"),
+                ("ufw-ssh",      f"ufw allow {ssh_port}/tcp"),
+                ("ufw-80",       "ufw allow 80/tcp"),
+                ("ufw-443",      "ufw allow 443/tcp"),
+                ("ufw-wg1",      "ufw allow 51820/udp"),
+                ("ufw-wg2",      "ufw allow 51821/udp"),
+                ("ufw-on",       "echo 'y' | ufw enable"),
+                # Запрет root-логина через SSH
+                ("no-root",      "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && "
+                                 "grep -q '^PermitRootLogin' /etc/ssh/sshd_config || "
+                                 "echo 'PermitRootLogin no' >> /etc/ssh/sshd_config"),
+                ("sshd-reload",  "systemctl reload sshd || systemctl reload ssh"),
             ]
 
             for name, cmd in steps:

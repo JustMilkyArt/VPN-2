@@ -854,9 +854,11 @@ async function loadSecurityStatus() {
     const res = await api.getSecurityStatus(serverId);
     if (res.ok) {
       const s = res.data;
+      // password_login и root_login инвертированы:
+      // галочка = "запрещён" → checked когда val=false
       const map = {
-        'sec-password-login': s.password_login,
-        'sec-root-login':     s.root_login,
+        'sec-password-login': !s.password_login,
+        'sec-root-login':     !s.root_login,
         'sec-fail2ban':       s.fail2ban,
         'sec-ufw':            s.ufw,
       };

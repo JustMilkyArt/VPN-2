@@ -1026,17 +1026,17 @@
           </label>
           <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
             <div>
-              <p class="text-sm text-white">Вход по паролю SSH</p>
-              <p class="text-xs text-gray-500">PasswordAuthentication в sshd_config</p>
+              <p class="text-sm text-white">Вход по паролю запрещён</p>
+              <p class="text-xs text-gray-500">PasswordAuthentication no в sshd_config</p>
             </div>
-            <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('password_login', this.checked)">
+            <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('password_login', !this.checked)">
           </label>
           <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
             <div>
-              <p class="text-sm text-white">Вход под root</p>
-              <p class="text-xs text-gray-500">PermitRootLogin в sshd_config</p>
+              <p class="text-sm text-white">Вход под root запрещён</p>
+              <p class="text-xs text-gray-500">PermitRootLogin no в sshd_config</p>
             </div>
-            <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('root_login', this.checked)">
+            <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('root_login', !this.checked)">
           </label>
         </div>
         <p id="sec-status-msg" class="text-xs mt-1 text-center hidden"></p>

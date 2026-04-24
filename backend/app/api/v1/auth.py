@@ -8,8 +8,10 @@ Auth endpoints:
 """
 import logging
 import secrets
+import time
+from collections import defaultdict
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer as _HTTPBearer, HTTPAuthorizationCredentials as _HAC
 from sqlalchemy.orm import Session
 
@@ -34,12 +36,43 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # In-memory temp tokens: token → user_id (step 1 → step 2 handoff)
 _pending_totp: dict[str, int] = {}
 
+# ── Rate limiting: IP → {attempts, blocked_until} ────────────────────────────
+_login_attempts: dict = defaultdict(lambda: {"count": 0, "blocked_until": 0})
+MAX_ATTEMPTS = 5        # попыток до блокировки
+BAN_SECONDS  = 3600     # 1 час бана
+
+def _check_rate_limit(ip: str) -> None:
+    """Raises 429 if IP is banned or increments attempt counter."""
+    entry = _login_attempts[ip]
+    now = time.time()
+    if entry["blocked_until"] > now:
+        remaining = int(entry["blocked_until"] - now)
+        mins = remaining // 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Слишком много попыток. Попробуйте через {mins} мин.",
+        )
+
+def _register_fail(ip: str) -> None:
+    entry = _login_attempts[ip]
+    entry["count"] += 1
+    if entry["count"] >= MAX_ATTEMPTS:
+        entry["blocked_until"] = time.time() + BAN_SECONDS
+        entry["count"] = 0
+        logger.warning(f"Rate limit: IP {ip} banned for {BAN_SECONDS}s after {MAX_ATTEMPTS} failed attempts")
+
+def _register_success(ip: str) -> None:
+    _login_attempts.pop(ip, None)
+
 
 # ─── Step 1: username + password ──────────────────────────────────────────────
 
 @router.post("/login", response_model=LoginResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(request: LoginRequest, http_req: Request, db: Session = Depends(get_db)):
     """Step 1: verify username + password → returns temp_token for TOTP step."""
+    client_ip = http_req.headers.get("X-Forwarded-For", http_req.client.host).split(",")[0].strip()
+    _check_rate_limit(client_ip)
+
     user: AdminUser | None = db.query(AdminUser).filter(
         AdminUser.username == request.username,
         AdminUser.is_active == True,
@@ -51,6 +84,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     )
 
     if not user or not verify_password(request.password, user.password_hash):
+        _register_fail(client_ip)
         raise auth_error
 
     if not user.totp_secret:
@@ -59,6 +93,7 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Аутентификатор не настроен. Обратитесь к администратору.",
         )
 
+    _register_success(client_ip)
     temp_token = secrets.token_urlsafe(32)
     _pending_totp[temp_token] = user.id
     return LoginResponse(phase="totp", temp_token=temp_token)
