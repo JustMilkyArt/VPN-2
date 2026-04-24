@@ -799,6 +799,10 @@
         class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
         <i class="fas fa-layer-group mr-1.5"></i>Стек
       </button>
+      <button id="stab-security" onclick="switchSettingsTab('security')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-shield-halved mr-1.5"></i>Безопасность
+      </button>
       <button id="stab-params" onclick="switchSettingsTab('params')"
         class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
         <i class="fas fa-sliders mr-1.5"></i>Параметры
@@ -992,6 +996,52 @@
         <div id="stack-output" class="hidden mt-3 p-3 bg-black/40 rounded-xl font-mono text-xs text-gray-400 whitespace-pre-wrap max-h-40 overflow-y-auto"></div>
       </div>
 
+      <!-- ─── TAB: SECURITY ─── -->
+      <div id="stab-content-security" class="p-5 space-y-4 hidden">
+        <div class="flex items-center justify-between mb-1">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+            <i class="fas fa-shield-halved text-purple-400"></i> Статус защиты
+          </p>
+          <div class="flex items-center gap-2">
+            <span id="sec-loading" class="hidden text-xs text-gray-500">Загружаю...</span>
+            <button id="sec-refresh-btn" onclick="loadSecurityStatus()" class="text-gray-600 hover:text-gray-300 transition" title="Обновить статус">
+              <i class="fas fa-arrows-rotate text-xs"></i>
+            </button>
+          </div>
+        </div>
+        <div class="space-y-2">
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Fail2Ban</p>
+              <p class="text-xs text-gray-500">Блокировка после 5 неудачных попыток входа</p>
+            </div>
+            <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('fail2ban', this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">UFW Firewall</p>
+              <p class="text-xs text-gray-500">Разрешить только нужные порты</p>
+            </div>
+            <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('ufw', this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Вход по паролю SSH</p>
+              <p class="text-xs text-gray-500">PasswordAuthentication в sshd_config</p>
+            </div>
+            <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('password_login', this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Вход под root</p>
+              <p class="text-xs text-gray-500">PermitRootLogin в sshd_config</p>
+            </div>
+            <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('root_login', this.checked)">
+          </label>
+        </div>
+        <p id="sec-status-msg" class="text-xs mt-1 text-center hidden"></p>
+      </div>
+
       <!-- ─── TAB: PARAMS ─── -->
       <div id="stab-content-params" class="p-5 space-y-5 hidden">
 
@@ -1014,23 +1064,16 @@
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="form-label">Роль</label>
-                <select id="settings-role" class="form-input">
-                  <option value="EU">EU Exit</option>
-                  <option value="RU">RU Entry</option>
-                </select>
+                <input id="settings-role" type="text" class="form-input bg-gray-800/40 text-gray-400 cursor-not-allowed" readonly>
               </div>
               <div>
-                <label class="form-label">Страна (ISO)</label>
-                <input id="settings-country" type="text" class="form-input" placeholder="DE" maxlength="2">
+                <label class="form-label">Страна</label>
+                <input id="settings-country" type="text" class="form-input font-mono bg-gray-800/40 text-gray-400 cursor-not-allowed" readonly maxlength="2">
               </div>
             </div>
             <div>
               <label class="form-label">Домен</label>
               <input id="settings-domain" type="text" class="form-input" placeholder="vpn.example.com">
-            </div>
-            <div>
-              <label class="form-label">Заметки</label>
-              <textarea id="settings-notes" class="form-input h-16 resize-none" placeholder="Произвольные заметки..."></textarea>
             </div>
           </div>
         </div>
@@ -1073,48 +1116,6 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Security -->
-        <div class="border-t border-gray-800 pt-4">
-          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-            <i class="fas fa-shield-halved text-purple-400"></i> Безопасность
-            <button id="sec-refresh-btn" onclick="loadSecurityStatus()" class="ml-auto text-gray-600 hover:text-gray-300 transition" title="Обновить статус">
-              <i class="fas fa-arrows-rotate text-xs"></i>
-            </button>
-            <span id="sec-loading" class="hidden text-xs text-gray-500">Загружаю...</span>
-          </p>
-          <div class="space-y-2">
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('password_login', event)">
-              <div>
-                <p class="text-sm text-white">Вход по паролю SSH</p>
-                <p class="text-xs text-gray-500">PasswordAuthentication в sshd</p>
-              </div>
-              <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('password_login', this.checked)">
-            </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('root_login', event)">
-              <div>
-                <p class="text-sm text-white">Вход под root</p>
-                <p class="text-xs text-gray-500">PermitRootLogin в sshd</p>
-              </div>
-              <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('root_login', this.checked)">
-            </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('fail2ban', event)">
-              <div>
-                <p class="text-sm text-white">Fail2Ban</p>
-                <p class="text-xs text-gray-500">Блокировка после 5 неудачных попыток</p>
-              </div>
-              <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('fail2ban', this.checked)">
-            </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('ufw', event)">
-              <div>
-                <p class="text-sm text-white">UFW Firewall</p>
-                <p class="text-xs text-gray-500">Разрешить только нужные порты</p>
-              </div>
-              <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('ufw', this.checked)">
-            </label>
-          </div>
-          <p id="sec-status-msg" class="text-xs text-gray-500 mt-2 text-center hidden"></p>
         </div>
 
         <!-- Save button -->

@@ -755,11 +755,13 @@ async function confirmInstallStack() {
 // ───────────────── SERVER SETTINGS — 4 TABS ─────────────────
 
 function switchSettingsTab(tab) {
-  const tabs = ['overview', 'actions', 'stack', 'params'];
+  const tabs = ['overview', 'actions', 'stack', 'security', 'params'];
   tabs.forEach(t => {
-    document.getElementById(`stab-${t}`).classList.toggle('active', t === tab);
-    document.getElementById(`stab-content-${t}`).classList.toggle('hidden', t !== tab);
+    document.getElementById(`stab-${t}`)?.classList.toggle('active', t === tab);
+    document.getElementById(`stab-content-${t}`)?.classList.toggle('hidden', t !== tab);
   });
+  // Безопасность: автозагрузка при переходе на вкладку
+  if (tab === 'security') loadSecurityStatus();
 }
 
 function showServerSettings(serverId) {
@@ -799,9 +801,9 @@ function showServerSettings(serverId) {
   document.getElementById('settings-name').value         = server.name;
   document.getElementById('settings-ip').value           = server.ip || '';
   document.getElementById('settings-domain').value       = server.domain || '';
-  document.getElementById('settings-notes').value        = server.notes || '';
-  document.getElementById('settings-role').value         = server.role || 'EU';
-  document.getElementById('settings-country').value      = server.country || '';
+  // Роль и страна — readonly, показываем как текст
+  document.getElementById('settings-role').value         = server.role === 'EU' ? 'EU Exit' : 'RU Entry';
+  document.getElementById('settings-country').value      = server.country || '—';
   document.getElementById('settings-ssh-user').value     = server.ssh_user || 'root';
   document.getElementById('settings-ssh-port').value     = server.ssh_port || 22;
   // Sensitive fields — clear value AND placeholder
@@ -822,14 +824,13 @@ function showServerSettings(serverId) {
     }
   }
 
-  // Security checkboxes — сбрасываем и загружаем реальный статус
+  // Security checkboxes — сбрасываем, загрузка произойдёт при переходе на вкладку security
   ['sec-password-login','sec-root-login','sec-fail2ban','sec-ufw'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.checked = false; el.disabled = true; }
   });
   const secMsg = document.getElementById('sec-status-msg');
   if (secMsg) { secMsg.textContent = ''; secMsg.classList.add('hidden'); }
-  loadSecurityStatus();
 
   // ── Reset action msg ──
   const msg = document.getElementById('settings-action-msg');
@@ -1143,9 +1144,7 @@ async function saveServerParams() {
     name:     document.getElementById('settings-name').value.trim()    || undefined,
     ip:       document.getElementById('settings-ip').value.trim()      || undefined,
     domain:   document.getElementById('settings-domain').value.trim()  || undefined,
-    notes:    document.getElementById('settings-notes').value.trim()   || undefined,
-    role:     document.getElementById('settings-role').value           || undefined,
-    country:  document.getElementById('settings-country').value.trim().toUpperCase() || undefined,
+    // role и country — readonly, не отправляем
     ssh_user: document.getElementById('settings-ssh-user').value.trim() || undefined,
     ssh_port: parseInt(document.getElementById('settings-ssh-port').value) || undefined,
   };
