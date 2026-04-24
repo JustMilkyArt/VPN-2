@@ -195,20 +195,44 @@ def speed_test(server: Server) -> Optional[float]:
 
 
 def ping_with_latency(server: Server) -> Tuple[bool, str, Optional[float]]:
-    """Test SSH connection and measure latency in ms. Returns (success, message, latency_ms)."""
+    """Measure real ICMP latency via ping, confirm reachability via SSH.
+    
+    Two-step:
+    1. ICMP ping from admin server → VPN server (real network latency, 20-80ms)
+    2. Quick SSH connect to confirm server is alive and accepting connections
+    """
+    import subprocess, re
+
+    # Step 1: ICMP ping — real latency
+    icmp_latency = None
     try:
-        start = time.time()
+        result = subprocess.run(
+            ["ping", "-c", "3", "-W", "2", server.ip],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            # Parse "rtt min/avg/max/mdev = 12.3/14.5/16.7/1.8 ms"
+            m = re.search(r'rtt [^=]+ = [\d.]+/([\d.]+)/', result.stdout)
+            if m:
+                icmp_latency = round(float(m.group(1)), 1)
+    except Exception:
+        pass
+
+    # Step 2: SSH check — просто проверяем что сервер принимает соединения
+    try:
         with SSHClient(server) as ssh:
-            code, out, err = ssh.exec("echo 'ping'", timeout=10)
-            elapsed = (time.time() - start) * 1000  # ms
+            code, _, _ = ssh.exec("echo ok", timeout=10)
             if code == 0:
-                return True, "Connection successful", round(elapsed, 1)
-            return False, f"Command failed: {err}", None
+                return True, "Connection successful", icmp_latency
+            return False, "SSH command failed", icmp_latency
     except paramiko.AuthenticationException:
-        return False, "Authentication failed", None
+        return False, "Authentication failed", icmp_latency
     except paramiko.NoValidConnectionsError as e:
-        return False, f"Cannot connect: {e}", None
+        return False, f"Cannot connect: {e}", icmp_latency
     except Exception as e:
+        # Если ICMP ответил но SSH упал — сервер жив, но SSH проблема
+        if icmp_latency is not None:
+            return False, f"SSH error: {str(e)}", icmp_latency
         return False, f"Connection error: {str(e)}", None
 
 
