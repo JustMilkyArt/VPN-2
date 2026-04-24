@@ -216,7 +216,7 @@ function renderServerCard(server) {
 
   <!-- Статистика подключений -->
   <div style="margin-bottom:0.625rem;min-height:1rem;">
-    <span id="conn-stats-${server.id}" style="font-size:0.72rem;color:#6b7280;">загрузка...</span>
+    <span id="conn-stats-${server.id}" style="font-size:0.72rem;color:#6b7280;"></span>
   </div>
 
   <!-- Кнопки -->
@@ -811,11 +811,25 @@ function showServerSettings(serverId) {
   const keyInput = document.getElementById('settings-ssh-key');
   keyInput.value = '';
   keyInput.placeholder = 'Вставьте приватный ключ для изменения';
-  // Security checkboxes default all on (managed separately)
-  document.getElementById('sec-password-login').checked = true;
-  document.getElementById('sec-root-login').checked     = true;
-  document.getElementById('sec-fail2ban').checked       = true;
-  document.getElementById('sec-ufw').checked            = true;
+  // Дата добавления сервера
+  const createdEl = document.getElementById('sov-created');
+  if (createdEl) {
+    if (server.created_at) {
+      const d = new Date(server.created_at);
+      createdEl.textContent = d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
+    } else {
+      createdEl.textContent = '—';
+    }
+  }
+
+  // Security checkboxes — сбрасываем и загружаем реальный статус
+  ['sec-password-login','sec-root-login','sec-fail2ban','sec-ufw'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.checked = false; el.disabled = true; }
+  });
+  const secMsg = document.getElementById('sec-status-msg');
+  if (secMsg) { secMsg.textContent = ''; secMsg.classList.add('hidden'); }
+  loadSecurityStatus();
 
   // ── Reset action msg ──
   const msg = document.getElementById('settings-action-msg');
@@ -824,6 +838,73 @@ function showServerSettings(serverId) {
   // Open modal on Overview tab
   switchSettingsTab('overview');
   openModal('modal-server-settings');
+}
+
+async function loadSecurityStatus() {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  if (!serverId) return;
+
+  const loading = document.getElementById('sec-loading');
+  const refreshBtn = document.getElementById('sec-refresh-btn');
+  if (loading) loading.classList.remove('hidden');
+  if (refreshBtn) refreshBtn.disabled = true;
+
+  try {
+    const res = await api.getSecurityStatus(serverId);
+    if (res.ok) {
+      const s = res.data;
+      const map = {
+        'sec-password-login': s.password_login,
+        'sec-root-login':     s.root_login,
+        'sec-fail2ban':       s.fail2ban,
+        'sec-ufw':            s.ufw,
+      };
+      Object.entries(map).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el) { el.checked = val; el.disabled = false; }
+      });
+      const secMsg = document.getElementById('sec-status-msg');
+      if (secMsg) { secMsg.textContent = '✓ Статус загружен'; secMsg.classList.remove('hidden'); secMsg.style.color = '#4ade80'; }
+    } else {
+      const secMsg = document.getElementById('sec-status-msg');
+      if (secMsg) { secMsg.textContent = 'Не удалось загрузить статус'; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
+    }
+  } catch (e) {
+    const secMsg = document.getElementById('sec-status-msg');
+    if (secMsg) { secMsg.textContent = 'Ошибка загрузки'; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
+  } finally {
+    if (loading) loading.classList.add('hidden');
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
+async function applySecSetting(setting, enabled) {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  if (!serverId) return;
+
+  const secMsg = document.getElementById('sec-status-msg');
+  if (secMsg) { secMsg.textContent = 'Применяю...'; secMsg.classList.remove('hidden'); secMsg.style.color = '#facc15'; }
+
+  // Блокируем чекбокс на время запроса
+  const cbMap = { password_login: 'sec-password-login', root_login: 'sec-root-login', fail2ban: 'sec-fail2ban', ufw: 'sec-ufw' };
+  const cbEl = document.getElementById(cbMap[setting]);
+  if (cbEl) cbEl.disabled = true;
+
+  try {
+    const res = await api.setSecuritySetting(serverId, setting, enabled);
+    if (res.ok) {
+      if (secMsg) { secMsg.textContent = '✓ ' + res.data.message; secMsg.style.color = '#4ade80'; }
+    } else {
+      if (secMsg) { secMsg.textContent = '✗ ' + (res.error || 'Ошибка'); secMsg.style.color = '#f87171'; }
+      // Откатываем чекбокс
+      if (cbEl) cbEl.checked = !enabled;
+    }
+  } catch (e) {
+    if (secMsg) { secMsg.textContent = '✗ Ошибка запроса'; secMsg.style.color = '#f87171'; }
+    if (cbEl) cbEl.checked = !enabled;
+  } finally {
+    if (cbEl) cbEl.disabled = false;
+  }
 }
 
 function _updateStackTab(server) {
@@ -1143,6 +1224,8 @@ window.showServerDetail           = showServerDetail;
 window.showInstallModal           = showInstallModal;
 window.confirmInstallStack        = confirmInstallStack;
 window.showServerSettings         = showServerSettings;
+window.loadSecurityStatus         = loadSecurityStatus;
+window.applySecSetting            = applySecSetting;
 window.switchSettingsTab          = switchSettingsTab;
 window.loadServerInfoTab          = loadServerInfoTab;
 window.updateServerStatus         = updateServerStatus;

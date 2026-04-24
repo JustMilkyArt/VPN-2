@@ -155,6 +155,12 @@ const api = {
   async serverInfo(id) {
     return this.request('GET', `/servers/${id}/info`);
   },
+  async getSecurityStatus(id) {
+    return this.request('GET', `/servers/${id}/security`);
+  },
+  async setSecuritySetting(id, setting, enabled) {
+    return this.request('POST', `/servers/${id}/security`, { setting, enabled });
+  },
   async installStack(id, data) {
     return this.request('POST', `/servers/${id}/install`, data, { timeout: 300000 });
   },

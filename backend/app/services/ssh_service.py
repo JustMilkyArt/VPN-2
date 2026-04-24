@@ -330,3 +330,148 @@ def get_server_info(server: Server) -> dict:
     except Exception as e:
         logger.error(f"Failed to get server info for {server.ip}: {e}")
         return {}
+
+
+def get_security_status(server: Server) -> dict:
+    """Check real security status on server via SSH."""
+    result = {
+        "fail2ban":       False,
+        "ufw":            False,
+        "password_login": True,   # небезопасное значение по умолчанию
+        "root_login":     True,
+    }
+    try:
+        with SSHClient(server) as ssh:
+            # Fail2Ban
+            _, out, _ = ssh.exec("systemctl is-active fail2ban 2>/dev/null", timeout=5)
+            result["fail2ban"] = out.strip() == "active"
+
+            # UFW
+            _, out, _ = ssh.exec("ufw status 2>/dev/null | head -1", timeout=5)
+            result["ufw"] = "active" in out.lower()
+
+            # PasswordAuthentication
+            _, out, _ = ssh.exec(
+                "grep -i '^PasswordAuthentication' /etc/ssh/sshd_config 2>/dev/null | tail -1",
+                timeout=5
+            )
+            val = out.strip().split()[-1].lower() if out.strip() else "yes"
+            result["password_login"] = val != "no"
+
+            # PermitRootLogin
+            _, out, _ = ssh.exec(
+                "grep -i '^PermitRootLogin' /etc/ssh/sshd_config 2>/dev/null | tail -1",
+                timeout=5
+            )
+            val = out.strip().split()[-1].lower() if out.strip() else "yes"
+            result["root_login"] = val not in ("no", "prohibit-password")
+
+    except Exception as e:
+        logger.warning(f"get_security_status failed for {server.ip}: {e}")
+    return result
+
+
+def apply_security_setting(server: Server, setting: str, enabled: bool) -> Tuple[bool, str]:
+    """Apply a single security setting on the server via SSH."""
+    try:
+        with SSHClient(server) as ssh:
+
+            if setting == "fail2ban":
+                if enabled:
+                    cmds = [
+                        "apt-get install -y fail2ban -qq",
+                        "systemctl enable fail2ban",
+                        "systemctl start fail2ban",
+                    ]
+                else:
+                    cmds = ["systemctl stop fail2ban", "systemctl disable fail2ban"]
+                for cmd in cmds:
+                    code, _, err = ssh.exec(cmd, timeout=60)
+                    if code != 0:
+                        return False, f"Command failed: {cmd}: {err}"
+                return True, "fail2ban " + ("enabled" if enabled else "disabled")
+
+            elif setting == "ufw":
+                if enabled:
+                    # Разрешаем нужные порты перед включением чтобы не потерять SSH
+                    ssh_port = server.ssh_port or 22
+                    cmds = [
+                        "apt-get install -y ufw -qq",
+                        f"ufw allow {ssh_port}/tcp",
+                        "ufw allow 80/tcp",
+                        "ufw allow 443/tcp",
+                        "ufw allow 51820/udp",
+                        "ufw allow 51821/udp",
+                        "echo 'y' | ufw enable",
+                    ]
+                else:
+                    cmds = ["echo 'y' | ufw disable"]
+                for cmd in cmds:
+                    code, _, err = ssh.exec(cmd, timeout=60)
+                    if code != 0:
+                        return False, f"Command failed: {cmd}: {err}"
+                return True, "ufw " + ("enabled" if enabled else "disabled")
+
+            elif setting == "password_login":
+                val = "yes" if enabled else "no"
+                cmds = [
+                    f"sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config",
+                    f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config",
+                    "systemctl reload sshd || systemctl reload ssh",
+                ]
+                for cmd in cmds:
+                    ssh.exec(cmd, timeout=10)
+                return True, f"PasswordAuthentication set to {val}"
+
+            elif setting == "root_login":
+                val = "yes" if enabled else "no"
+                cmds = [
+                    f"sed -i 's/^#*PermitRootLogin.*/PermitRootLogin {val}/' /etc/ssh/sshd_config",
+                    f"grep -q '^PermitRootLogin' /etc/ssh/sshd_config || echo 'PermitRootLogin {val}' >> /etc/ssh/sshd_config",
+                    "systemctl reload sshd || systemctl reload ssh",
+                ]
+                for cmd in cmds:
+                    ssh.exec(cmd, timeout=10)
+                return True, f"PermitRootLogin set to {val}"
+
+            else:
+                return False, f"Unknown setting: {setting}"
+
+    except Exception as e:
+        return False, str(e)
+
+
+def harden_server(server: Server) -> Tuple[bool, str]:
+    """Run basic hardening on a freshly added server:
+    - Install & enable Fail2Ban
+    - Install & configure UFW with required ports
+    """
+    try:
+        with SSHClient(server) as ssh:
+            logger.info(f"Starting hardening for {server.ip}")
+            ssh_port = server.ssh_port or 22
+
+            steps = [
+                ("update",    "apt-get update -qq"),
+                ("fail2ban",  "apt-get install -y fail2ban -qq"),
+                ("f2b-start", "systemctl enable fail2ban && systemctl start fail2ban"),
+                ("ufw-inst",  "apt-get install -y ufw -qq"),
+                ("ufw-ssh",   f"ufw allow {ssh_port}/tcp"),
+                ("ufw-80",    "ufw allow 80/tcp"),
+                ("ufw-443",   "ufw allow 443/tcp"),
+                ("ufw-wg1",   "ufw allow 51820/udp"),
+                ("ufw-wg2",   "ufw allow 51821/udp"),
+                ("ufw-on",    "echo 'y' | ufw enable"),
+            ]
+
+            for name, cmd in steps:
+                code, _, err = ssh.exec(cmd, timeout=120)
+                if code != 0:
+                    logger.warning(f"Harden step '{name}' failed for {server.ip}: {err}")
+                else:
+                    logger.info(f"Harden step '{name}' OK for {server.ip}")
+
+            return True, "Hardening completed"
+    except Exception as e:
+        logger.error(f"Hardening failed for {server.ip}: {e}")
+        return False, str(e)

@@ -2,6 +2,8 @@
 Server management service.
 """
 import logging
+import urllib.request
+import json
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
@@ -10,6 +12,20 @@ from app.schemas.server import ServerCreate, ServerUpdate
 from app.services.ssh_service import test_connection, get_server_info
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_country(ip: str) -> str:
+    """Определяет страну по IP через ipwho.is. Возвращает код страны или '??'."""
+    try:
+        url = f"https://ipwho.is/{ip}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("success") and data.get("country_code"):
+                return data["country_code"].upper()
+    except Exception as e:
+        logger.warning(f"Country resolve failed for {ip}: {e}")
+    return "??"
 
 
 def get_server(db: Session, server_id: int) -> Optional[Server]:
@@ -21,11 +37,15 @@ def get_servers(db: Session, skip: int = 0, limit: int = 100) -> List[Server]:
 
 
 def create_server(db: Session, server_data: ServerCreate) -> Server:
-    server = Server(**server_data.model_dump())
+    data = server_data.model_dump()
+    # Если страна не передана или '??' — определяем по IP на бэкенде
+    if not data.get("country") or data["country"] == "??":
+        data["country"] = resolve_country(data["ip"])
+    server = Server(**data)
     db.add(server)
     db.commit()
     db.refresh(server)
-    logger.info(f"Created server {server.name} ({server.ip})")
+    logger.info(f"Created server {server.name} ({server.ip}), country={server.country}")
     return server
 
 

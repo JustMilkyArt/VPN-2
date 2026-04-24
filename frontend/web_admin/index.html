@@ -830,6 +830,10 @@
             <p class="text-xs text-gray-500 mb-1">Домен</p>
             <p class="text-sm text-white font-mono truncate" id="sov-domain">—</p>
           </div>
+          <div class="bg-gray-800/60 rounded-xl p-3 col-span-2">
+            <p class="text-xs text-gray-500 mb-1">Добавлен</p>
+            <p class="text-sm text-white" id="sov-created">—</p>
+          </div>
         </div>
 
         <!-- System info -->
@@ -1075,37 +1079,42 @@
         <div class="border-t border-gray-800 pt-4">
           <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
             <i class="fas fa-shield-halved text-purple-400"></i> Безопасность
+            <button id="sec-refresh-btn" onclick="loadSecurityStatus()" class="ml-auto text-gray-600 hover:text-gray-300 transition" title="Обновить статус">
+              <i class="fas fa-arrows-rotate text-xs"></i>
+            </button>
+            <span id="sec-loading" class="hidden text-xs text-gray-500">Загружаю...</span>
           </p>
           <div class="space-y-2">
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('password_login', event)">
               <div>
                 <p class="text-sm text-white">Вход по паролю SSH</p>
                 <p class="text-xs text-gray-500">PasswordAuthentication в sshd</p>
               </div>
-              <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500">
+              <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('password_login', this.checked)">
             </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('root_login', event)">
               <div>
                 <p class="text-sm text-white">Вход под root</p>
                 <p class="text-xs text-gray-500">PermitRootLogin в sshd</p>
               </div>
-              <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500">
+              <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('root_login', this.checked)">
             </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('fail2ban', event)">
               <div>
                 <p class="text-sm text-white">Fail2Ban</p>
                 <p class="text-xs text-gray-500">Блокировка после 5 неудачных попыток</p>
               </div>
-              <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500">
+              <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('fail2ban', this.checked)">
             </label>
-            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition" onclick="toggleSecSetting('ufw', event)">
               <div>
                 <p class="text-sm text-white">UFW Firewall</p>
                 <p class="text-xs text-gray-500">Разрешить только нужные порты</p>
               </div>
-              <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500">
+              <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500" onclick="event.stopPropagation()" onchange="applySecSetting('ufw', this.checked)">
             </label>
           </div>
+          <p id="sec-status-msg" class="text-xs text-gray-500 mt-2 text-center hidden"></p>
         </div>
 
         <!-- Save button -->

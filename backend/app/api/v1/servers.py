@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -13,7 +14,8 @@ from app.schemas.server import (
 from app.services import server_service, deploy_service
 from app.services.ssh_service import (
     test_connection, ping_with_latency, reboot_server,
-    change_ssh_password, add_ssh_key, uninstall_stack
+    change_ssh_password, add_ssh_key, uninstall_stack,
+    harden_server, get_security_status, apply_security_setting
 )
 
 router = APIRouter(prefix="/servers", tags=["servers"])
@@ -32,10 +34,14 @@ def list_servers(
 @router.post("/", response_model=ServerRead, status_code=status.HTTP_201_CREATED)
 def create_server(
     server_data: ServerCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: AdminUser = Depends(get_current_user)
 ):
-    return server_service.create_server(db, server_data)
+    server = server_service.create_server(db, server_data)
+    # Запускаем хардение в фоне — не блокируем ответ
+    background_tasks.add_task(harden_server, server)
+    return server
 
 
 @router.get("/{server_id}", response_model=ServerRead)
@@ -306,6 +312,51 @@ def uninstall_stack_endpoint(
             server.warp_installed = False
         db.commit()
     return {"success": ok, "message": msg}
+
+
+@router.get("/{server_id}/security", summary="Get real security status from server")
+def get_security(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return get_security_status(server)
+
+
+class SecuritySettingRequest(BaseModel):
+    setting: str   # fail2ban | ufw | password_login | root_login
+    enabled: bool
+
+
+@router.post("/{server_id}/security", summary="Apply a security setting on server")
+def set_security(
+    server_id: int,
+    req: SecuritySettingRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    ok, msg = apply_security_setting(server, req.setting, req.enabled)
+    return {"success": ok, "message": msg}
+
+
+@router.post("/{server_id}/harden", summary="Run basic hardening (UFW + Fail2Ban)")
+def harden_server_endpoint(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    background_tasks.add_task(harden_server, server)
+    return {"success": True, "message": "Hardening started in background"}
 
 
 @router.post("/check-all-status", summary="Check status of all servers")
