@@ -149,14 +149,11 @@ async function silentCheckAllServers() {
       const { reachable, latency_ms } = res.data;
       const newStatus = reachable ? 'online' : 'offline';
 
-      // Обновляем точку и текст статуса на карточке без перерендера
       const dot  = document.getElementById(`status-dot-${server.id}`);
       const txt  = document.getElementById(`status-text-${server.id}`);
       const ping = document.getElementById(`ping-val-${server.id}`);
 
-      if (dot) {
-        dot.className = `status-dot ${newStatus}`;
-      }
+      if (dot) dot.className = `status-dot ${newStatus}`;
       if (txt) {
         txt.className = reachable ? 'text-green-400 text-xs font-medium' : 'text-red-400 text-xs font-medium';
         txt.textContent = reachable ? 'Online' : 'Offline';
@@ -173,8 +170,18 @@ async function silentCheckAllServers() {
         }
       }
 
-      // Обновляем локальный кеш
       server.status = newStatus;
+
+      // Добавляем скорость асинхронно — не блокирует следующий сервер
+      if (reachable) {
+        api.speedTestServer(server.id).then(speedRes => {
+          const speed_mbit = speedRes.ok ? speedRes.data.speed_mbit : null;
+          if (ping && speed_mbit !== null) {
+            const latStr = latency_ms !== null ? `${latency_ms} ms · ` : '';
+            ping.textContent = `${latStr}${speed_mbit} Mb/s`;
+          }
+        }).catch(() => {});
+      }
     } catch (_) { /* игнорируем */ }
   }
 }
@@ -242,18 +249,16 @@ async function pingServer(serverId) {
   if (btn) { btn.innerHTML = '<i class="fas fa-arrows-rotate"></i>'; btn.disabled = false; }
 
   if (res.ok) {
-    const { reachable, message, latency_ms } = res.data;
+    const { reachable, latency_ms } = res.data;
 
-    // Обновляем карточку без перерендера
     const dot  = document.getElementById(`status-dot-${serverId}`);
     const txt  = document.getElementById(`status-text-${serverId}`);
     const ping = document.getElementById(`ping-val-${serverId}`);
 
     if (dot) dot.className = `status-dot ${reachable ? 'online' : 'offline'}`;
-    if (txt) {
-      txt.style.color  = reachable ? '#4ade80' : '#f87171';
-      txt.textContent  = reachable ? 'Online' : 'Offline';
-    }
+    if (txt) { txt.style.color = reachable ? '#4ade80' : '#f87171'; txt.textContent = reachable ? 'Online' : 'Offline'; }
+
+    // Показываем пинг сразу
     if (ping) {
       if (latency_ms !== null) {
         ping.textContent = `${latency_ms} ms`;
@@ -266,12 +271,18 @@ async function pingServer(serverId) {
       }
     }
 
-    // Тихое обновление — тост только при ручном клике через кнопку
-    // (при авто-пинге toast не нужен, но он вызывается только из кнопки)
-
-    // Обновляем кеш
     const srv = serversData.find(s => s.id === serverId);
     if (srv) srv.status = reachable ? 'online' : 'offline';
+
+    // Добавляем скорость после пинга
+    if (reachable) {
+      const speedRes = await api.speedTestServer(serverId);
+      const speed_mbit = speedRes.ok ? speedRes.data.speed_mbit : null;
+      if (ping && speed_mbit !== null) {
+        const latStr = latency_ms !== null ? `${latency_ms} ms · ` : '';
+        ping.textContent = `${latStr}${speed_mbit} Mb/s`;
+      }
+    }
   } else {
     toast(`Ошибка: ${res.error}`, 'error');
   }
