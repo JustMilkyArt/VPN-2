@@ -159,20 +159,20 @@ def test_connection(server: Server) -> Tuple[bool, str]:
 
 
 def speed_test(server: Server) -> Optional[float]:
-    """Measure download speed in Mbit/s via SSH curl against a small public file."""
+    """Measure download speed in Mbit/s via SSH curl (small file, short timeout)."""
     try:
         with SSHClient(server) as ssh:
-            # ~10 MB file from Cloudflare speed test, timeout 15s
+            # 1 MB from fast CDN, hard 8s limit so it never hangs
             cmd = (
-                "curl -o /dev/null -s --max-time 15 --connect-timeout 5 "
+                "curl -o /dev/null -s --max-time 8 --connect-timeout 4 "
                 "-w '%{speed_download}' "
-                "https://speed.cloudflare.com/__down?bytes=5000000"
+                "http://speedtest.ftp.otenet.gr/files/test1Mb.db"
             )
-            code, out, _ = ssh.exec(cmd, timeout=20)
+            code, out, _ = ssh.exec(cmd, timeout=12)
             if code == 0 and out.strip():
                 bytes_per_sec = float(out.strip().strip("'"))
                 mbit = round(bytes_per_sec * 8 / 1_000_000, 1)
-                return mbit
+                return mbit if mbit > 0 else None
     except Exception as e:
         logger.warning(f"Speed test failed for {server.ip}: {e}")
     return None

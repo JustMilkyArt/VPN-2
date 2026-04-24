@@ -777,6 +777,7 @@ function showServerSettings(serverId) {
 
   // ── TAB: Params ──
   document.getElementById('settings-name').value         = server.name;
+  document.getElementById('settings-ip').value           = server.ip || '';
   document.getElementById('settings-domain').value       = server.domain || '';
   document.getElementById('settings-notes').value        = server.notes || '';
   document.getElementById('settings-role').value         = server.role || 'EU';
@@ -1043,6 +1044,7 @@ async function saveServerParams() {
   const serverId = document.getElementById('settings-server-id').value;
   const payload = {
     name:     document.getElementById('settings-name').value.trim()    || undefined,
+    ip:       document.getElementById('settings-ip').value.trim()      || undefined,
     domain:   document.getElementById('settings-domain').value.trim()  || undefined,
     notes:    document.getElementById('settings-notes').value.trim()   || undefined,
     role:     document.getElementById('settings-role').value           || undefined,
