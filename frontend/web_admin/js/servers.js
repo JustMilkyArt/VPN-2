@@ -4,6 +4,51 @@
 
 let serversData = [];
 
+// ISO 3166-1 alpha-2 → полное название страны
+const ISO_COUNTRY_NAMES = {
+  AF:'Афганистан',AL:'Албания',DZ:'Алжир',AD:'Андорра',AO:'Ангола',
+  AG:'Антигуа и Барбуда',AR:'Аргентина',AM:'Армения',AU:'Австралия',
+  AT:'Австрия',AZ:'Азербайджан',BS:'Багамы',BH:'Бахрейн',BD:'Бангладеш',
+  BB:'Барбадос',BY:'Беларусь',BE:'Бельгия',BZ:'Белиз',BJ:'Бенин',
+  BT:'Бутан',BO:'Боливия',BA:'Босния и Герцеговина',BW:'Ботсвана',
+  BR:'Бразилия',BN:'Бруней',BG:'Болгария',BF:'Буркина-Фасо',BI:'Бурунди',
+  CV:'Кабо-Верде',KH:'Камбоджа',CM:'Камерун',CA:'Канада',CF:'ЦАР',
+  TD:'Чад',CL:'Чили',CN:'Китай',CO:'Колумбия',KM:'Коморы',
+  CD:'ДР Конго',CG:'Конго',CR:'Коста-Рика',HR:'Хорватия',CU:'Куба',
+  CY:'Кипр',CZ:'Чехия',DK:'Дания',DJ:'Джибути',DM:'Доминика',
+  DO:'Доминиканская Республика',EC:'Эквадор',EG:'Египет',SV:'Сальвадор',
+  GQ:'Экватор. Гвинея',ER:'Эритрея',EE:'Эстония',SZ:'Эсватини',
+  ET:'Эфиопия',FJ:'Фиджи',FI:'Финляндия',FR:'Франция',GA:'Габон',
+  GM:'Гамбия',GE:'Грузия',DE:'Германия',GH:'Гана',GR:'Греция',
+  GD:'Гренада',GT:'Гватемала',GN:'Гвинея',GW:'Гвинея-Бисау',
+  GY:'Гайана',HT:'Гаити',HN:'Гондурас',HU:'Венгрия',IS:'Исландия',
+  IN:'Индия',ID:'Индонезия',IR:'Иран',IQ:'Ирак',IE:'Ирландия',
+  IL:'Израиль',IT:'Италия',JM:'Ямайка',JP:'Япония',JO:'Иордания',
+  KZ:'Казахстан',KE:'Кения',KI:'Кирибати',KP:'Сев. Корея',KR:'Юж. Корея',
+  KW:'Кувейт',KG:'Кыргызстан',LA:'Лаос',LV:'Латвия',LB:'Ливан',
+  LS:'Лесото',LR:'Либерия',LY:'Ливия',LI:'Лихтенштейн',LT:'Литва',
+  LU:'Люксембург',MG:'Мадагаскар',MW:'Малави',MY:'Малайзия',MV:'Мальдивы',
+  ML:'Мали',MT:'Мальта',MH:'Маршалловы о-ва',MR:'Мавритания',MU:'Маврикий',
+  MX:'Мексика',FM:'Микронезия',MD:'Молдова',MC:'Монако',MN:'Монголия',
+  ME:'Черногория',MA:'Марокко',MZ:'Мозамбик',MM:'Мьянма',NA:'Намибия',
+  NR:'Науру',NP:'Непал',NL:'Нидерланды',NZ:'Новая Зеландия',NI:'Никарагуа',
+  NE:'Нигер',NG:'Нигерия',MK:'Сев. Македония',NO:'Норвегия',OM:'Оман',
+  PK:'Пакистан',PW:'Палау',PA:'Панама',PG:'Папуа — Нов. Гвинея',
+  PY:'Парагвай',PE:'Перу',PH:'Филиппины',PL:'Польша',PT:'Португалия',
+  QA:'Катар',RO:'Румыния',RU:'Россия',RW:'Руанда',KN:'Сент-Китс и Невис',
+  LC:'Сент-Люсия',VC:'Сент-Винсент',WS:'Самоа',SM:'Сан-Марино',
+  ST:'Сан-Томе и Принсипи',SA:'Саудовская Аравия',SN:'Сенегал',RS:'Сербия',
+  SC:'Сейшелы',SL:'Сьерра-Леоне',SG:'Сингапур',SK:'Словакия',SI:'Словения',
+  SB:'Соломоновы о-ва',SO:'Сомали',ZA:'ЮАР',SS:'Юж. Судан',ES:'Испания',
+  LK:'Шри-Ланка',SD:'Судан',SR:'Суринам',SE:'Швеция',CH:'Швейцария',
+  SY:'Сирия',TW:'Тайвань',TJ:'Таджикистан',TZ:'Танзания',TH:'Таиланд',
+  TL:'Тимор-Лесте',TG:'Того',TO:'Тонга',TT:'Тринидад и Тобаго',
+  TN:'Тунис',TR:'Турция',TM:'Туркменистан',TV:'Тувалу',UG:'Уганда',
+  UA:'Украина',AE:'ОАЭ',GB:'Великобритания',US:'США',UY:'Уругвай',
+  UZ:'Узбекистан',VU:'Вануату',VE:'Венесуэла',VN:'Вьетнам',
+  YE:'Йемен',ZM:'Замбия',ZW:'Зимбабве',
+};
+
 // ───────────────── LOAD SERVERS ─────────────────
 async function loadServers() {
   const container = document.getElementById('servers-grid');
@@ -714,16 +759,18 @@ function showServerSettings(serverId) {
   document.getElementById('sov-ip').textContent     = server.ip;
   document.getElementById('sov-role').textContent   = server.role === 'EU' ? 'EU Exit' : 'RU Entry';
   document.getElementById('sov-domain').textContent = server.domain || '—';
-  // Country with flag
+  // Country with flag + full name
   const cc = (server.country || '??').toLowerCase();
-  const countryName = server.country || '??';
+  const countryName = ISO_COUNTRY_NAMES[server.country] || server.country || '??';
   document.getElementById('sov-country').innerHTML =
     (server.country && server.country !== '??')
       ? `<img src="https://flagcdn.com/16x12/${cc}.png" alt="${countryName}" class="rounded-sm inline-block"> ${countryName}`
       : '??';
-  // Reset sysinfo to placeholder
+  // Reset sysinfo, then auto-load
   ['os','cpu','ram','disk'].forEach(k => document.getElementById(`sov-${k}`).textContent = '—');
-  document.getElementById('sov-sysinfo-hint').classList.remove('hidden');
+  const hint = document.getElementById('sov-sysinfo-hint');
+  if (hint) { hint.textContent = 'Загружаю...'; hint.classList.remove('hidden'); }
+  loadServerInfoTab();
 
   // ── TAB: Stack ──
   _updateStackTab(server);
@@ -736,9 +783,13 @@ function showServerSettings(serverId) {
   document.getElementById('settings-country').value      = server.country || '';
   document.getElementById('settings-ssh-user').value     = server.ssh_user || 'root';
   document.getElementById('settings-ssh-port').value     = server.ssh_port || 22;
-  // Sensitive fields — placeholder only, never pre-fill
-  document.getElementById('settings-ssh-password').value = '';
-  document.getElementById('settings-ssh-key').value      = '';
+  // Sensitive fields — clear value AND placeholder
+  const pwdInput = document.getElementById('settings-ssh-password');
+  pwdInput.value = '';
+  pwdInput.placeholder = 'Введите новый пароль для изменения';
+  const keyInput = document.getElementById('settings-ssh-key');
+  keyInput.value = '';
+  keyInput.placeholder = 'Вставьте приватный ключ для изменения';
   // Security checkboxes default all on (managed separately)
   document.getElementById('sec-password-login').checked = true;
   document.getElementById('sec-root-login').checked     = true;
@@ -804,14 +855,15 @@ async function loadServerInfoTab() {
 
   const res = await api.serverInfo(serverId);
   if (!res.ok) {
-    if (hint) hint.textContent = `Ошибка: ${res.error}`;
+    if (hint) { hint.textContent = `Ошибка: ${res.error}`; hint.classList.remove('hidden'); }
     return;
   }
-  const d = res.data;
-  document.getElementById('sov-os').textContent   = d.os_info    || '—';
-  document.getElementById('sov-cpu').textContent  = d.cpu_info   || '—';
-  document.getElementById('sov-ram').textContent  = d.ram_info   || '—';
-  document.getElementById('sov-disk').textContent = d.disk_info  || '—';
+  // Бэкенд возвращает { system_info: { os, cpu_cores, memory, uptime } }
+  const si = res.data.system_info || res.data;
+  document.getElementById('sov-os').textContent   = si.os        || si.os_info    || '—';
+  document.getElementById('sov-cpu').textContent  = si.cpu_cores || si.cpu_info   || '—';
+  document.getElementById('sov-ram').textContent  = si.memory    || si.ram_info   || '—';
+  document.getElementById('sov-disk').textContent = si.disk      || si.disk_info  || si.uptime || '—';
   if (hint) hint.classList.add('hidden');
 }
 

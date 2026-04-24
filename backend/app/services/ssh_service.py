@@ -246,19 +246,26 @@ def uninstall_stack(server: Server, services: list) -> Tuple[bool, str]:
 
 
 def get_server_info(server: Server) -> dict:
-    """Get basic server info (CPU, RAM, uptime)."""
+    """Get basic server info (OS, CPU, RAM, disk, uptime)."""
     try:
         with SSHClient(server) as ssh:
-            _, uptime, _ = ssh.exec("uptime -p")
-            _, cpu, _ = ssh.exec("nproc")
-            _, mem, _ = ssh.exec("free -m | awk '/^Mem:/{print $2\"/\"$3}'")
             _, os_info, _ = ssh.exec("cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2")
-            
+            _, cpu, _     = ssh.exec("nproc")
+            _, cpu_model, _ = ssh.exec("grep -m1 'model name' /proc/cpuinfo | cut -d: -f2")
+            _, mem, _     = ssh.exec("free -h | awk '/^Mem:/{print $3\"/\"$2}'")
+            _, disk, _    = ssh.exec("df -h / | awk 'NR==2{print $3\"/\"$2}'")
+            _, uptime, _  = ssh.exec("uptime -p")
+
+            cpu_label = cpu.strip()
+            if cpu_model.strip():
+                cpu_label = f"{cpu_model.strip()} ({cpu.strip()} ядер)"
+
             return {
-                "uptime": uptime.strip(),
-                "cpu_cores": cpu.strip(),
-                "memory": mem.strip(),
-                "os": os_info.strip(),
+                "os":        os_info.strip(),
+                "cpu_cores": cpu_label,
+                "memory":    mem.strip(),
+                "disk":      disk.strip(),
+                "uptime":    uptime.strip(),
             }
     except Exception as e:
         logger.error(f"Failed to get server info for {server.ip}: {e}")
