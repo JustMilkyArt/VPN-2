@@ -432,14 +432,14 @@
         </div>
       </div>
 
-      <!-- ШАГ 2: Поля (появляются после выбора роли) -->
+      <!-- ШАГ 2: Общие поля (появляются после выбора роли) -->
       <div id="server-fields" class="space-y-4 hidden">
 
         <!-- Название -->
         <div>
           <label class="form-label">Название сервера</label>
           <input name="name" type="text" id="add-server-name"
-                 placeholder="EU-DE-01" class="form-input" required>
+                 placeholder="EU-NL-01" class="form-input" required>
         </div>
 
         <!-- IP -->
@@ -448,38 +448,62 @@
           <input name="ip" id="add-server-ip" type="text"
                  placeholder="1.2.3.4" class="form-input" required
                  oninput="detectIpInfo()">
-          <!-- Результат определения страны -->
           <div id="add-server-geo" class="hidden mt-2 flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
             <img id="add-server-flag-img" src="" alt="" class="w-6 h-4 rounded-sm object-cover">
             <span id="add-server-geo-text" class="text-xs text-gray-400"></span>
           </div>
         </div>
 
-        <!-- Пароль SSH -->
-        <div>
+        <!-- EU: Пароль SSH -->
+        <div id="eu-fields">
           <label class="form-label">Пароль SSH</label>
-          <input name="ssh_password" type="password" class="form-input"
-                 placeholder="Пароль от сервера" autocomplete="off" required>
+          <input name="ssh_password" id="add-server-password" type="password" class="form-input"
+                 placeholder="Пароль от сервера" autocomplete="off">
+
+          <!-- Дополнительно для EU -->
+          <div class="mt-3">
+            <button type="button" onclick="toggleServerAdvanced()"
+              class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1 w-full">
+              <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform duration-200"></i>
+              <span>Дополнительные параметры</span>
+            </button>
+            <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label class="form-label">Пользователь SSH</label>
+                <input name="ssh_user" id="add-server-ssh-user" type="text" value="root" class="form-input">
+                <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
+              </div>
+              <div>
+                <label class="form-label">Порт SSH</label>
+                <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+                <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <!-- Дополнительно (скрыто) -->
-        <div>
-          <button type="button" onclick="toggleServerAdvanced()"
-            class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1 w-full">
-            <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform duration-200"></i>
-            <span>Дополнительные параметры</span>
-          </button>
-          <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-3 gap-3">
-            <div class="col-span-2">
-              <label class="form-label">Пользователь SSH</label>
-              <input name="ssh_user" type="text" value="root" class="form-input">
-              <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
+        <!-- RU: Пользователь + SSH-ключ -->
+        <div id="ru-fields" class="hidden space-y-4">
+          <div>
+            <label class="form-label">Пользователь SSH</label>
+            <input name="ssh_user_ru" id="add-server-ssh-user-ru" type="text" class="form-input"
+                   placeholder="fakeart">
+          </div>
+          <div>
+            <label class="form-label">SSH-ключ</label>
+            <div id="ssh-key-drop-area"
+              class="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer hover:border-brand-500 transition"
+              onclick="document.getElementById('ssh-key-file-input').click()"
+              ondragover="event.preventDefault();this.classList.add('border-brand-400')"
+              ondragleave="this.classList.remove('border-brand-400')"
+              ondrop="handleSshKeyDrop(event)">
+              <i class="fas fa-key text-2xl text-gray-600 mb-2 block"></i>
+              <p id="ssh-key-filename" class="text-sm text-gray-500">Перетащите файл ключа или нажмите для выбора</p>
+              <p class="text-xs text-gray-700 mt-1">Обычно файл называется <code class="text-gray-600">id_rsa</code> или <code class="text-gray-600">*.pem</code></p>
             </div>
-            <div>
-              <label class="form-label">Порт SSH</label>
-              <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
-              <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
-            </div>
+            <input type="file" id="ssh-key-file-input" class="hidden" accept=".pem,.key,*"
+                   onchange="handleSshKeyFile(this)">
+            <textarea name="ssh_key" id="add-server-ssh-key" class="hidden"></textarea>
           </div>
         </div>
 
@@ -504,18 +528,76 @@
   </div>
 </div>
 
-<!-- SERVER DETAIL -->
+<!-- SERVER DETAIL (4 вкладки) -->
 <div id="modal-server-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2" id="server-detail-title">
-        <i class="fas fa-server text-brand-400"></i>Сервер
-      </h3>
-      <button onclick="closeModal('modal-server-detail')" class="text-gray-500 hover:text-white transition p-1">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+
+    <!-- Шапка -->
+    <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-800 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <div id="sd-flag" class="flex-shrink-0"></div>
+        <div class="min-w-0">
+          <h3 id="sd-title" class="text-base font-bold text-white truncate">Сервер</h3>
+          <div id="sd-meta" class="flex items-center gap-2 mt-0.5"></div>
+        </div>
+      </div>
+      <button onclick="closeModal('modal-server-detail')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-4">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <div id="server-detail-content" class="p-6"></div>
+
+    <!-- Вкладки -->
+    <div class="flex border-b border-gray-800 flex-shrink-0 px-2">
+      <button onclick="sdTab('overview')" id="sd-tab-overview"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-brand-400 border-b-2 border-brand-500 transition">
+        <i class="fas fa-circle-info mr-1.5"></i>Обзор
+      </button>
+      <button onclick="sdTab('actions')" id="sd-tab-actions"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-bolt mr-1.5"></i>Действия
+      </button>
+      <button onclick="sdTab('stack')" id="sd-tab-stack"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-layer-group mr-1.5"></i>Стек
+      </button>
+      <button onclick="sdTab('params')" id="sd-tab-params"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-sliders mr-1.5"></i>Параметры
+      </button>
+    </div>
+
+    <!-- Контент вкладок -->
+    <div class="overflow-y-auto flex-1 p-6">
+
+      <!-- ОБЗОР -->
+      <div id="sd-pane-overview">
+        <div id="sd-overview-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- ДЕЙСТВИЯ -->
+      <div id="sd-pane-actions" class="hidden">
+        <div class="space-y-3" id="sd-actions-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- СТЕК -->
+      <div id="sd-pane-stack" class="hidden">
+        <div id="sd-stack-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- ПАРАМЕТРЫ -->
+      <div id="sd-pane-params" class="hidden">
+        <div id="sd-params-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+    </div>
   </div>
 </div>
 
@@ -685,141 +767,351 @@
 </div>
 
 <!-- SERVER SETTINGS -->
+<!-- SERVER SETTINGS — 4 tabs -->
 <div id="modal-server-settings" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-gear text-brand-400"></i>
-        Настройки: <span id="settings-server-title" class="text-brand-300 ml-1"></span>
-      </h3>
-      <button onclick="closeModal('modal-server-settings')" class="text-gray-500 hover:text-white transition p-1">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:90vh;">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="settings-server-flag" class="flex-shrink-0"></span>
+        <div class="min-w-0">
+          <h3 class="text-base font-bold text-white leading-tight" id="settings-server-title"></h3>
+          <span class="text-xs text-gray-500" id="settings-server-meta"></span>
+        </div>
+      </div>
+      <button onclick="closeModal('modal-server-settings')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-4">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <div class="p-6 space-y-6">
+
+    <!-- Tab bar -->
+    <div class="flex border-b border-gray-800 flex-shrink-0 px-2">
+      <button id="stab-overview" onclick="switchSettingsTab('overview')"
+        class="settings-tab active px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-circle-info mr-1.5"></i>Обзор
+      </button>
+      <button id="stab-actions" onclick="switchSettingsTab('actions')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-bolt mr-1.5"></i>Действия
+      </button>
+      <button id="stab-stack" onclick="switchSettingsTab('stack')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-layer-group mr-1.5"></i>Стек
+      </button>
+      <button id="stab-params" onclick="switchSettingsTab('params')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-sliders mr-1.5"></i>Параметры
+      </button>
+    </div>
+
+    <!-- Scrollable body -->
+    <div class="overflow-y-auto flex-1">
       <input type="hidden" id="settings-server-id">
 
-      <!-- 1. Основная информация -->
-      <div>
-        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <i class="fas fa-pen-to-square text-brand-400"></i> Редактирование
+      <!-- ─── TAB: OVERVIEW ─── -->
+      <div id="stab-content-overview" class="p-5 space-y-4">
+
+        <!-- Server info row -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">IP-адрес</p>
+            <p class="text-sm font-mono text-white" id="sov-ip">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Роль</p>
+            <p class="text-sm text-white" id="sov-role">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Страна</p>
+            <p class="text-sm text-white flex items-center gap-1.5" id="sov-country">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Домен</p>
+            <p class="text-sm text-white font-mono truncate" id="sov-domain">—</p>
+          </div>
         </div>
-        <div class="space-y-3">
-          <div>
-            <label class="form-label">Название</label>
-            <input id="settings-name" type="text" class="form-input" placeholder="EU-DE-01">
+
+        <!-- System info -->
+        <div>
+          <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+            <i class="fas fa-microchip text-brand-400"></i> Системная информация
+            <button onclick="loadServerInfoTab()" class="ml-auto text-gray-600 hover:text-gray-300 transition" title="Обновить">
+              <i class="fas fa-arrows-rotate text-xs"></i>
+            </button>
           </div>
-          <div>
-            <label class="form-label">Домен</label>
-            <input id="settings-domain" type="text" class="form-input" placeholder="admin.example.com">
+          <div id="sov-sysinfo" class="grid grid-cols-2 gap-2">
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">ОС</p>
+              <p class="text-xs text-gray-300" id="sov-os">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">CPU</p>
+              <p class="text-xs text-gray-300" id="sov-cpu">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">RAM</p>
+              <p class="text-xs text-gray-300" id="sov-ram">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">Диск</p>
+              <p class="text-xs text-gray-300" id="sov-disk">—</p>
+            </div>
           </div>
-          <div>
-            <label class="form-label">Заметки</label>
-            <textarea id="settings-notes" class="form-input h-16 resize-none" placeholder="Произвольные заметки..."></textarea>
-          </div>
-          <button onclick="saveServerInfo()"
-            class="w-full py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-            <i class="fas fa-floppy-disk text-xs"></i> Сохранить
-          </button>
+          <p id="sov-sysinfo-hint" class="text-xs text-gray-600 mt-2 text-center">
+            Нажмите <i class="fas fa-arrows-rotate"></i> для загрузки данных
+          </p>
         </div>
       </div>
 
-      <!-- 2. Перезагрузка -->
-      <div class="border-t border-gray-800 pt-5">
-        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <i class="fas fa-power-off text-yellow-400"></i> Перезагрузка ОС
+      <!-- ─── TAB: ACTIONS ─── -->
+      <div id="stab-content-actions" class="p-5 space-y-3 hidden">
+
+        <!-- Update -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Обновить статус</p>
+              <p class="text-xs text-gray-500 mt-0.5">Пинг, статус Online/Offline</p>
+            </div>
+            <button onclick="updateServerStatus()" id="btn-update-status"
+              class="flex-shrink-0 px-3 py-1.5 bg-brand-600/20 hover:bg-brand-600/40 border border-brand-700 rounded-lg text-xs font-medium text-brand-300 transition flex items-center gap-1.5">
+              <i class="fas fa-satellite-dish text-xs"></i> Обновить
+            </button>
+          </div>
+          <div id="action-ping-result" class="hidden mt-2 text-xs text-gray-400"></div>
         </div>
-        <p class="text-xs text-gray-500 mb-3">
-          Отправляет команду <code class="text-gray-400 bg-gray-800 px-1 rounded">reboot</code> через SSH.
-          Сервер сам поднимется через ~30–60 сек.
-        </p>
-        <button onclick="rebootServerAction()"
-          class="w-full py-2 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 rounded-lg text-sm font-medium text-yellow-300 transition flex items-center justify-center gap-2">
-          <i class="fas fa-rotate-right text-xs"></i> Перезагрузить сервер
+
+        <!-- Restart services -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Перезапустить сервисы</p>
+              <p class="text-xs text-gray-500 mt-0.5">Xray, AmneziaWG, WARP, NaiveProxy</p>
+            </div>
+            <button onclick="restartServicesAction()"
+              class="flex-shrink-0 px-3 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 rounded-lg text-xs font-medium text-yellow-300 transition flex items-center gap-1.5">
+              <i class="fas fa-rotate-right text-xs"></i> Рестарт
+            </button>
+          </div>
+        </div>
+
+        <!-- Redeploy config -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Передеплоить конфиги</p>
+              <p class="text-xs text-gray-500 mt-0.5">Пересоздать конфигурации без переустановки</p>
+            </div>
+            <button onclick="redeployConfigAction()"
+              class="flex-shrink-0 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-700 rounded-lg text-xs font-medium text-blue-300 transition flex items-center gap-1.5">
+              <i class="fas fa-upload text-xs"></i> Redeploy
+            </button>
+          </div>
+        </div>
+
+        <!-- Delete server -->
+        <div class="bg-gray-800/40 rounded-xl p-4 border border-red-900/40">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-red-300">Удалить сервер</p>
+              <p class="text-xs text-gray-500 mt-0.5">Все подключения этого сервера будут удалены</p>
+            </div>
+            <button onclick="deleteServerFromSettings()"
+              class="flex-shrink-0 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-700 rounded-lg text-xs font-medium text-red-300 transition flex items-center gap-1.5">
+              <i class="fas fa-trash text-xs"></i> Удалить
+            </button>
+          </div>
+        </div>
+
+        <p id="settings-action-msg" class="text-xs text-center text-gray-500"></p>
+      </div>
+
+      <!-- ─── TAB: STACK ─── -->
+      <div id="stab-content-stack" class="p-5 hidden">
+
+        <!-- Stack table -->
+        <div class="space-y-2 mb-4">
+          <!-- Xray -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-xray">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-xray" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">Xray-core</p>
+                <p class="text-xs text-gray-500" id="stack-status-xray">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-xray"></div>
+          </div>
+          <!-- AmneziaWG -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-awg">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-awg" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">AmneziaWG</p>
+                <p class="text-xs text-gray-500" id="stack-status-awg">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-awg"></div>
+          </div>
+          <!-- WARP -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-warp">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-warp" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">WARP</p>
+                <p class="text-xs text-gray-500" id="stack-status-warp">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-warp"></div>
+          </div>
+          <!-- NaiveProxy -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-naive">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-naive" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">NaiveProxy</p>
+                <p class="text-xs text-gray-500" id="stack-status-naive">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-naive"></div>
+          </div>
+        </div>
+
+        <!-- Destroy all -->
+        <button onclick="destroyAllStack()"
+          class="w-full py-2 bg-red-600/15 hover:bg-red-600/30 border border-red-800 rounded-xl text-sm font-medium text-red-400 transition flex items-center justify-center gap-2">
+          <i class="fas fa-bomb text-xs"></i> Снести весь стек
         </button>
+
+        <!-- Install output log -->
+        <div id="stack-output" class="hidden mt-3 p-3 bg-black/40 rounded-xl font-mono text-xs text-gray-400 whitespace-pre-wrap max-h-40 overflow-y-auto"></div>
       </div>
 
-      <!-- 3. Смена пароля SSH -->
-      <div class="border-t border-gray-800 pt-5">
-        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <i class="fas fa-key text-blue-400"></i> Смена пароля SSH
-        </div>
-        <div class="space-y-3">
-          <div>
-            <label class="form-label">Новый пароль</label>
-            <input id="settings-new-password" type="password" class="form-input"
-                   placeholder="Минимум 8 символов" autocomplete="new-password">
+      <!-- ─── TAB: PARAMS ─── -->
+      <div id="stab-content-params" class="p-5 space-y-5 hidden">
+
+        <!-- Basic -->
+        <div>
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i class="fas fa-tag text-brand-400"></i> Основное
+          </p>
+          <div class="space-y-3">
+            <div>
+              <label class="form-label">Название</label>
+              <input id="settings-name" type="text" class="form-input" placeholder="EU-DE-01">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="form-label">Роль</label>
+                <select id="settings-role" class="form-input">
+                  <option value="EU">EU Exit</option>
+                  <option value="RU">RU Entry</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">Страна (ISO)</label>
+                <input id="settings-country" type="text" class="form-input" placeholder="DE" maxlength="2">
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Домен</label>
+              <input id="settings-domain" type="text" class="form-input" placeholder="vpn.example.com">
+            </div>
+            <div>
+              <label class="form-label">Заметки</label>
+              <textarea id="settings-notes" class="form-input h-16 resize-none" placeholder="Произвольные заметки..."></textarea>
+            </div>
           </div>
-          <button onclick="changeServerPasswordAction()"
-            class="w-full py-2 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-700 rounded-lg text-sm font-medium text-blue-300 transition flex items-center justify-center gap-2">
-            <i class="fas fa-key text-xs"></i> Сменить пароль
+        </div>
+
+        <!-- SSH Access -->
+        <div class="border-t border-gray-800 pt-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i class="fas fa-terminal text-green-400"></i> SSH доступ
+          </p>
+          <div class="space-y-3">
+            <div class="grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label class="form-label">Пользователь</label>
+                <input id="settings-ssh-user" type="text" class="form-input" placeholder="root">
+              </div>
+              <div>
+                <label class="form-label">Порт</label>
+                <input id="settings-ssh-port" type="number" class="form-input" placeholder="22" min="1" max="65535">
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Пароль SSH</label>
+              <div class="relative">
+                <input id="settings-ssh-password" type="password" class="form-input pr-10" placeholder="••••••••" autocomplete="off">
+                <button type="button" onclick="togglePasswordVisibility('settings-ssh-password', this)"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition">
+                  <i class="fas fa-eye text-xs"></i>
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Приватный SSH-ключ</label>
+              <div class="relative">
+                <textarea id="settings-ssh-key" class="form-input font-mono text-xs h-20 resize-none pr-10"
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."></textarea>
+                <button type="button" onclick="toggleSshKeyVisibility(this)"
+                  class="absolute right-3 top-3 text-gray-500 hover:text-gray-300 transition">
+                  <i class="fas fa-eye text-xs"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Security -->
+        <div class="border-t border-gray-800 pt-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i class="fas fa-shield-halved text-purple-400"></i> Безопасность
+          </p>
+          <div class="space-y-2">
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+              <div>
+                <p class="text-sm text-white">Вход по паролю SSH</p>
+                <p class="text-xs text-gray-500">PasswordAuthentication в sshd</p>
+              </div>
+              <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500">
+            </label>
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+              <div>
+                <p class="text-sm text-white">Вход под root</p>
+                <p class="text-xs text-gray-500">PermitRootLogin в sshd</p>
+              </div>
+              <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500">
+            </label>
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+              <div>
+                <p class="text-sm text-white">Fail2Ban</p>
+                <p class="text-xs text-gray-500">Блокировка после 5 неудачных попыток</p>
+              </div>
+              <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500">
+            </label>
+            <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+              <div>
+                <p class="text-sm text-white">UFW Firewall</p>
+                <p class="text-xs text-gray-500">Разрешить только нужные порты</p>
+              </div>
+              <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500">
+            </label>
+          </div>
+        </div>
+
+        <!-- Save button -->
+        <div class="border-t border-gray-800 pt-4">
+          <button onclick="saveServerParams()"
+            class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-xl text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+            <i class="fas fa-floppy-disk text-xs"></i> Сохранить параметры
           </button>
         </div>
-      </div>
 
-      <!-- 4. Добавить SSH-ключ -->
-      <div class="border-t border-gray-800 pt-5">
-        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <i class="fas fa-shield-halved text-green-400"></i> Добавить SSH-ключ
-        </div>
-        <p class="text-xs text-gray-500 mb-3">
-          Публичный ключ будет добавлен в <code class="text-gray-400 bg-gray-800 px-1 rounded">~/.ssh/authorized_keys</code>
-        </p>
-        <div class="space-y-3">
-          <div>
-            <label class="form-label">Публичный SSH-ключ</label>
-            <textarea id="settings-ssh-pubkey" class="form-input h-20 resize-none font-mono text-xs"
-                      placeholder="ssh-ed25519 AAAA... user@machine"></textarea>
-          </div>
-          <button onclick="addServerSSHKeyAction()"
-            class="w-full py-2 bg-green-600/20 hover:bg-green-600/40 border border-green-700 rounded-lg text-sm font-medium text-green-300 transition flex items-center justify-center gap-2">
-            <i class="fas fa-plus text-xs"></i> Добавить ключ
-          </button>
-        </div>
       </div>
-
-      <!-- 5. Удалить тех стек -->
-      <div class="border-t border-gray-800 pt-5">
-        <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <i class="fas fa-trash text-red-400"></i> Удалить тех. стек
-        </div>
-        <p class="text-xs text-gray-500 mb-3">
-          Выбранные сервисы будут полностью удалены с сервера. Подключения через них перестанут работать.
-        </p>
-        <div class="space-y-2 mb-3">
-          <div id="uninst-xray-wrap">
-            <label class="flex items-center gap-3 p-2.5 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
-              <input type="checkbox" id="uninst-xray" class="w-4 h-4 accent-red-500">
-              <span class="text-sm text-white">Xray-core</span>
-            </label>
-          </div>
-          <div id="uninst-naive-wrap">
-            <label class="flex items-center gap-3 p-2.5 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
-              <input type="checkbox" id="uninst-naive" class="w-4 h-4 accent-red-500">
-              <span class="text-sm text-white">NaiveProxy</span>
-            </label>
-          </div>
-          <div id="uninst-awg-wrap">
-            <label class="flex items-center gap-3 p-2.5 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
-              <input type="checkbox" id="uninst-awg" class="w-4 h-4 accent-red-500">
-              <span class="text-sm text-white">AmneziaWG</span>
-            </label>
-          </div>
-          <div id="uninst-warp-wrap">
-            <label class="flex items-center gap-3 p-2.5 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
-              <input type="checkbox" id="uninst-warp" class="w-4 h-4 accent-red-500">
-              <span class="text-sm text-white">WARP</span>
-            </label>
-          </div>
-        </div>
-        <button onclick="uninstallStackAction()"
-          class="w-full py-2 bg-red-600/20 hover:bg-red-600/40 border border-red-700 rounded-lg text-sm font-medium text-red-300 transition flex items-center justify-center gap-2">
-          <i class="fas fa-trash text-xs"></i> Удалить выбранное
-        </button>
-      </div>
-
-      <p id="settings-action-msg" class="text-xs text-center text-gray-500"></p>
-    </div>
+    </div><!-- /scrollable body -->
   </div>
 </div>
 

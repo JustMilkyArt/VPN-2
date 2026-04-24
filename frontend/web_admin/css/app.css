@@ -461,3 +461,18 @@ button.role-card.role-card-active {
 .config-tab-pane {
   animation: fade-in 0.15s ease;
 }
+
+/* ─── Server Settings Tabs ───────────────────────────────────── */
+.settings-tab {
+  color: #6b7280;
+  border-bottom-color: transparent;
+  border-bottom-width: 2px;
+  white-space: nowrap;
+}
+.settings-tab:hover {
+  color: #d1d5db;
+}
+.settings-tab.active {
+  color: #a5b4fc;
+  border-bottom-color: #6366f1;
+}
