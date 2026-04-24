@@ -165,17 +165,17 @@ function renderServerCard(server) {
     <span style="font-family:monospace;font-size:0.8rem;color:#4b5563;">${server.ip}</span>
   </div>
 
-  <!-- Латентность (появляется после пинга) -->
-  <div style="margin-bottom:0.75rem;min-height:1rem;">
-    <span id="ping-val-${server.id}" class="hidden" style="font-size:0.7rem;color:#6b7280;"></span>
+  <!-- Пинг (появляется после обновления) -->
+  <div style="margin-bottom:0.625rem;min-height:1rem;">
+    <span id="ping-val-${server.id}" class="hidden" style="font-size:0.72rem;color:#6b7280;"></span>
   </div>
 
   <!-- Кнопки -->
   <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.25rem;border-top:1px solid #1f2937;padding-top:0.625rem;">
-    <button onclick="pingServer(${server.id})" class="action-btn" title="Пинг">
-      <i class="fas fa-satellite-dish"></i>
+    <button id="update-btn-${server.id}" onclick="pingServer(${server.id})" class="action-btn" title="Обновить статус и пинг">
+      <i class="fas fa-arrows-rotate"></i>
     </button>
-    <button onclick="showServerDetail(${server.id})" class="action-btn" title="Настройки">
+    <button onclick="showServerSettings(${server.id})" class="action-btn" title="Настройки">
       <i class="fas fa-sliders"></i>
     </button>
     <button onclick="confirmDeleteServer(${server.id}, '${server.name}')" class="action-btn danger" title="Удалить">
@@ -188,14 +188,13 @@ function renderServerCard(server) {
 
 // ───────────────── PING SERVER ─────────────────
 async function pingServer(serverId) {
-  // Анимируем кнопку пинга
-  const card = document.getElementById(`server-card-${serverId}`);
-  const btn  = card?.querySelector('[title="Пинг"]');
+  // Анимируем кнопку обновления
+  const btn = document.getElementById(`update-btn-${serverId}`);
   if (btn) { btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;"></span>'; btn.disabled = true; }
 
   const res = await api.pingServer(serverId);
 
-  if (btn) { btn.innerHTML = '<i class="fas fa-satellite-dish"></i>'; btn.disabled = false; }
+  if (btn) { btn.innerHTML = '<i class="fas fa-arrows-rotate"></i>'; btn.disabled = false; }
 
   if (res.ok) {
     const { reachable, message, latency_ms } = res.data;
@@ -222,11 +221,8 @@ async function pingServer(serverId) {
       }
     }
 
-    const latencyStr = latency_ms !== null ? ` — ${latency_ms} ms` : '';
-    toast(
-      reachable ? `✓ Доступен${latencyStr}` : `✗ Недоступен: ${message}`,
-      reachable ? 'success' : 'error', 4000
-    );
+    // Тихое обновление — тост только при ручном клике через кнопку
+    // (при авто-пинге toast не нужен, но он вызывается только из кнопки)
 
     // Обновляем кеш
     const srv = serversData.find(s => s.id === serverId);
@@ -273,8 +269,11 @@ function toggleServerAdvanced() {
 }
 
 function selectRole(role) {
-  document.querySelector('#add-server-form [name=role][value=EU]').checked = (role === 'EU');
-  document.querySelector('#add-server-form [name=role][value=RU]').checked = (role === 'RU');
+  // Устанавливаем radio
+  const radioEU = document.querySelector('#add-server-form [name=role][value=EU]');
+  const radioRU = document.querySelector('#add-server-form [name=role][value=RU]');
+  if (radioEU) radioEU.checked = (role === 'EU');
+  if (radioRU) radioRU.checked = (role === 'RU');
 
   const euBtn = document.getElementById('role-card-eu');
   const ruBtn = document.getElementById('role-card-ru');
@@ -413,29 +412,43 @@ async function detectIpInfo() {
     geoEl.classList.remove('hidden');
     flagImg.src = '';
     geoText.textContent = 'Определяю страну...';
+    geoText.className = 'text-xs text-gray-400';
 
+    // Пробуем ip-api.com (надёжнее, не требует ключа для локальных запросов)
     try {
-      const resp = await fetch(`https://ipwho.is/${ip}`);
+      const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,countryCode`);
       const data = await resp.json();
 
-      if (data.success && data.country_code) {
-        const code = data.country_code.toLowerCase();
+      if (data.status === 'success' && data.countryCode) {
+        const code = data.countryCode.toLowerCase();
         const name = data.country;
-
-        countryInput.value = data.country_code.toUpperCase();
-
+        countryInput.value = data.countryCode.toUpperCase();
         flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
         flagImg.alt = name;
         geoText.textContent = name;
         geoText.className = 'text-xs text-gray-300';
-      } else {
-        geoEl.classList.add('hidden');
-        countryInput.value = '??';
+        return;
       }
-    } catch {
-      geoEl.classList.add('hidden');
-    }
-  }, 600); // ждём 600мс после последнего ввода
+    } catch { /* fallback */ }
+
+    // Фallback на ipwho.is
+    try {
+      const resp2 = await fetch(`https://ipwho.is/${ip}`);
+      const data2 = await resp2.json();
+      if (data2.success && data2.country_code) {
+        const code = data2.country_code.toLowerCase();
+        countryInput.value = data2.country_code.toUpperCase();
+        flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
+        flagImg.alt = data2.country;
+        geoText.textContent = data2.country;
+        geoText.className = 'text-xs text-gray-300';
+        return;
+      }
+    } catch { /* ignore */ }
+
+    geoEl.classList.add('hidden');
+    countryInput.value = '??';
+  }, 700);
 }
 
 document.getElementById('add-server-form').addEventListener('submit', async (e) => {
