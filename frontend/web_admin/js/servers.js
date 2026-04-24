@@ -871,37 +871,55 @@ async function loadServerInfoTab() {
 
 async function updateServerStatus() {
   const serverId = parseInt(document.getElementById('settings-server-id').value);
-  const btn = document.getElementById('btn-update-status');
+  const btn    = document.getElementById('btn-update-status');
   const result = document.getElementById('action-ping-result');
-  if (btn) { btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;"></span> Проверяю...'; btn.disabled = true; }
 
-  const res = await api.pingServer(serverId);
+  if (btn) { btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;"></span> Проверяю...'; btn.disabled = true; }
+  if (result) { result.textContent = 'Пинг...'; result.style.color = '#9ca3af'; result.classList.remove('hidden'); }
+
+  // Пинг и speed test параллельно
+  const [pingRes, speedRes] = await Promise.all([
+    api.pingServer(serverId),
+    api.speedTestServer(serverId),
+  ]);
 
   if (btn) { btn.innerHTML = '<i class="fas fa-satellite-dish text-xs"></i> Обновить'; btn.disabled = false; }
 
-  if (res.ok) {
-    const { reachable, latency_ms } = res.data;
-    const latStr = latency_ms !== null ? ` · ${latency_ms} ms` : '';
+  if (pingRes.ok) {
+    const { reachable, latency_ms } = pingRes.data;
+    const speed_mbit = speedRes.ok ? speedRes.data.speed_mbit : null;
+
+    // Строка результата: "✓ Online · 42 ms · 120 Mb/s"
+    let line = reachable ? '✓ Online' : '✗ Offline';
+    if (reachable && latency_ms !== null) line += ` · ${latency_ms} ms`;
+    if (reachable && speed_mbit !== null) line += ` · ${speed_mbit} Mb/s`;
+
     if (result) {
-      result.textContent = reachable ? `✓ Online${latStr}` : '✗ Offline';
+      result.textContent = line;
       result.style.color = reachable ? '#4ade80' : '#f87171';
-      result.classList.remove('hidden');
     }
-    // Update card too
+
+    // Обновляем карточку сервера
     const dot  = document.getElementById(`status-dot-${serverId}`);
     const txt  = document.getElementById(`status-text-${serverId}`);
     const ping = document.getElementById(`ping-val-${serverId}`);
     if (dot) dot.className = `status-dot ${reachable ? 'online' : 'offline'}`;
     if (txt) { txt.style.color = reachable ? '#4ade80' : '#f87171'; txt.textContent = reachable ? 'Online' : 'Offline'; }
-    if (ping && latency_ms !== null) {
-      ping.textContent = `${latency_ms} ms`;
-      ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
-      ping.classList.remove('hidden');
+    if (ping) {
+      let cardLine = '';
+      if (latency_ms !== null) cardLine += `${latency_ms} ms`;
+      if (speed_mbit !== null) cardLine += (cardLine ? ` · ${speed_mbit} Mb/s` : `${speed_mbit} Mb/s`);
+      if (cardLine) {
+        ping.textContent = cardLine;
+        ping.style.color = latency_ms < 100 ? '#4ade80' : latency_ms < 300 ? '#facc15' : '#f87171';
+        ping.classList.remove('hidden');
+      }
     }
+
     const srv = serversData.find(s => s.id === serverId);
     if (srv) srv.status = reachable ? 'online' : 'offline';
   } else {
-    if (result) { result.textContent = `Ошибка: ${res.error}`; result.style.color = '#f87171'; result.classList.remove('hidden'); }
+    if (result) { result.textContent = `Ошибка: ${pingRes.error}`; result.style.color = '#f87171'; }
   }
 }
 

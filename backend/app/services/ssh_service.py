@@ -158,6 +158,26 @@ def test_connection(server: Server) -> Tuple[bool, str]:
         return False, f"Connection error: {str(e)}"
 
 
+def speed_test(server: Server) -> Optional[float]:
+    """Measure download speed in Mbit/s via SSH curl against a small public file."""
+    try:
+        with SSHClient(server) as ssh:
+            # ~10 MB file from Cloudflare speed test, timeout 15s
+            cmd = (
+                "curl -o /dev/null -s --max-time 15 --connect-timeout 5 "
+                "-w '%{speed_download}' "
+                "https://speed.cloudflare.com/__down?bytes=5000000"
+            )
+            code, out, _ = ssh.exec(cmd, timeout=20)
+            if code == 0 and out.strip():
+                bytes_per_sec = float(out.strip().strip("'"))
+                mbit = round(bytes_per_sec * 8 / 1_000_000, 1)
+                return mbit
+    except Exception as e:
+        logger.warning(f"Speed test failed for {server.ip}: {e}")
+    return None
+
+
 def ping_with_latency(server: Server) -> Tuple[bool, str, Optional[float]]:
     """Test SSH connection and measure latency in ms. Returns (success, message, latency_ms)."""
     try:

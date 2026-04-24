@@ -101,6 +101,25 @@ def ping_server(
     }
 
 
+@router.post("/{server_id}/speedtest", summary="Measure server download speed via SSH curl")
+def server_speedtest(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    from app.services.ssh_service import speed_test
+    mbit = speed_test(server)
+    return {
+        "server_id": server_id,
+        "speed_mbit": mbit,
+        "available": mbit is not None,
+    }
+
+
 @router.get("/{server_id}/info", summary="Get server system info")
 def server_info(
     server_id: int,
