@@ -476,3 +476,61 @@ button.role-card.role-card-active {
   color: #a5b4fc;
   border-bottom-color: #6366f1;
 }
+
+/* ─── Server Setup Progress Modal ───────────────────────────── */
+.stp-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.3s;
+  border: 1.5px solid #374151;
+  background: #111827;
+}
+.stp-dot i { font-size: 11px; }
+
+.stp-pending { border-color: #374151; background: #111827; }
+.stp-pending i { color: #4b5563; }
+
+.stp-running { border-color: #7c3aed; background: #1e1230; box-shadow: 0 0 0 3px rgba(124,58,237,0.15); }
+.stp-running i { color: #a78bfa; }
+
+.stp-ok { border-color: #16a34a; background: #052e16; }
+.stp-ok i { color: #4ade80; }
+
+.stp-error { border-color: #dc2626; background: #2d0a0a; }
+.stp-error i { color: #f87171; }
+
+.stp-warn { border-color: #d97706; background: #1c1200; }
+.stp-warn i { color: #fbbf24; }
+
+.stp-connector {
+  width: 1px;
+  height: 10px;
+  background: #1f2937;
+  margin-left: 37px;
+  transition: background 0.4s;
+}
+.stp-connector.done { background: rgba(22,163,74,0.35); }
+
+.stp-log {
+  border-left: 1px solid #1f2937;
+  margin-left: 13px;
+  padding: 6px 0 4px 16px;
+}
+.stp-log-line {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  line-height: 1.65;
+  color: #6b7280;
+}
+.stp-log-line.ok   { color: #4ade80; }
+.stp-log-line.err  { color: #f87171; }
+.stp-log-line.warn { color: #fbbf24; }
+.stp-log-line.sub  { color: #374151; padding-left: 12px; }
+
+@keyframes stp-spin { to { transform: rotate(360deg); } }
+.stp-spin { animation: stp-spin 0.9s linear infinite; display: inline-block; }

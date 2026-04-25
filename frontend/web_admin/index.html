@@ -446,8 +446,7 @@
         <div>
           <label class="form-label">IP-адрес</label>
           <input name="ip" id="add-server-ip" type="text"
-                 placeholder="1.2.3.4" class="form-input" required
-                 oninput="detectIpInfo()">
+                 placeholder="1.2.3.4" class="form-input" required>
           <div id="add-server-geo" class="hidden mt-2 flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
             <img id="add-server-flag-img" src="" alt="" class="w-6 h-4 rounded-sm object-cover">
             <span id="add-server-geo-text" class="text-xs text-gray-400"></span>
@@ -613,84 +612,13 @@
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <form id="add-connection-form" class="p-6 space-y-4">
-      <!-- Name -->
-      <div>
-        <label class="form-label">Название</label>
-        <input name="name" type="text" id="conn-name-input" placeholder="VLESS-DE-01" class="form-input" required>
-      </div>
-
-      <!-- Server -->
-      <div>
-        <label class="form-label">Сервер</label>
-        <div class="custom-select-wrap">
-          <select name="server_id" id="conn-server-select" class="form-input custom-select" required>
-            <option value="">— Выберите сервер —</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Protocol -->
-      <div>
-        <label class="form-label">Протокол</label>
-        <div class="custom-select-wrap">
-          <select name="protocol" id="conn-protocol-select" class="form-input custom-select" required>
-            <option value="">— Выберите протокол —</option>
-            <option value="vless_reality" selected>🔒 VLESS + Reality (рекомендуется)</option>
-            <option value="amnezia_wg">🛡️ AmneziaWG</option>
-            <option value="trojan">⚡ Trojan</option>
-            <option value="naive_proxy">🌐 NaiveProxy</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- SNI block (VLESS+Reality only) -->
-      <div id="conn-sni-block" class="hidden">
-        <label class="form-label flex items-center gap-2">
-          Reality SNI
-          <span class="text-xs text-gray-500 font-normal">— домен для маскировки</span>
-        </label>
-        <div class="custom-select-wrap">
-          <select name="reality_server_name" id="conn-sni-select" class="form-input custom-select">
-          </select>
-        </div>
-        <p class="text-gray-500 text-xs mt-1.5">
-          <i class="fas fa-star text-yellow-400 mr-1"></i>Рекомендуемый выбран автоматически
-        </p>
-      </div>
-
-      <!-- Exit server block (for cascade RU→EU, optional) -->
-      <div id="conn-exit-server-block" class="hidden">
-        <label class="form-label flex items-center gap-2">
-          EU Exit-сервер
-          <span class="text-xs text-gray-500 font-normal">— для каскада RU → EU</span>
-        </label>
-        <div class="custom-select-wrap">
-          <select name="exit_server_id" id="conn-exit-select" class="form-input custom-select">
-            <option value="">— Прямой выход (без каскада) —</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Info hint -->
-      <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400 space-y-1">
-        <div><i class="fas fa-info-circle text-brand-400 mr-1"></i>Ключи, порт и конфиг деплоятся автоматически через SSH</div>
-        <div id="conn-proto-hint" class="text-gray-500"></div>
-      </div>
-
-      <div id="add-connection-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-      <div id="add-connection-progress" class="hidden p-3 bg-brand-900/50 border border-brand-700 rounded-lg text-brand-300 text-sm flex items-center gap-2">
-        <i class="fas fa-spinner fa-spin"></i><span>Деплой подключения на сервер...</span>
-      </div>
-      <div class="flex gap-3 pt-2">
-        <button type="button" onclick="closeModal('modal-add-connection')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
-        <button type="submit" id="conn-submit-btn"
-          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-rocket text-xs"></i>Создать и задеплоить
-        </button>
-      </div>
-    </form>
+    <div class="p-8 text-center text-gray-400">
+      <i class="fas fa-tools text-4xl text-gray-600 mb-4 block"></i>
+      <p class="text-sm">Создание подключений временно недоступно.</p>
+      <p class="text-xs text-gray-500 mt-1">Функция находится в разработке.</p>
+      <button type="button" onclick="closeModal('modal-add-connection')"
+        class="mt-6 px-6 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Закрыть</button>
+    </div>
   </div>
 </div>
 
@@ -945,7 +873,7 @@
             <div class="flex items-center gap-3">
               <span id="stack-icon-xray" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
               <div>
-                <p class="text-sm font-medium text-white">Xray-core</p>
+                <p class="text-sm font-medium text-white">VLESS+Reality <span class="text-xs text-gray-500 font-normal">(Xray)</span></p>
                 <p class="text-xs text-gray-500" id="stack-status-xray">Не установлен</p>
               </div>
             </div>
@@ -956,18 +884,18 @@
             <div class="flex items-center gap-3">
               <span id="stack-icon-awg" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
               <div>
-                <p class="text-sm font-medium text-white">AmneziaWG</p>
+                <p class="text-sm font-medium text-white">AmneziaWG <span class="text-xs text-gray-500 font-normal">(AWG)</span></p>
                 <p class="text-xs text-gray-500" id="stack-status-awg">Не установлен</p>
               </div>
             </div>
             <div class="flex gap-1.5" id="stack-btns-awg"></div>
           </div>
-          <!-- WARP -->
+          <!-- WARP (только RU) -->
           <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-warp">
             <div class="flex items-center gap-3">
               <span id="stack-icon-warp" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
               <div>
-                <p class="text-sm font-medium text-white">WARP</p>
+                <p class="text-sm font-medium text-white">WARP <span class="text-xs text-gray-500 font-normal">(Cloudflare)</span></p>
                 <p class="text-xs text-gray-500" id="stack-status-warp">Не установлен</p>
               </div>
             </div>
@@ -978,7 +906,7 @@
             <div class="flex items-center gap-3">
               <span id="stack-icon-naive" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
               <div>
-                <p class="text-sm font-medium text-white">NaiveProxy</p>
+                <p class="text-sm font-medium text-white">NaiveProxy <span class="text-xs text-gray-500 font-normal">(Caddy)</span></p>
                 <p class="text-xs text-gray-500" id="stack-status-naive">Не установлен</p>
               </div>
             </div>
@@ -1225,7 +1153,7 @@
       </div>
       <div>
         <label class="form-label">Домен</label>
-        <input id="add-domain-name" type="text" placeholder="milkyims.com" class="form-input" autocomplete="off">
+        <input id="add-domain-name" type="text" placeholder="example.com" class="form-input" autocomplete="off">
       </div>
       <div>
         <label class="form-label">Porkbun API Key</label>
@@ -1260,13 +1188,13 @@
       </button>
     </div>
     <div class="p-6 space-y-4">
-      <div class="text-sm text-gray-400">
-        Домен: <span id="subdomain-domain-name" class="font-semibold text-white"></span>
-      </div>
       <div>
         <label class="form-label">Имя поддомена</label>
-        <input id="subdomain-name-input" type="text" placeholder="admin" class="form-input" oninput="onSubdomainNameInput()" autocomplete="off">
-        <div class="mt-1 text-xs text-gray-400">
+        <div class="flex items-center gap-0">
+          <input id="subdomain-name-input" type="text" placeholder="название" class="form-input rounded-r-none flex-1" oninput="onSubdomainNameInput()" autocomplete="off">
+          <span class="inline-flex items-center px-3 py-2 bg-gray-700 border border-l-0 border-gray-600 rounded-r-lg text-sm text-gray-300 font-mono whitespace-nowrap">.<span id="subdomain-domain-name" class="text-gray-300"></span></span>
+        </div>
+        <div class="mt-1 text-xs text-gray-500">
           Полное имя: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
         </div>
       </div>
@@ -1276,14 +1204,16 @@
           <select id="subdomain-type-select" class="form-input custom-select">
             <option value="admin_panel">🖥 Админ-панель</option>
             <option value="client_site">🌐 Клиентский сайт</option>
-            <option value="vpn">🔒 VPN</option>
-            <option value="none">— Без назначения</option>
+            <option value="swagger">📄 Swagger</option>
+            <option value="naiveproxy_eu">🇪🇺 NaiveProxy (EU)</option>
+            <option value="naiveproxy_ru">🇷🇺 NaiveProxy (RU)</option>
           </select>
         </div>
         <div class="mt-2 text-xs text-gray-400 space-y-1">
           <div><span class="text-brand-400">Админ-панель</span> — создаст A-запись, SSL и настроит Nginx для переключения на HTTPS</div>
           <div><span class="text-purple-400">Клиентский сайт</span> — зарезервирует поддомен (настройка позже)</div>
-          <div><span class="text-green-400">VPN</span> — зарезервирует поддомен для использования в подключениях</div>
+          <div><span class="text-yellow-400">Swagger</span> — поддомен для документации API</div>
+          <div><span class="text-blue-400">NaiveProxy (EU/RU)</span> — поддомен для NaiveProxy прокси</div>
         </div>
       </div>
       <div id="create-subdomain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
@@ -1311,6 +1241,144 @@
       </button>
     </div>
     <div id="progress-steps-container" class="p-6 space-y-1 max-h-[60vh] overflow-y-auto"></div>
+  </div>
+</div>
+
+<!-- SERVER SETUP PROGRESS MODAL -->
+<div id="modal-server-setup" class="modal-overlay hidden fixed inset-0 flex items-center justify-center z-50 p-4"
+     style="background:rgba(3,7,18,0.85); backdrop-filter:blur(8px);">
+  <div style="background:#13161e; border:1px solid #1a1f2e; border-radius:16px; width:100%; max-width:480px; overflow:hidden; animation:slide-up 0.2s ease;">
+
+    <!-- Header -->
+    <div style="padding:20px 24px 16px; border-bottom:1px solid #1a1f2e;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span id="setup-role-tag" style="font-size:10px; padding:2px 8px; border-radius:6px; font-weight:700; letter-spacing:0.04em; background:#1e3a5f; color:#93c5fd;">EU</span>
+          <span id="setup-ip-tag" style="font-size:11px; padding:2px 8px; border-radius:6px; background:#111827; color:#4b5563; border:1px solid #1f2937; font-family:monospace;"></span>
+        </div>
+        <span id="setup-server-name" style="font-size:11px; color:#4b5563;"></span>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div>
+          <p id="setup-modal-title" style="font-size:15px; font-weight:700; color:#f9fafb; margin:0;">Настройка сервера</p>
+          <p id="setup-modal-subtitle" style="font-size:12px; color:#6b7280; margin:3px 0 0;">Шаги выполняются последовательно</p>
+        </div>
+        <div id="setup-status-dot" style="width:8px;height:8px;border-radius:50%;background:#4b5563;box-shadow:0 0 0 3px rgba(75,85,99,0.2);flex-shrink:0;"></div>
+      </div>
+      <!-- Progress bar -->
+      <div style="height:2px; background:#1f2937; border-radius:2px; overflow:hidden; margin-top:14px;">
+        <div id="setup-progress-fill" style="height:100%; background:linear-gradient(90deg,#7c3aed,#a78bfa); border-radius:2px; width:0%; transition:width 0.4s ease;"></div>
+      </div>
+    </div>
+
+    <!-- Steps -->
+    <div style="padding:12px 24px; max-height:52vh; overflow-y:auto;" id="setup-steps-list">
+
+      <!-- Шаг 1 -->
+      <div id="setup-step-1" style="border-bottom:1px solid #0f1117; padding:8px 0;">
+        <div style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; padding:4px 6px; border-radius:8px;" onclick="toggleSetupStep(1)">
+          <div id="setup-dot-1" class="stp-dot stp-pending"></div>
+          <div style="flex:1; min-width:0; padding-top:3px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:13px; font-weight:600; color:#d1d5db;">Проверка SSH-подключения</span>
+              <span id="setup-time-1" style="font-size:10px; color:#4b5563;"></span>
+            </div>
+            <p style="font-size:11px; color:#4b5563; margin:2px 0 0;">Соединение, права пользователя, версия ОС</p>
+          </div>
+        </div>
+        <div id="setup-step-1-log" class="hidden stp-log"></div>
+      </div>
+
+      <div id="setup-conn-1" class="stp-connector"></div>
+
+      <!-- Шаг 2 -->
+      <div id="setup-step-2" style="border-bottom:1px solid #0f1117; padding:8px 0;">
+        <div style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; padding:4px 6px; border-radius:8px;" onclick="toggleSetupStep(2)">
+          <div id="setup-dot-2" class="stp-dot stp-pending"></div>
+          <div style="flex:1; min-width:0; padding-top:3px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:13px; font-weight:600; color:#d1d5db;">Настройка безопасности</span>
+              <span id="setup-time-2" style="font-size:10px; color:#4b5563;"></span>
+            </div>
+            <p style="font-size:11px; color:#4b5563; margin:2px 0 0;">Обновление пакетов, Fail2Ban, UFW, SSH-ключ, смена порта</p>
+          </div>
+        </div>
+        <div id="setup-step-2-log" class="hidden stp-log"></div>
+      </div>
+
+      <div id="setup-conn-2" class="stp-connector"></div>
+
+      <!-- Шаг 3 -->
+      <div id="setup-step-3" style="border-bottom:1px solid #0f1117; padding:8px 0;">
+        <div style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; padding:4px 6px; border-radius:8px;" onclick="toggleSetupStep(3)">
+          <div id="setup-dot-3" class="stp-dot stp-pending"></div>
+          <div style="flex:1; min-width:0; padding-top:3px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:13px; font-weight:600; color:#d1d5db;">Установка стека</span>
+              <span id="setup-time-3" style="font-size:10px; color:#4b5563;"></span>
+            </div>
+            <p style="font-size:11px; color:#4b5563; margin:2px 0 0;">Xray-core, AmneziaWG, NaiveProxy + Caddy</p>
+          </div>
+        </div>
+        <div id="setup-step-3-log" class="hidden stp-log"></div>
+      </div>
+
+      <div id="setup-conn-3" class="stp-connector"></div>
+
+      <!-- Шаг 4 -->
+      <div id="setup-step-4" style="border-bottom:1px solid #0f1117; padding:8px 0;">
+        <div style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; padding:4px 6px; border-radius:8px;" onclick="toggleSetupStep(4)">
+          <div id="setup-dot-4" class="stp-dot stp-pending"></div>
+          <div style="flex:1; min-width:0; padding-top:3px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:13px; font-weight:600; color:#d1d5db;">Сбор параметров сервера</span>
+              <span id="setup-time-4" style="font-size:10px; color:#4b5563;"></span>
+            </div>
+            <p style="font-size:11px; color:#4b5563; margin:2px 0 0;">Часовой пояс, публичные ключи, версии сервисов</p>
+          </div>
+        </div>
+        <div id="setup-step-4-log" class="hidden stp-log"></div>
+      </div>
+
+      <div id="setup-conn-4" class="stp-connector"></div>
+
+      <!-- Шаг 5 -->
+      <div id="setup-step-5" style="padding:8px 0;">
+        <div style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; padding:4px 6px; border-radius:8px;" onclick="toggleSetupStep(5)">
+          <div id="setup-dot-5" class="stp-dot stp-pending"></div>
+          <div style="flex:1; min-width:0; padding-top:3px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:13px; font-weight:600; color:#d1d5db;">Финальная проверка сервисов</span>
+              <span id="setup-time-5" style="font-size:10px; color:#4b5563;"></span>
+            </div>
+            <p style="font-size:11px; color:#4b5563; margin:2px 0 0;">SSH, systemctl, HTTPS, UFW, Fail2Ban, ping</p>
+          </div>
+        </div>
+        <div id="setup-step-5-log" class="hidden stp-log"></div>
+      </div>
+
+    </div>
+
+    <!-- Error block -->
+    <div id="setup-error-block" class="hidden" style="margin:0 24px 12px; padding:10px 14px; background:#1a0a0a; border:1px solid #3f0a0a; border-radius:10px;">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <i class="fas fa-circle-exclamation" style="color:#f87171; font-size:12px; margin-top:2px; flex-shrink:0;"></i>
+        <p id="setup-error-text" style="font-size:11px; color:#fca5a5; margin:0; line-height:1.6; font-family:monospace; white-space:pre-wrap;"></p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:14px 24px 20px; display:flex; gap:8px; border-top:1px solid #1a1f2e; align-items:center;">
+      <button id="setup-btn-retry" onclick="retryServerSetup()" class="hidden" style="display:none; align-items:center; gap:6px; padding:9px 16px; border-radius:10px; font-size:13px; font-weight:600; background:#4c1d95; color:#ddd6fe; border:none; cursor:pointer;">
+        <i class="fas fa-rotate-right" style="font-size:11px;"></i> Повторить шаг
+      </button>
+      <button id="setup-btn-cancel" onclick="cancelServerSetup()" style="display:flex; align-items:center; gap:6px; padding:9px 16px; border-radius:10px; font-size:13px; font-weight:500; background:transparent; color:#f87171; border:1px solid #450a0a; cursor:pointer; margin-left:auto;">
+        Отменить
+      </button>
+      <button id="setup-btn-done" onclick="closeServerSetup()" class="hidden" style="display:none; align-items:center; gap:6px; padding:9px 16px; border-radius:10px; font-size:13px; font-weight:600; background:#166534; color:#bbf7d0; border:none; cursor:pointer;">
+        <i class="fas fa-check" style="font-size:11px;"></i> Готово
+      </button>
+    </div>
   </div>
 </div>
 

@@ -522,6 +522,27 @@ document.getElementById('add-server-form').addEventListener('submit', async (e) 
   const errEl = document.getElementById('add-server-error');
   errEl.classList.add('hidden');
 
+  // Детект страны по IP перед созданием
+  const ipVal = form.querySelector('[name=ip]').value.trim();
+  if (ipVal && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ipVal)) {
+    clearTimeout(_ipDetectTimer);
+    try {
+      const resp = await fetch(`https://ip-api.com/json/${ipVal}?fields=status,country,countryCode`);
+      const data = await resp.json();
+      if (data.status === 'success' && data.countryCode) {
+        const code = data.countryCode.toLowerCase();
+        document.getElementById('add-server-country').value = data.countryCode.toUpperCase();
+        const flagImg = document.getElementById('add-server-flag-img');
+        const geoText = document.getElementById('add-server-geo-text');
+        const geoEl   = document.getElementById('add-server-geo');
+        flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
+        flagImg.alt = data.country;
+        geoText.textContent = data.country;
+        geoEl.classList.remove('hidden');
+      }
+    } catch { /* тихо игнорируем */ }
+  }
+
   const role = form.querySelector('[name=role]:checked')?.value;
   if (!role) {
     errEl.textContent = 'Выберите роль сервера';
@@ -579,8 +600,10 @@ document.getElementById('add-server-form').addEventListener('submit', async (e) 
 
   if (res.ok) {
     closeModal('modal-add-server');
-    toast(`Сервер ${res.data.name} добавлен`, 'success');
-    loadServers();
+    // Запускаем автонастройку сервера
+    const srv = res.data;
+    await api.request(`/servers/${srv.id}/setup`, { method: 'POST' });
+    openServerSetupModal(srv.id, srv.name, srv.ip, srv.role);
   } else {
     errEl.textContent = typeof res.error === 'string' ? res.error : JSON.stringify(res.error);
     errEl.classList.remove('hidden');
@@ -673,7 +696,7 @@ async function showServerDetail(serverId) {
       ${renderServiceBadge('Xray-core', server.xray_installed)}
       ${renderServiceBadge('NaiveProxy', server.naiveproxy_installed)}
       ${renderServiceBadge('AmneziaWG', server.awg_installed)}
-      ${renderServiceBadge('WARP', server.warp_installed)}
+      ${(server.role || '').toUpperCase() !== 'EU' ? renderServiceBadge('WARP', server.warp_installed) : ''}
     </div>
   </div>
 
@@ -911,10 +934,16 @@ async function applySecSetting(setting, enabled) {
 }
 
 function _updateStackTab(server) {
+  const isEU = (server.role || '').toUpperCase() === 'EU';
+
+  // Для EU скрываем строку WARP
+  const warpRow = document.getElementById('stack-row-warp');
+  if (warpRow) warpRow.style.display = isEU ? 'none' : '';
+
   const services = [
     { key: 'xray',  label: 'Xray-core',   installed: server.xray_installed },
     { key: 'awg',   label: 'AmneziaWG',   installed: server.awg_installed },
-    { key: 'warp',  label: 'WARP',        installed: server.warp_installed },
+    ...(!isEU ? [{ key: 'warp', label: 'WARP', installed: server.warp_installed }] : []),
     { key: 'naive', label: 'NaiveProxy',  installed: server.naiveproxy_installed },
   ];
   const svcMap = { xray: 'xray', awg: 'awg', warp: 'warp', naive: 'naiveproxy' };
@@ -1247,3 +1276,280 @@ window.restartServerServices      = restartServerServices;
 window.redeployServerConfig       = redeployServerConfig;
 window.handleSshKeyFile           = handleSshKeyFile;
 window.handleSshKeyDrop           = handleSshKeyDrop;
+
+// ───────────────── SERVER SETUP PROGRESS ─────────────────
+
+let _setupServerId  = null;
+let _setupPollTimer = null;
+let _setupServer    = null; // полный объект сервера
+
+const SETUP_STEP_MAP = { step1:1, step2:2, step3:3, step4:4, step5:5 };
+
+// ── вспомогательные функции UI ──────────────────────────
+
+function _escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _stpSetDot(n, state) {
+  // state: 'pending' | 'running' | 'ok' | 'error' | 'warn'
+  const dot  = document.getElementById(`setup-dot-${n}`);
+  if (!dot) return;
+  dot.className = `stp-dot stp-${state}`;
+  const iconMap = {
+    pending: 'fa-minus',
+    running: 'fa-circle-notch stp-spin',
+    ok:      'fa-check',
+    error:   'fa-xmark',
+    warn:    'fa-triangle-exclamation',
+  };
+  dot.innerHTML = `<i class="fas ${iconMap[state] || 'fa-minus'}"></i>`;
+}
+
+function _stpSetConn(n, done) {
+  const c = document.getElementById(`setup-conn-${n}`);
+  if (c) {
+    c.className = 'stp-connector' + (done ? ' done' : '');
+  }
+}
+
+function _stpSetProgress(pct) {
+  const el = document.getElementById('setup-progress-fill');
+  if (el) el.style.width = pct + '%';
+}
+
+function _stpSetStatusDot(state) {
+  const d = document.getElementById('setup-status-dot');
+  if (!d) return;
+  const cfg = {
+    running: { bg:'#7c3aed', sh:'rgba(124,58,237,0.25)' },
+    ok:      { bg:'#16a34a', sh:'rgba(22,163,74,0.25)' },
+    error:   { bg:'#dc2626', sh:'rgba(220,38,38,0.25)' },
+    idle:    { bg:'#4b5563', sh:'rgba(75,85,99,0.2)' },
+  };
+  const c = cfg[state] || cfg.idle;
+  d.style.background = c.bg;
+  d.style.boxShadow  = `0 0 0 3px ${c.sh}`;
+}
+
+function _stpLogLineClass(line) {
+  if (/error|fail|❌/i.test(line)) return 'err';
+  if (/warn|warning|⚠/i.test(line)) return 'warn';
+  if (/ok|success|done|installed|✅|✓/i.test(line)) return 'ok';
+  if (/^\s+/.test(line)) return 'sub';
+  return '';
+}
+
+function _stpShowLog(n, lines, autoOpen) {
+  const el = document.getElementById(`setup-step-${n}-log`);
+  if (!el) return;
+  el.innerHTML = lines
+    .map(l => `<div class="stp-log-line ${_stpLogLineClass(l)}">${_escHtml(l)}</div>`)
+    .join('');
+  if (autoOpen) el.classList.remove('hidden');
+}
+
+function _stpShowBtn(id, visible) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = visible ? 'flex' : 'none';
+}
+
+// ── открытие модалки ─────────────────────────────────────
+
+function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
+  _setupServerId = serverId;
+  _setupServer   = { id: serverId, name: serverName, ip: serverIp, role: serverRole };
+
+  // Заголовок
+  document.getElementById('setup-modal-title').textContent    = 'Настройка сервера';
+  document.getElementById('setup-modal-subtitle').textContent = 'Шаги выполняются последовательно';
+  document.getElementById('setup-server-name').textContent    = serverName || '';
+  document.getElementById('setup-ip-tag').textContent         = serverIp   || '';
+
+  const roleTag = document.getElementById('setup-role-tag');
+  if (roleTag) {
+    const isRU = (serverRole || '').toUpperCase() === 'RU';
+    roleTag.textContent   = isRU ? 'RU' : 'EU';
+    roleTag.style.background = isRU ? '#1e3b20' : '#1e3a5f';
+    roleTag.style.color      = isRU ? '#86efac' : '#93c5fd';
+  }
+
+  // Сброс шагов
+  for (let i = 1; i <= 5; i++) {
+    _stpSetDot(i, 'pending');
+    document.getElementById(`setup-time-${i}`).textContent = '';
+    const log = document.getElementById(`setup-step-${i}-log`);
+    if (log) { log.innerHTML = ''; log.classList.add('hidden'); }
+  }
+  for (let i = 1; i <= 4; i++) _stpSetConn(i, false);
+
+  _stpSetProgress(0);
+  _stpSetStatusDot('running');
+  document.getElementById('setup-error-block').classList.add('hidden');
+  _stpShowBtn('setup-btn-retry', false);
+  _stpShowBtn('setup-btn-done',  false);
+  _stpShowBtn('setup-btn-cancel', true);
+
+  document.getElementById('modal-server-setup').classList.remove('hidden');
+  _startSetupPolling();
+}
+
+// ── поллинг статуса ──────────────────────────────────────
+
+function _startSetupPolling() {
+  clearInterval(_setupPollTimer);
+  _pollSetupStatus();
+  _setupPollTimer = setInterval(_pollSetupStatus, 2000);
+}
+
+async function _pollSetupStatus() {
+  if (!_setupServerId) return;
+  try {
+    const res = await api.request(`/servers/${_setupServerId}/setup/status`);
+    if (!res.ok) return;
+    _renderSetupProgress(res.data);
+    if (res.data.setup_status === 'done' || res.data.setup_status === 'failed') {
+      clearInterval(_setupPollTimer);
+      _onSetupFinished(res.data);
+    }
+  } catch (e) {
+    console.warn('Setup poll error:', e);
+  }
+}
+
+// ── рендер прогресса ─────────────────────────────────────
+
+function _renderSetupProgress(data) {
+  const currentStep = SETUP_STEP_MAP[data.setup_step] || 0;
+  const lines       = Array.isArray(data.log) ? data.log : [];
+
+  // Разбиваем лог по шагам: строка "[N]..." начинает новый шаг
+  const stepLogs = { 1:[], 2:[], 3:[], 4:[], 5:[] };
+  let cur = 0;
+  for (const line of lines) {
+    const m = line.match(/^\[(\d)\]/);
+    if (m) cur = parseInt(m[1]);
+    if (cur >= 1 && cur <= 5) {
+      // Убираем префикс "[N] " из строки для отображения
+      stepLogs[cur].push(line.replace(/^\[\d\]\s*/, ''));
+    }
+  }
+
+  // Прогресс-бар: (завершённые шаги / 5) × 100, текущий добавляет 50% своего веса
+  const donePct  = Math.max(0, currentStep - 1) * 20;
+  const inProgPct = currentStep > 0 ? 10 : 0;
+  _stpSetProgress(Math.min(donePct + inProgPct, 100));
+
+  for (let i = 1; i <= 5; i++) {
+    if (i < currentStep) {
+      const hasErr = stepLogs[i].some(l => /error|fail|❌/i.test(l));
+      _stpSetDot(i, hasErr ? 'error' : 'ok');
+      if (i <= 4) _stpSetConn(i, !hasErr);
+    } else if (i === currentStep) {
+      _stpSetDot(i, 'running');
+    }
+    // pending — уже выставлен при открытии, не трогаем
+
+    if (stepLogs[i].length > 0) {
+      _stpShowLog(i, stepLogs[i], i === currentStep);
+    }
+  }
+
+  // Подпись прогресса
+  if (currentStep > 0) {
+    const labels = ['','Проверка SSH-подключения','Настройка безопасности',
+                    'Установка стека','Сбор параметров сервера','Финальная проверка сервисов'];
+    document.getElementById('setup-modal-subtitle').textContent =
+      `Шаг ${currentStep} из 5 · ${labels[currentStep]}...`;
+  }
+}
+
+// ── завершение ────────────────────────────────────────────
+
+function _onSetupFinished(data) {
+  const success = data.setup_status === 'done';
+  _stpSetStatusDot(success ? 'ok' : 'error');
+  _stpSetProgress(success ? 100 : undefined);
+
+  document.getElementById('setup-modal-title').textContent = success
+    ? 'Сервер настроен' : 'Настройка завершена с ошибкой';
+  document.getElementById('setup-modal-subtitle').textContent = success
+    ? 'Все шаги выполнены успешно' : 'Один или несколько шагов не прошли';
+
+  // Финальный статус точки текущего шага
+  const curStep = SETUP_STEP_MAP[data.setup_step] || 0;
+  if (curStep > 0) {
+    const dot = document.getElementById(`setup-dot-${curStep}`);
+    if (dot && dot.className.includes('stp-running')) {
+      _stpSetDot(curStep, success ? 'ok' : 'error');
+    }
+  }
+
+  if (success) {
+    _stpShowBtn('setup-btn-cancel', false);
+    _stpShowBtn('setup-btn-done',   true);
+    loadServers();
+  } else {
+    if (data.setup_error) {
+      document.getElementById('setup-error-text').textContent = data.setup_error;
+      document.getElementById('setup-error-block').classList.remove('hidden');
+    }
+    _stpShowBtn('setup-btn-retry', true);
+  }
+}
+
+// ── действия кнопок ──────────────────────────────────────
+
+function toggleSetupStep(num) {
+  const log = document.getElementById(`setup-step-${num}-log`);
+  if (log) log.classList.toggle('hidden');
+}
+
+async function retryServerSetup() {
+  if (!_setupServerId) return;
+  // Сброс UI до исходного состояния
+  for (let i = 1; i <= 5; i++) {
+    _stpSetDot(i, 'pending');
+    document.getElementById(`setup-time-${i}`).textContent = '';
+    const log = document.getElementById(`setup-step-${i}-log`);
+    if (log) { log.innerHTML = ''; log.classList.add('hidden'); }
+  }
+  for (let i = 1; i <= 4; i++) _stpSetConn(i, false);
+  _stpSetProgress(0);
+  _stpSetStatusDot('running');
+  document.getElementById('setup-modal-title').textContent    = 'Настройка сервера';
+  document.getElementById('setup-modal-subtitle').textContent = 'Шаги выполняются последовательно';
+  document.getElementById('setup-error-block').classList.add('hidden');
+  _stpShowBtn('setup-btn-retry', false);
+  _stpShowBtn('setup-btn-done',  false);
+  _stpShowBtn('setup-btn-cancel', true);
+
+  await api.request(`/servers/${_setupServerId}/setup/retry`, { method: 'POST' });
+  _startSetupPolling();
+}
+
+async function cancelServerSetup() {
+  if (!_setupServerId) return;
+  if (!confirm('Отменить настройку и удалить сервер из списка?')) return;
+  clearInterval(_setupPollTimer);
+  await api.request(`/servers/${_setupServerId}/setup/cancel`, { method: 'DELETE' });
+  closeServerSetup();
+  loadServers();
+  toast('Сервер удалён', 'info');
+}
+
+function closeServerSetup() {
+  clearInterval(_setupPollTimer);
+  _setupServerId = null;
+  _setupServer   = null;
+  document.getElementById('modal-server-setup').classList.add('hidden');
+  loadServers();
+}
+
+window.openServerSetupModal = openServerSetupModal;
+window.toggleSetupStep      = toggleSetupStep;
+window.retryServerSetup     = retryServerSetup;
+window.cancelServerSetup    = cancelServerSetup;
+window.closeServerSetup     = closeServerSetup;
+window.closeServerSetup     = closeServerSetup;
