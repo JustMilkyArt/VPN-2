@@ -39,7 +39,26 @@ def _migrate_add_columns():
             result2 = conn.execute(sa.text("PRAGMA table_info(servers)"))
             srv_cols = {row[1] for row in result2.fetchall()}
             srv_new_cols = [
-                ("awg_installed", "BOOLEAN DEFAULT 0"),
+                ("awg_installed",           "BOOLEAN DEFAULT 0"),
+                # --- setup flow fields ---
+                ("setup_status",            "VARCHAR(20) DEFAULT 'not_started'"),
+                ("setup_step",              "VARCHAR(50)"),
+                ("setup_log",               "TEXT"),
+                ("setup_error",             "TEXT"),
+                # --- new SSH credentials (after setup) ---
+                ("ssh_user_actual",         "VARCHAR(100)"),
+                ("ssh_port_actual",         "INTEGER"),
+                ("ssh_private_key_enc",     "TEXT"),
+                ("ssh_password_enc",        "TEXT"),
+                # --- server info collected during setup ---
+                ("server_timezone",         "VARCHAR(50)"),
+                ("xray_public_key",         "TEXT"),
+                ("awg_server_public_key",   "TEXT"),
+                ("naiveproxy_subdomain_id", "INTEGER"),
+                ("xray_version",            "VARCHAR(50)"),
+                ("caddy_version",           "VARCHAR(50)"),
+                ("awg_version",             "VARCHAR(50)"),
+                ("warp_version",            "VARCHAR(50)"),
             ]
             for col_name, col_type in srv_new_cols:
                 if col_name not in srv_cols:

@@ -15,6 +15,15 @@ class ServerStatus(str, enum.Enum):
     OFFLINE = "offline"
     UNKNOWN = "unknown"
     DEPLOYING = "deploying"
+    SETTING_UP = "setting_up"
+    NOT_CONFIGURED = "not_configured"
+
+
+class SetupStatus(str, enum.Enum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS  = "in_progress"
+    DONE         = "done"
+    FAILED       = "failed"
 
 
 class Server(Base):
