@@ -373,3 +373,79 @@ def check_all_status(
             "status": status_res
         }
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setup flow endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/{server_id}/setup", summary="Start automated server setup")
+def start_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if server.setup_status == "in_progress":
+        raise HTTPException(status_code=409, detail="Setup already in progress")
+    # Сбрасываем прогресс
+    server.setup_status = "in_progress"
+    server.setup_step   = None
+    server.setup_log    = None
+    server.setup_error  = None
+    db.add(server)
+    db.commit()
+    from app.services.setup_service import run_server_setup
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup started"}
+
+
+@router.get("/{server_id}/setup/status", summary="Get setup progress")
+def get_setup_status(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    from app.services.setup_service import get_setup_status as _get_status
+    return _get_status(server)
+
+
+@router.post("/{server_id}/setup/retry", summary="Retry setup from beginning")
+def retry_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    server.setup_status = "in_progress"
+    server.setup_step   = None
+    server.setup_log    = None
+    server.setup_error  = None
+    db.add(server)
+    db.commit()
+    from app.services.setup_service import run_server_setup
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup restarted"}
+
+
+@router.delete("/{server_id}/setup/cancel", summary="Cancel setup and delete server")
+def cancel_setup(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    db.delete(server)
+    db.commit()
+    return {"success": True, "message": "Server deleted"}
