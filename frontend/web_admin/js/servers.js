@@ -229,6 +229,16 @@ function renderServerCard(server) {
     <span id="conn-stats-${server.id}" style="font-size:0.72rem;color:#6b7280;"></span>
   </div>
 
+  <!-- Баннер: настройка не запущена -->
+  ${!server.xray_installed && !server.awg_installed && server.setup_status !== 'in_progress' ? `
+  <div style="margin-bottom:0.5rem;padding:0.5rem 0.75rem;background:#1c1917;border:1px solid #44403c;border-radius:0.625rem;display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
+    <span style="font-size:0.72rem;color:#a8a29e;"><i class="fas fa-circle-exclamation" style="margin-right:4px;color:#f59e0b;"></i>VPN-стек не установлен</span>
+    <button onclick="startServerSetupSSE(${server.id}, '${server.name}', '${server.role}')"
+      style="font-size:0.7rem;padding:0.25rem 0.6rem;background:#2563eb;border:none;border-radius:0.375rem;color:#fff;cursor:pointer;white-space:nowrap;">
+      <i class="fas fa-play" style="margin-right:3px;"></i>Настроить
+    </button>
+  </div>` : ''}
+
   <!-- Кнопки -->
   <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.25rem;border-top:1px solid #1f2937;padding-top:0.625rem;">
     <button id="update-btn-${server.id}" onclick="pingServer(${server.id})" class="action-btn" title="Обновить статус и пинг">
@@ -827,6 +837,13 @@ function showServerSettings(serverId) {
 
   // ── TAB: Stack ──
   _updateStackTab(server);
+
+  // Показываем/скрываем баннер "Запустить настройку" в модале настроек
+  const runSetupBanner = document.getElementById('settings-run-setup-banner');
+  if (runSetupBanner) {
+    const needsSetup = !server.xray_installed && !server.awg_installed && server.setup_status !== 'in_progress';
+    runSetupBanner.classList.toggle('hidden', !needsSetup);
+  }
 
   // ── TAB: Params ──
   document.getElementById('settings-name').value         = server.name;

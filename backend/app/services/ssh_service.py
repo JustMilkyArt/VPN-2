@@ -33,8 +33,10 @@ class SSHClient:
             "auth_timeout": 30,
         }
 
-        if self.server.ssh_key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.server.ssh_key))
+        # Приоритет: ssh_private_key (новый, после шага 3 setup) → ssh_key (оригинальный) → password
+        active_key = self.server.ssh_private_key or self.server.ssh_key
+        if active_key:
+            pkey = paramiko.RSAKey.from_private_key(io.StringIO(active_key))
             connect_kwargs["pkey"] = pkey
         elif self.server.ssh_password:
             connect_kwargs["password"] = self.server.ssh_password

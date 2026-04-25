@@ -46,6 +46,7 @@ class Server(Base):
 
     xray_installed = Column(Boolean, default=False)
     naiveproxy_installed = Column(Boolean, default=False)
+    trojan_installed = Column(Boolean, default=False)
     awg_installed = Column(Boolean, default=False)
     warp_installed = Column(Boolean, default=False)
 

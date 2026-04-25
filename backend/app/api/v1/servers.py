@@ -494,16 +494,6 @@ def unlink_eu_server(
     return {"success": True, "message": "Привязка к EU-серверу снята"}
 
 
-@router.get("/", response_model=List[ServerRead])
-def list_servers_2(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    """Alias для совместимости — дублирует /servers/"""
-    return server_service.get_servers(db, skip=skip, limit=limit)
-
 
 @router.post("/check-all-status", summary="Check status of all servers")
 def check_all_status(

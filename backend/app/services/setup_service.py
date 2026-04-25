@@ -194,6 +194,7 @@ echo 'key_added'
 
         # Сохраняем в БД
         server.ssh_private_key = private_pem
+        server.ssh_key = private_pem          # обновляем основной ключ — шаги 4-7 сразу видят новый
         server.ssh_password = new_password
         db.commit()
         yield _step_event(3, "Обновление SSH-доступа", "ok",

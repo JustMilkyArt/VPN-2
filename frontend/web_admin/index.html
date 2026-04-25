@@ -12,7 +12,7 @@
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/app.css?v=1777076456">
   <script>
     tailwind.config = {
       theme: {
@@ -957,6 +957,19 @@
       <!-- ─── TAB: STACK ─── -->
       <div id="stab-content-stack" class="p-5 hidden">
 
+        <!-- Баннер: полная настройка не запускалась -->
+        <div id="settings-run-setup-banner" class="hidden mb-4 p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl flex items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-semibold text-amber-300"><i class="fas fa-circle-exclamation mr-2"></i>VPN-стек не установлен</p>
+            <p class="text-xs text-amber-600 mt-0.5">Запустите автоматическую настройку — установит Xray, AmneziaWG, NaiveProxy и создаст подключения</p>
+          </div>
+          <button id="settings-run-setup-btn"
+            onclick="closeModal('modal-server-settings'); startServerSetupSSE(parseInt(document.getElementById('settings-server-id').value), document.getElementById('settings-server-title').textContent, document.getElementById('settings-role').value.includes('EU') ? 'EU' : 'RU')"
+            class="flex-shrink-0 px-3 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-xs font-semibold text-white transition flex items-center gap-1.5">
+            <i class="fas fa-play"></i>Запустить
+          </button>
+        </div>
+
         <!-- Stack table -->
         <div class="space-y-2 mb-4">
           <!-- Xray -->
@@ -1362,12 +1375,12 @@
 <!-- TOAST CONTAINER -->
 <div id="toast-container" class="fixed bottom-4 right-4 z-[100] space-y-2"></div>
 
-<script src="js/api.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/servers.js"></script>
-<script src="js/connections.js"></script>
-<script src="js/users.js"></script>
-<script src="js/domains.js"></script>
-<script src="js/app.js"></script>
+<script src="js/api.js?v=1777076456"></script>
+<script src="js/ui.js?v=1777076456"></script>
+<script src="js/servers.js?v=1777076456"></script>
+<script src="js/connections.js?v=1777076456"></script>
+<script src="js/users.js?v=1777076456"></script>
+<script src="js/domains.js?v=1777076456"></script>
+<script src="js/app.js?v=1777076456"></script>
 </body>
 </html>
