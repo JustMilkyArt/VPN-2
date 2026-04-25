@@ -215,7 +215,7 @@ async function showAddConnectionModal() {
 }
 
 // ─── FORM SUBMIT ─────────────────────────────────────────────────────────────
-document.getElementById('add-connection-form').addEventListener('submit', async (e) => {
+document.getElementById('add-connection-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const formData = new FormData(form);
@@ -263,8 +263,8 @@ document.getElementById('add-connection-form').addEventListener('submit', async 
 });
 
 // Attach change listeners
-document.getElementById('conn-protocol-select').addEventListener('change', onConnProtocolChange);
-document.getElementById('conn-server-select').addEventListener('change', onConnServerChange);
+document.getElementById('conn-protocol-select')?.addEventListener('change', onConnProtocolChange);
+document.getElementById('conn-server-select')?.addEventListener('change', onConnServerChange);
 
 // ─── CLIENT CONFIG MODAL ──────────────────────────────────────────────────────
 async function showClientConfig(connId) {
