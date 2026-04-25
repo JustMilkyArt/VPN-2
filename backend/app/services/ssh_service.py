@@ -152,7 +152,7 @@ def test_connection(server: Server) -> Tuple[bool, str]:
             return False, f"Command failed: {err}"
     except paramiko.AuthenticationException:
         return False, "Authentication failed - check SSH key or password"
-    except paramiko.NoValidConnectionsError as e:
+    except paramiko.ssh_exception.NoValidConnectionsError as e:
         return False, f"Cannot connect to {server.ip}:{server.ssh_port} - {e}"
     except Exception as e:
         return False, f"Connection error: {str(e)}"
@@ -227,7 +227,7 @@ def ping_with_latency(server: Server) -> Tuple[bool, str, Optional[float]]:
             return False, "SSH command failed", icmp_latency
     except paramiko.AuthenticationException:
         return False, "Authentication failed", icmp_latency
-    except paramiko.NoValidConnectionsError as e:
+    except paramiko.ssh_exception.NoValidConnectionsError as e:
         return False, f"Cannot connect: {e}", icmp_latency
     except Exception as e:
         # Если ICMP ответил но SSH упал — сервер жив, но SSH проблема
