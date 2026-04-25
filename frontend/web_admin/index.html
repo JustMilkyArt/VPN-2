@@ -599,6 +599,53 @@
 
     </div>
   </div>
+
+<!-- SERVER SETUP PROGRESS MODAL -->
+<div id="modal-server-setup" class="modal-overlay hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl">
+    <!-- Header -->
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-gears text-brand-400 animate-spin" id="setup-header-icon"></i>
+        <span id="setup-header-title">Настройка сервера...</span>
+      </h3>
+      <span id="setup-close-btn" class="hidden">
+        <button onclick="closeSetupModal()" class="text-gray-500 hover:text-white transition p-1">
+          <i class="fas fa-xmark text-lg"></i>
+        </button>
+      </span>
+    </div>
+
+    <!-- Steps list -->
+    <div class="p-5 space-y-2" id="setup-steps-list">
+      <!-- Шаги генерируются в JS -->
+    </div>
+
+    <!-- Log output (collapsible) -->
+    <div class="px-5 pb-2">
+      <div id="setup-log-wrap" class="hidden">
+        <pre id="setup-log" class="text-xs text-gray-500 bg-gray-950 rounded-lg p-3 max-h-32 overflow-y-auto font-mono leading-4"></pre>
+      </div>
+      <button onclick="document.getElementById('setup-log-wrap').classList.toggle('hidden')"
+        class="text-xs text-gray-600 hover:text-gray-400 transition mt-1">
+        <i class="fas fa-terminal mr-1"></i>Лог
+      </button>
+    </div>
+
+    <!-- Footer -->
+    <div class="p-5 border-t border-gray-800 flex items-center justify-between gap-3">
+      <div id="setup-status-msg" class="text-sm text-gray-400 flex-1"></div>
+      <div id="setup-footer-btns" class="hidden flex gap-2">
+        <button onclick="closeSetupModal()" 
+          class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Закрыть
+        </button>
+        <button id="setup-retry-btn" onclick="retryServerSetup()" class="hidden px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-rotate-right mr-1"></i>Повторить
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ADD CONNECTION -->

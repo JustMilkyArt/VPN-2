@@ -589,8 +589,7 @@ document.getElementById('add-server-form').addEventListener('submit', async (e) 
 
   if (res.ok) {
     closeModal('modal-add-server');
-    toast(`Сервер ${res.data.name} добавлен`, 'success');
-    loadServers();
+    startServerSetupSSE(res.data.id, res.data.name, res.data.role);
   } else {
     errEl.textContent = typeof res.error === 'string' ? res.error : JSON.stringify(res.error);
     errEl.classList.remove('hidden');
@@ -1255,6 +1254,234 @@ async function confirmDeleteServer(serverId, name) {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVER SETUP SSE — прогресс-экран автонастройки
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _setupServerId = null;
+
+const SETUP_STEP_LABELS = {
+  1: 'Проверка SSH-соединения',
+  2: 'Применение мер безопасности',
+  3: 'Обновление SSH-доступа',
+  4: 'Установка VPN-стека',
+  5: 'Настройка роутинга',
+  6: 'Создание подключений',
+  7: 'Проверка сервисов',
+};
+
+function _setupStepEl(step) {
+  let el = document.getElementById('setup-step-' + step);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'setup-step-' + step;
+    el.className = 'flex items-start gap-3 p-3 rounded-xl bg-gray-800/50';
+    el.innerHTML =
+      '<span id="setup-step-icon-' + step + '" class="mt-0.5 w-5 h-5 flex-shrink-0 flex items-center justify-center">' +
+        '<i class="fas fa-circle-notch fa-spin text-gray-500 text-xs"></i>' +
+      '</span>' +
+      '<div class="flex-1 min-w-0">' +
+        '<div class="text-sm font-medium text-gray-300" id="setup-step-title-' + step + '">' +
+          (SETUP_STEP_LABELS[step] || ('Шаг ' + step)) +
+        '</div>' +
+        '<div class="text-xs text-gray-500 mt-0.5 hidden" id="setup-step-detail-' + step + '"></div>' +
+      '</div>';
+    document.getElementById('setup-steps-list').appendChild(el);
+  }
+  return el;
+}
+
+function _setStepStatus(step, status, message, detail) {
+  _setupStepEl(step);
+  var iconEl   = document.getElementById('setup-step-icon-' + step);
+  var titleEl  = document.getElementById('setup-step-title-' + step);
+  var detailEl = document.getElementById('setup-step-detail-' + step);
+
+  var icons = {
+    running: '<i class="fas fa-circle-notch fa-spin text-brand-400 text-xs"></i>',
+    ok:      '<i class="fas fa-circle-check text-green-400 text-xs"></i>',
+    warn:    '<i class="fas fa-triangle-exclamation text-yellow-400 text-xs"></i>',
+    error:   '<i class="fas fa-circle-xmark text-red-400 text-xs"></i>',
+  };
+  if (iconEl) iconEl.innerHTML = icons[status] || icons.running;
+
+  if (message && titleEl) {
+    var base = SETUP_STEP_LABELS[step] || ('Шаг ' + step);
+    titleEl.textContent = (status === 'ok' || status === 'warn')
+      ? base + ' — ' + message
+      : base;
+  }
+  if (detail && detailEl) {
+    detailEl.textContent = detail;
+    detailEl.classList.remove('hidden');
+  }
+
+  var logEl = document.getElementById('setup-log');
+  if (logEl && (message || detail)) {
+    var prefix = {ok:'✓', warn:'⚠', error:'✗', running:'…'}[status] || '·';
+    logEl.textContent += '[' + prefix + '] Шаг ' + step + ': ' + (message || '') +
+      (detail ? ' — ' + detail : '') + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+function _addSubstep(step, name, status, detail) {
+  var stepEl = _setupStepEl(step);
+  var subWrap = document.getElementById('setup-substeps-' + step);
+  if (!subWrap) {
+    subWrap = document.createElement('div');
+    subWrap.id = 'setup-substeps-' + step;
+    subWrap.className = 'space-y-0.5 mt-1';
+    var inner = stepEl.querySelector('.flex-1');
+    if (inner) inner.appendChild(subWrap);
+  }
+  var icon  = {ok:'✓', warn:'⚠', error:'✗'}[status] || '·';
+  var color = {ok:'text-green-400', warn:'text-yellow-400', error:'text-red-400'}[status] || 'text-gray-500';
+  var sub = document.createElement('div');
+  sub.className = 'text-xs ' + color + ' leading-4';
+  sub.textContent = icon + ' ' + name + (detail ? ': ' + detail : '');
+  subWrap.appendChild(sub);
+
+  var logEl = document.getElementById('setup-log');
+  if (logEl) {
+    logEl.textContent += '  [' + icon + '] ' + name + (detail ? ': ' + detail : '') + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+function startServerSetupSSE(serverId, serverName, serverRole) {
+  _setupServerId = serverId;
+
+  var stepsEl = document.getElementById('setup-steps-list');
+  if (stepsEl) stepsEl.innerHTML = '';
+  var logEl = document.getElementById('setup-log');
+  if (logEl) logEl.textContent = '';
+  var statusMsg = document.getElementById('setup-status-msg');
+  if (statusMsg) { statusMsg.textContent = 'Настройка ' + serverName + '...'; statusMsg.style.color = ''; }
+  var footerBtns = document.getElementById('setup-footer-btns');
+  if (footerBtns) footerBtns.classList.add('hidden');
+  var closeBtn = document.getElementById('setup-close-btn');
+  if (closeBtn) closeBtn.classList.add('hidden');
+  var headerIcon = document.getElementById('setup-header-icon');
+  if (headerIcon) headerIcon.className = 'fas fa-gears text-brand-400 animate-spin';
+  var headerTitle = document.getElementById('setup-header-title');
+  if (headerTitle) headerTitle.textContent = 'Настройка: ' + serverName;
+  var retryBtn = document.getElementById('setup-retry-btn');
+  if (retryBtn) retryBtn.classList.add('hidden');
+
+  document.getElementById('modal-server-setup').classList.remove('hidden');
+
+  var token = api.getToken();
+  _streamSetupFetch('/api/v1/servers/' + serverId + '/setup', token, serverId, serverName);
+}
+
+function _streamSetupFetch(url, token, serverId, serverName) {
+  fetch(url, { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(function(resp) {
+      if (!resp.ok) {
+        return resp.text().then(function(t) { _onSetupError('HTTP ' + resp.status + ': ' + t); });
+      }
+      var reader  = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer  = '';
+
+      function pump() {
+        return reader.read().then(function(result) {
+          if (result.done) return;
+          buffer += decoder.decode(result.value, { stream: true });
+          var lines = buffer.split('\n');
+          buffer = lines.pop();
+          lines.forEach(function(line) {
+            if (!line.startsWith('data: ')) return;
+            var raw = line.slice(6).trim();
+            if (!raw) return;
+            try { _handleSetupEvent(JSON.parse(raw), serverId, serverName); } catch(e) {}
+          });
+          return pump();
+        });
+      }
+      return pump();
+    })
+    .catch(function(err) { _onSetupError('Ошибка соединения: ' + err.message); });
+}
+
+function _handleSetupEvent(ev, serverId, serverName) {
+  if (ev.type === 'substep') { _addSubstep(ev.step, ev.name, ev.status, ev.detail); return; }
+  if (ev.step === 0 && ev.title === 'setup_done') {
+    if (ev.status === 'ok') {
+      _onSetupComplete(serverId, serverName);
+    } else {
+      var extra = '';
+      try { var d = JSON.parse(ev.detail || '{}'); if (d.delete_server) { api.deleteServer(serverId).catch(function(){}); extra = ' Сервер удалён.'; } } catch(e) {}
+      _onSetupError((ev.message || 'Ошибка настройки') + extra, true);
+    }
+    return;
+  }
+  _setStepStatus(ev.step, ev.status, ev.message, ev.detail);
+}
+
+function _onSetupComplete(serverId, serverName) {
+  var headerIcon = document.getElementById('setup-header-icon');
+  if (headerIcon) headerIcon.className = 'fas fa-circle-check text-green-400';
+  var headerTitle = document.getElementById('setup-header-title');
+  if (headerTitle) headerTitle.textContent = serverName + ' — настроен ✓';
+  var statusMsg = document.getElementById('setup-status-msg');
+  if (statusMsg) { statusMsg.textContent = 'Все шаги выполнены успешно.'; statusMsg.style.color = '#4ade80'; }
+  var footerBtns = document.getElementById('setup-footer-btns');
+  if (footerBtns) footerBtns.classList.remove('hidden');
+  var closeBtn = document.getElementById('setup-close-btn');
+  if (closeBtn) closeBtn.classList.remove('hidden');
+  toast(serverName + ' настроен и готов к работе', 'success');
+  loadServers();
+}
+
+function _onSetupError(msg, canRetry) {
+  var headerIcon = document.getElementById('setup-header-icon');
+  if (headerIcon) headerIcon.className = 'fas fa-circle-xmark text-red-400';
+  var headerTitle = document.getElementById('setup-header-title');
+  if (headerTitle) headerTitle.textContent = 'Ошибка настройки';
+  var statusMsg = document.getElementById('setup-status-msg');
+  if (statusMsg) { statusMsg.textContent = msg; statusMsg.style.color = '#f87171'; }
+  var footerBtns = document.getElementById('setup-footer-btns');
+  if (footerBtns) footerBtns.classList.remove('hidden');
+  var closeBtn = document.getElementById('setup-close-btn');
+  if (closeBtn) closeBtn.classList.remove('hidden');
+  var retryBtn = document.getElementById('setup-retry-btn');
+  if (retryBtn && canRetry) retryBtn.classList.remove('hidden');
+  loadServers();
+}
+
+function closeSetupModal() {
+  document.getElementById('modal-server-setup').classList.add('hidden');
+}
+
+function retryServerSetup() {
+  if (!_setupServerId) return;
+  var server = serversData.find(function(s) { return s.id === _setupServerId; });
+  var name = (server && server.name) || ('Сервер #' + _setupServerId);
+
+  var stepsEl = document.getElementById('setup-steps-list');
+  if (stepsEl) stepsEl.innerHTML = '';
+  var logEl = document.getElementById('setup-log');
+  if (logEl) logEl.textContent = '';
+  var statusMsg = document.getElementById('setup-status-msg');
+  if (statusMsg) { statusMsg.textContent = 'Повтор настройки ' + name + '...'; statusMsg.style.color = ''; }
+  var headerIcon = document.getElementById('setup-header-icon');
+  if (headerIcon) headerIcon.className = 'fas fa-gears text-brand-400 animate-spin';
+  var headerTitle = document.getElementById('setup-header-title');
+  if (headerTitle) headerTitle.textContent = 'Настройка: ' + name;
+  var footerBtns = document.getElementById('setup-footer-btns');
+  if (footerBtns) footerBtns.classList.add('hidden');
+  var closeBtn = document.getElementById('setup-close-btn');
+  if (closeBtn) closeBtn.classList.add('hidden');
+  var retryBtn = document.getElementById('setup-retry-btn');
+  if (retryBtn) retryBtn.classList.add('hidden');
+
+  var token = api.getToken();
+  _streamSetupFetch('/api/v1/servers/' + _setupServerId + '/setup/retry', token, _setupServerId, name);
+}
+
 // Expose globally
 window.selectRole                 = selectRole;
 window.toggleServerAdvanced       = toggleServerAdvanced;
@@ -1290,3 +1517,7 @@ window.restartServerServices      = restartServerServices;
 window.redeployServerConfig       = redeployServerConfig;
 window.handleSshKeyFile           = handleSshKeyFile;
 window.handleSshKeyDrop           = handleSshKeyDrop;
+window.startServerSetupSSE       = startServerSetupSSE;
+window.closeSetupModal            = closeSetupModal;
+window.retryServerSetup           = retryServerSetup;
+
