@@ -15,10 +15,13 @@ class DomainStatus(str, enum.Enum):
 
 
 class SubdomainType(str, enum.Enum):
-    admin_panel = "admin_panel"
-    client_site = "client_site"
-    vpn = "vpn"
-    none = "none"
+    admin_panel    = "admin_panel"
+    client_site    = "client_site"
+    vpn            = "vpn"
+    none           = "none"
+    swagger        = "swagger"
+    naiveproxy_eu  = "naiveproxy_eu"
+    naiveproxy_ru  = "naiveproxy_ru"
 
 
 class SubdomainStatus(str, enum.Enum):
