@@ -228,6 +228,17 @@ const api = {
   async renewSubdomainSSL(domainId, subdomainId) {
     return this.request('POST', `/domains/${domainId}/subdomains/${subdomainId}/renew-ssl`);
   },
+
+  // ─── Server Setup ──────────────────────────────────────────────────────────
+  async startSetup(id) {
+    return this.request("POST", `/servers/${id}/setup`);
+  },
+  setupStream(id) {
+    const token = localStorage.getItem("auth_token");
+    return new EventSource(`/api/v1/servers/${id}/setup-stream?token=${token}`);
+  },
 };
 
 window.api = api;
+
+// setup methods (added)

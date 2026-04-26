@@ -59,7 +59,7 @@
           <label class="block text-sm text-gray-400 mb-1">Логин</label>
           <div class="relative">
             <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
-            <input id="login-username" type="text" placeholder="admin" autocomplete="off"
+            <input id="login-username" type="text" placeholder="Введите логин" autocomplete="off"
               class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
           </div>
         </div>
@@ -105,7 +105,7 @@
 
     <form id="totp-login-form" class="space-y-4">
       <input id="totp-login-code" type="text" inputmode="numeric" maxlength="6"
-        placeholder="000 000" autocomplete="one-time-code"
+        placeholder="000000" autocomplete="one-time-code"
         class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-4 text-3xl text-white text-center tracking-[0.5em] placeholder-gray-700 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/40 transition font-mono">
 
       <button type="submit" id="totp-login-btn"
@@ -439,14 +439,14 @@
         <div>
           <label class="form-label">Название сервера</label>
           <input name="name" type="text" id="add-server-name"
-                 placeholder="EU-NL-01" class="form-input" required>
+                 placeholder="Например: EU-NL-01" class="form-input" required>
         </div>
 
         <!-- IP -->
         <div>
           <label class="form-label">IP-адрес</label>
           <input name="ip" id="add-server-ip" type="text"
-                 placeholder="1.2.3.4" class="form-input" required
+                 placeholder="Введите IP-адрес" class="form-input" required
                  oninput="detectIpInfo()">
           <div id="add-server-geo" class="hidden mt-2 flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
             <img id="add-server-flag-img" src="" alt="" class="w-6 h-4 rounded-sm object-cover">
@@ -875,6 +875,23 @@
       <!-- ─── TAB: ACTIONS ─── -->
       <div id="stab-content-actions" class="p-5 space-y-3 hidden">
 
+        <!-- Setup server -->
+        <div class="bg-gray-800/40 rounded-xl p-4 border border-brand-900/40">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white flex items-center gap-2">
+                <i class="fas fa-wand-magic-sparkles text-brand-400"></i> Автонастройка сервера
+              </p>
+              <p class="text-xs text-gray-500 mt-0.5">Установка стека, безопасность, ключи — всё автоматически</p>
+            </div>
+            <button onclick="startServerSetup()" id="btn-start-setup"
+              class="flex-shrink-0 px-3 py-1.5 bg-brand-600/20 hover:bg-brand-600/40 border border-brand-700 rounded-lg text-xs font-medium text-brand-300 transition flex items-center gap-1.5">
+              <i class="fas fa-play text-xs"></i> Запустить
+            </button>
+          </div>
+          <div id="setup-status-line" class="hidden mt-2 text-xs"></div>
+        </div>
+
         <!-- Update -->
         <div class="bg-gray-800/40 rounded-xl p-4">
           <div class="flex items-start justify-between gap-3">
@@ -1058,7 +1075,7 @@
               </div>
               <div>
                 <label class="form-label">IP-адрес</label>
-                <input id="settings-ip" type="text" class="form-input font-mono" placeholder="1.2.3.4">
+                <input id="settings-ip" type="text" class="form-input font-mono" placeholder="Введите IP-адрес">
               </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -1091,7 +1108,7 @@
               </div>
               <div>
                 <label class="form-label">Порт</label>
-                <input id="settings-ssh-port" type="number" class="form-input" placeholder="22" min="1" max="65535">
+                <input id="settings-ssh-port" type="number" class="form-input" placeholder="Порт SSH" min="1" max="65535">
               </div>
             </div>
             <div>
@@ -1265,7 +1282,7 @@
       </div>
       <div>
         <label class="form-label">Имя поддомена</label>
-        <input id="subdomain-name-input" type="text" placeholder="admin" class="form-input" oninput="onSubdomainNameInput()" autocomplete="off">
+        <input id="subdomain-name-input" type="text" placeholder="Введите логин" class="form-input" oninput="onSubdomainNameInput()" autocomplete="off">
         <div class="mt-1 text-xs text-gray-400">
           Полное имя: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
         </div>
@@ -1311,6 +1328,67 @@
       </button>
     </div>
     <div id="progress-steps-container" class="p-6 space-y-1 max-h-[60vh] overflow-y-auto"></div>
+  </div>
+</div>
+
+
+<!-- SETUP PROGRESS MODAL (automated server setup) -->
+<div id="modal-server-setup" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg">
+    <!-- Header -->
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-wand-magic-sparkles text-brand-400"></i>
+        <span id="setup-modal-title">Автонастройка сервера</span>
+      </h3>
+      <button onclick="closeServerSetupModal()" id="setup-modal-close-btn"
+        class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Steps progress bar -->
+    <div class="px-5 pt-4">
+      <div class="flex items-center gap-1 mb-4">
+        <div class="setup-step-dot" id="sdot-step1" title="Подключение"></div>
+        <div class="flex-1 h-0.5 bg-gray-800" id="sline-1"></div>
+        <div class="setup-step-dot" id="sdot-step2" title="Стек"></div>
+        <div class="flex-1 h-0.5 bg-gray-800" id="sline-2"></div>
+        <div class="setup-step-dot" id="sdot-step3" title="Безопасность"></div>
+        <div class="flex-1 h-0.5 bg-gray-800" id="sline-3"></div>
+        <div class="setup-step-dot" id="sdot-step4" title="Информация"></div>
+        <div class="flex-1 h-0.5 bg-gray-800" id="sline-4"></div>
+        <div class="setup-step-dot" id="sdot-step5" title="Финальная проверка"></div>
+      </div>
+      <div class="flex justify-between text-xs text-gray-600 mb-3 px-0.5">
+        <span>Подключение</span>
+        <span>Стек</span>
+        <span>Безопасность</span>
+        <span>Инфо</span>
+        <span>Готово</span>
+      </div>
+    </div>
+
+    <!-- Log output -->
+    <div id="setup-log-output"
+      class="mx-5 mb-2 bg-gray-950 rounded-xl p-3 font-mono text-xs text-gray-300 h-56 overflow-y-auto space-y-0.5">
+      <div class="text-gray-600 italic">Ожидание запуска...</div>
+    </div>
+
+    <!-- Status line -->
+    <div class="px-5 pb-4">
+      <div id="setup-final-status" class="hidden rounded-lg p-3 text-sm font-medium text-center mb-3"></div>
+      <div class="flex gap-2">
+        <button onclick="closeServerSetupModal()" id="setup-cancel-btn"
+          class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition">
+          Отмена
+        </button>
+        <button onclick="closeServerSetupModal()" id="setup-done-btn"
+          class="hidden flex-1 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-check"></i> Готово
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 

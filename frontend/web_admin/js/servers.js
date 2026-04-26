@@ -1739,3 +1739,149 @@ window.retryServerSetup     = retryServerSetup;
 window.cancelServerSetup    = cancelServerSetup;
 window.closeServerSetup     = closeServerSetup;
 window.closeServerSetup     = closeServerSetup;
+
+// ───────────────── SERVER SETUP MODAL ─────────────────
+
+let _setupPollTimer = null;
+let _setupPollDone = false;
+
+async function startServerSetup() {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  if (!serverId) return;
+
+  const logEl = document.getElementById('setup-log-output');
+  logEl.innerHTML = '<div style="color:#6b7280;font-style:italic;">Запускаем настройку...</div>';
+
+  const finalEl = document.getElementById('setup-final-status');
+  finalEl.className = 'hidden rounded-lg p-3 text-sm font-medium text-center mb-3';
+
+  document.getElementById('setup-done-btn').classList.add('hidden');
+  document.getElementById('setup-cancel-btn').textContent = 'Отмена';
+
+  ['step1','step2','step3','step4','step5'].forEach(function(s) {
+    var dot = document.getElementById('sdot-' + s);
+    if (dot) dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#374151;flex-shrink:0;transition:all 0.3s;';
+  });
+  ['sline-1','sline-2','sline-3','sline-4'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.background = '#1f2937';
+  });
+
+  openModal('modal-server-setup');
+
+  var res = await api.startSetup(serverId);
+  if (!res.ok) {
+    _appendSetupLog(logEl, 'Ошибка: ' + res.error, 'error');
+    return;
+  }
+
+  _appendSetupLog(logEl, 'Настройка запущена...', 'info');
+  _setupPollDone = false;
+  if (_setupPollTimer) clearTimeout(_setupPollTimer);
+  _pollSetupStatus(serverId, logEl, 0);
+}
+
+function _appendSetupLog(logEl, text, type) {
+  var colorMap = { 'error': '#f87171', 'success': '#4ade80', 'info': '#93c5fd', 'warn': '#facc15' };
+  var color = '#d1d5db';
+  if (type && colorMap[type]) {
+    color = colorMap[type];
+  } else {
+    if (text.indexOf('❌') !== -1) color = '#f87171';
+    else if (text.indexOf('✅') !== -1) color = '#4ade80';
+    else if (text.indexOf('⚠️') !== -1) color = '#facc15';
+    else if (text.indexOf('[1]') !== -1 || text.indexOf('[2]') !== -1 || text.indexOf('[3]') !== -1 || text.indexOf('[4]') !== -1 || text.indexOf('[5]') !== -1) color = '#93c5fd';
+  }
+  var div = document.createElement('div');
+  div.style.color = color;
+  div.style.lineHeight = '1.5';
+  div.style.padding = '1px 0';
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function _setSetupStep(step) {
+  var stepNum = parseInt((step || '').replace('step', '')) || 0;
+  if (!stepNum) return;
+  for (var i = 1; i <= 5; i++) {
+    var dot = document.getElementById('sdot-step' + i);
+    if (!dot) continue;
+    if (i < stepNum) {
+      dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#4ade80;flex-shrink:0;';
+      var line = document.getElementById('sline-' + i);
+      if (line) line.style.background = '#4ade80';
+    } else if (i === stepNum) {
+      dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#6366f1;flex-shrink:0;box-shadow:0 0 8px #6366f1;';
+    } else {
+      dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#374151;flex-shrink:0;';
+    }
+  }
+}
+
+var _lastLogLen = 0;
+
+async function _pollSetupStatus(serverId, logEl, attempt) {
+  if (_setupPollDone) return;
+  if (attempt > 300) {
+    _appendSetupLog(logEl, 'Таймаут ожидания', 'error');
+    return;
+  }
+  try {
+    var res = await api.getServer(serverId);
+    if (res.ok) {
+      var srv = res.data;
+      var log = srv.setup_log || '';
+      if (log.length > _lastLogLen) {
+        var newText = log.substring(_lastLogLen);
+        var lines = newText.split('\n');
+        for (var j = 0; j < lines.length; j++) {
+          if (lines[j].trim()) _appendSetupLog(logEl, lines[j].trim());
+        }
+        _lastLogLen = log.length;
+      }
+      if (srv.setup_step) _setSetupStep(srv.setup_step);
+      if (srv.setup_status === 'done' || srv.setup_status === 'failed') {
+        _setupPollDone = true;
+        _onSetupComplete(srv.setup_status, srv.setup_error, logEl);
+        loadServers();
+        return;
+      }
+    }
+  } catch(e) {}
+  _setupPollTimer = setTimeout(function() { _pollSetupStatus(serverId, logEl, attempt + 1); }, 2000);
+}
+
+function _onSetupComplete(status, error, logEl) {
+  var finalEl = document.getElementById('setup-final-status');
+  var cancelBtn = document.getElementById('setup-cancel-btn');
+  var doneBtn = document.getElementById('setup-done-btn');
+  if (status === 'done') {
+    ['step1','step2','step3','step4','step5'].forEach(function(s) {
+      var dot = document.getElementById('sdot-' + s);
+      if (dot) dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#4ade80;flex-shrink:0;';
+    });
+    ['sline-1','sline-2','sline-3','sline-4'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.background = '#4ade80';
+    });
+    finalEl.textContent = 'Сервер успешно настроен';
+    finalEl.className = 'rounded-lg p-3 text-sm font-medium text-center mb-3 bg-green-900/30 border border-green-700 text-green-300';
+    doneBtn.classList.remove('hidden');
+    cancelBtn.classList.add('hidden');
+  } else {
+    finalEl.textContent = 'Ошибка настройки' + (error ? ': ' + error : '');
+    finalEl.className = 'rounded-lg p-3 text-sm font-medium text-center mb-3 bg-red-900/30 border border-red-700 text-red-300';
+    cancelBtn.textContent = 'Закрыть';
+  }
+}
+
+function closeServerSetupModal() {
+  _setupPollDone = true;
+  if (_setupPollTimer) { clearTimeout(_setupPollTimer); _setupPollTimer = null; }
+  _lastLogLen = 0;
+  closeModal('modal-server-setup');
+}
+
+window.startServerSetup = startServerSetup;
+window.closeServerSetupModal = closeServerSetupModal;

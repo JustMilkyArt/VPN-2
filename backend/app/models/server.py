@@ -15,6 +15,8 @@ class ServerStatus(str, enum.Enum):
     OFFLINE = "offline"
     UNKNOWN = "unknown"
     DEPLOYING = "deploying"
+    SETTING_UP = "setting_up"
+    NOT_CONFIGURED = "not_configured"
 
 
 class Server(Base):
@@ -42,6 +44,29 @@ class Server(Base):
 
     domain = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
+
+    # ── Setup flow ──────────────────────────────────────────────────
+    setup_status = Column(String(20), nullable=True)   # pending|in_progress|done|failed
+    setup_step   = Column(String(50), nullable=True)   # step1..step5
+    setup_error  = Column(Text, nullable=True)
+    setup_log    = Column(Text, nullable=True)
+
+    # ── Server info (собирается после setup) ───────────────────────
+    server_timezone        = Column(String(100), nullable=True)
+    xray_version           = Column(String(50),  nullable=True)
+    caddy_version          = Column(String(50),  nullable=True)
+    awg_version            = Column(String(50),  nullable=True)
+    warp_version           = Column(String(50),  nullable=True)
+    xray_public_key        = Column(Text, nullable=True)
+    awg_server_public_key  = Column(Text, nullable=True)
+
+    # ── Зашифрованные credentials (флаги для фронта) ───────────────
+    ssh_private_key_enc = Column(Text, nullable=True)   # зашифрованный приватный ключ
+    ssh_password_enc    = Column(Text, nullable=True)   # зашифрованный пароль
+
+    # ── Актуальные SSH-параметры после харденинга ──────────────────
+    ssh_user_actual = Column(String(100), nullable=True)
+    ssh_port_actual = Column(Integer, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

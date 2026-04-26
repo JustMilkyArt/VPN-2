@@ -476,3 +476,13 @@ button.role-card.role-card-active {
   color: #a5b4fc;
   border-bottom-color: #6366f1;
 }
+
+/* Setup step dots */
+.setup-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #374151;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}

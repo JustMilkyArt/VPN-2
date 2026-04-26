@@ -374,3 +374,65 @@ def check_all_status(
             "status": status_res
         }
     return results
+
+from fastapi.responses import StreamingResponse
+import json as _json
+import time as _time
+from app.services.setup_service import run_server_setup
+
+
+@router.post("/{server_id}/setup", summary="Start automated server setup")
+def start_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if getattr(server, "setup_status", None) == "in_progress":
+        return {"success": False, "message": "Setup already in progress"}
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup started"}
+
+
+@router.get("/{server_id}/setup-stream", summary="SSE stream of setup progress")
+def setup_stream(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    def event_generator():
+        from app.db.database import SessionLocal
+        local_db = SessionLocal()
+        try:
+            last_log_len = 0
+            timeout = 600
+            start = _time.time()
+            while _time.time() - start < timeout:
+                local_db.expire_all()
+                srv = local_db.query(Server).filter(Server.id == server_id).first()
+                if not srv:
+                    yield "data: " + _json.dumps({"error": "Server not found"}) + "\n\n"
+                    break
+                log = srv.setup_log or ""
+                if len(log) > last_log_len:
+                    new_lines = log[last_log_len:].strip().splitlines()
+                    for line in new_lines:
+                        if line.strip():
+                            payload = {"type": "log", "line": line.strip(),
+                                       "step": srv.setup_step or "", "status": srv.setup_status or ""}
+                            yield "data: " + _json.dumps(payload) + "\n\n"
+                    last_log_len = len(log)
+                if srv.setup_status in ("done", "failed"):
+                    payload = {"type": "done", "status": srv.setup_status,
+                               "error": srv.setup_error or "", "step": srv.setup_step or ""}
+                    yield "data: " + _json.dumps(payload) + "\n\n"
+                    break
+                _time.sleep(1.5)
+        finally:
+            local_db.close()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
