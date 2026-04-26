@@ -147,6 +147,9 @@ function renderServerSections(container) {
 async function silentCheckAllServers() {
   for (const server of serversData) {
     try {
+      // Не пингуем серверы в процессе настройки
+      if (server.setup_status === 'in_progress' || server.status === 'setting_up') continue;
+
       const res = await api.pingServer(server.id);
       if (!res.ok) continue;
       const { reachable, latency_ms } = res.data;
@@ -158,7 +161,7 @@ async function silentCheckAllServers() {
 
       if (dot) dot.className = `status-dot ${newStatus}`;
       if (txt) {
-        txt.className = reachable ? 'text-green-400 text-xs font-medium' : 'text-red-400 text-xs font-medium';
+        txt.style.color = reachable ? '#4ade80' : '#f87171';
         txt.textContent = reachable ? 'Online' : 'Offline';
       }
       if (ping) {
@@ -179,16 +182,35 @@ async function silentCheckAllServers() {
 }
 
 // ───────────────── SERVER CARD ─────────────────
+
+/** Возвращает мета-данные для статус-точки Online/Offline/Setting up */
+function _getServerStatusMeta(server) {
+  const isSettingUp = server.status === 'setting_up' || server.setup_status === 'in_progress';
+  if (isSettingUp)               return { color: '#facc15', label: 'Setting up', dot: 'setting_up' };
+  if (server.status === 'online') return { color: '#4ade80', label: 'Online',     dot: 'online'    };
+  if (server.status === 'offline')return { color: '#f87171', label: 'Offline',    dot: 'offline'   };
+  return { color: '#6b7280', label: 'Unknown', dot: '' };
+}
+
+/** Возвращает мета-данные для бейджа «Configured / Setting up / Not configured» */
+function _getSetupBadgeMeta(server) {
+  const s = server.setup_status;
+  if (s === 'done')        return { color: '#4ade80', bg: 'rgba(74,222,128,0.12)', label: 'Configured'     };
+  if (s === 'in_progress') return { color: '#facc15', bg: 'rgba(250,204,21,0.12)',  label: 'Setting up...'  };
+  if (s === 'failed')      return { color: '#f87171', bg: 'rgba(248,113,113,0.12)', label: 'Setup failed'   };
+  return                          { color: '#6b7280', bg: 'rgba(107,114,128,0.12)', label: 'Not configured' };
+}
+
 function renderServerCard(server) {
-  const flag      = getFlag(server.country);
-  const isOnline  = server.status === 'online';
-  const isOffline = server.status === 'offline';
+  const flag  = getFlag(server.country);
+  const sm    = _getServerStatusMeta(server);
+  const badge = _getSetupBadgeMeta(server);
 
   return `
 <div class="server-card" id="server-card-${server.id}">
 
   <!-- Шапка: флаг+название слева, статус справа -->
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.875rem;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.5rem;">
 
     <!-- Флаг + название -->
     <div style="display:flex;align-items:center;gap:0.625rem;min-width:0;flex:1;">
@@ -196,12 +218,21 @@ function renderServerCard(server) {
       <span style="font-weight:600;color:#f9fafb;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${server.name}</span>
     </div>
 
-    <!-- Статус справа -->
+    <!-- Online/Offline точка справа -->
     <div style="display:flex;align-items:center;gap:0.35rem;flex-shrink:0;">
-      <span id="status-dot-${server.id}" class="status-dot ${server.status}"></span>
-      <span id="status-text-${server.id}" style="font-size:0.72rem;font-weight:600;color:${isOnline ? '#4ade80' : isOffline ? '#f87171' : '#6b7280'};">${isOnline ? 'Online' : isOffline ? 'Offline' : 'Unknown'}</span>
+      <span id="status-dot-${server.id}" class="status-dot ${sm.dot}"></span>
+      <span id="status-text-${server.id}" style="font-size:0.72rem;font-weight:600;color:${sm.color};">${sm.label}</span>
     </div>
 
+  </div>
+
+  <!-- Бейдж setup-статуса -->
+  <div style="margin-bottom:0.625rem;">
+    <span id="setup-badge-${server.id}"
+      style="display:inline-block;font-size:0.65rem;font-weight:600;padding:1px 7px;border-radius:999px;
+             color:${badge.color};background:${badge.bg};border:1px solid ${badge.color}33;">
+      ${badge.label}
+    </span>
   </div>
 
   <!-- IP -->
@@ -516,11 +547,32 @@ async function detectIpInfo() {
   }, 700);
 }
 
-document.getElementById('add-server-form').addEventListener('submit', async (e) => {
+document.getElementById('add-server-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const errEl = document.getElementById('add-server-error');
   errEl.classList.add('hidden');
+
+  // Детект страны по IP перед созданием
+  const ipVal = form.querySelector('[name=ip]').value.trim();
+  if (ipVal && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ipVal)) {
+    clearTimeout(_ipDetectTimer);
+    try {
+      const resp = await fetch(`https://ip-api.com/json/${ipVal}?fields=status,country,countryCode`);
+      const data = await resp.json();
+      if (data.status === 'success' && data.countryCode) {
+        const code = data.countryCode.toLowerCase();
+        document.getElementById('add-server-country').value = data.countryCode.toUpperCase();
+        const flagImg = document.getElementById('add-server-flag-img');
+        const geoText = document.getElementById('add-server-geo-text');
+        const geoEl   = document.getElementById('add-server-geo');
+        flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
+        flagImg.alt = data.country;
+        geoText.textContent = data.country;
+        geoEl.classList.remove('hidden');
+      }
+    } catch { /* тихо игнорируем */ }
+  }
 
   const role = form.querySelector('[name=role]:checked')?.value;
   if (!role) {
@@ -579,8 +631,10 @@ document.getElementById('add-server-form').addEventListener('submit', async (e) 
 
   if (res.ok) {
     closeModal('modal-add-server');
-    toast(`Сервер ${res.data.name} добавлен`, 'success');
-    loadServers();
+    // Запускаем автонастройку сервера
+    const srv = res.data;
+    await api.request('POST', `/servers/${srv.id}/setup`);
+    openServerSetupModal(srv.id, srv.name, srv.ip, srv.role);
   } else {
     errEl.textContent = typeof res.error === 'string' ? res.error : JSON.stringify(res.error);
     errEl.classList.remove('hidden');
@@ -603,6 +657,91 @@ function sdTab(tab) {
       btn.classList.add('text-gray-500','border-transparent');
     }
   });
+  if (tab === 'params') _renderParamsTab();
+}
+
+function _renderParamsTab() {
+  const server = serversData.find(s => s.id === _sdServerId);
+  const el = document.getElementById('sd-params-content');
+  if (!server || !el) return;
+
+  const row = (label, value, mono = false) => `
+    <div class="flex items-start justify-between py-2 border-b border-gray-800 last:border-0">
+      <span class="text-gray-500 text-xs">${label}</span>
+      <span class="${mono ? 'font-mono' : ''} text-xs text-gray-200 text-right max-w-[60%] break-all">${value}</span>
+    </div>`;
+
+  // Используем has_ssh_key / has_ssh_password из API (безопасные флаги, секреты не передаются)
+  const hasKey     = !!(server.has_ssh_key);
+  const hasPassEnc = !!(server.has_ssh_password);
+  const portOk  = server.ssh_port_actual || server.ssh_port || 22;
+  const userOk  = server.ssh_user_actual || server.ssh_user || '—';
+  const isEU    = (server.role || '').toUpperCase() === 'EU';
+
+  // SSH-ключ: статус
+  let keyStatus;
+  if (hasKey) keyStatus = '<span class="text-green-400">✅ сохранён</span>';
+  else keyStatus = '<span class="text-gray-500">— нет</span>';
+
+  // Пароль SSH: статус
+  let passStatus;
+  if (server.ssh_password) {
+    passStatus = '<span class="text-yellow-400">⚠️ хранится в открытом виде</span>';
+  } else if (hasPassEnc) {
+    passStatus = '<span class="text-green-400">✅ зашифрован в БД</span>';
+  } else if (hasKey) {
+    passStatus = '<span class="text-green-400">✅ отключён (вход по ключу)</span>';
+  } else {
+    passStatus = '<span class="text-gray-500">— нет</span>';
+  }
+
+  // Setup badge
+  const badge = _getSetupBadgeMeta(server);
+
+  el.innerHTML = `
+  <!-- Блок 1: SSH-доступ -->
+  <div class="space-y-1 text-sm">
+    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">SSH — доступ</div>
+    ${row('Пользователь', userOk, true)}
+    ${row('Порт', portOk, true)}
+    ${row('SSH-ключ', keyStatus)}
+    ${row('Пароль SSH', passStatus)}
+  </div>
+
+  <!-- Блок 2: Версии сервисов + Timezone -->
+  <div class="space-y-1 text-sm mt-5 pt-4 border-t border-gray-800">
+    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">Сервисы &amp; окружение</div>
+    ${row('Timezone', server.server_timezone || '—')}
+    ${row('Xray',  server.xray_version  || (server.xray_installed  ? 'установлен' : '—'), true)}
+    ${row('AWG',   server.awg_version   || (server.awg_installed   ? 'установлен' : '—'), true)}
+    ${row('Caddy', server.caddy_version || (server.naiveproxy_installed ? 'установлен' : '—'), true)}
+    ${!isEU ? row('WARP', server.warp_version || (server.warp_installed ? 'установлен' : '—'), true) : ''}
+  </div>
+
+  <!-- Блок 3: Статус настройки -->
+  <div class="space-y-1 text-sm mt-5 pt-4 border-t border-gray-800">
+    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">Статус настройки</div>
+    <div class="flex items-center justify-between py-2">
+      <span class="text-gray-500 text-xs">Статус</span>
+      <span style="font-size:0.65rem;font-weight:600;padding:1px 8px;border-radius:999px;
+                   color:${badge.color};background:${badge.bg};border:1px solid ${badge.color}33;">
+        ${badge.label}
+      </span>
+    </div>
+    ${server.setup_error ? `
+    <div class="py-2 border-t border-gray-800">
+      <span class="text-gray-500 text-xs block mb-1">Ошибка</span>
+      <span class="text-red-400 text-xs break-all">${server.setup_error}</span>
+    </div>` : ''}
+  </div>
+
+  <!-- Кнопка перезапуска -->
+  <div class="mt-5 pt-3 border-t border-gray-800">
+    <button onclick="openServerSetupModal(${server.id}, '${server.name}', '${server.ip}', '${server.role}')"
+      class="w-full py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-xs font-medium text-white transition flex items-center justify-center gap-2">
+      <i class="fas fa-rotate-right"></i> Перезапустить настройку
+    </button>
+  </div>`;
 }
 
 async function showServerDetail(serverId) {
@@ -673,7 +812,7 @@ async function showServerDetail(serverId) {
       ${renderServiceBadge('Xray-core', server.xray_installed)}
       ${renderServiceBadge('NaiveProxy', server.naiveproxy_installed)}
       ${renderServiceBadge('AmneziaWG', server.awg_installed)}
-      ${renderServiceBadge('WARP', server.warp_installed)}
+      ${(server.role || '').toUpperCase() !== 'EU' ? renderServiceBadge('WARP', server.warp_installed) : ''}
     </div>
   </div>
 
@@ -824,13 +963,31 @@ function showServerSettings(serverId) {
     }
   }
 
-  // Security checkboxes — сбрасываем, загрузка произойдёт при переходе на вкладку security
-  ['sec-password-login','sec-root-login','sec-fail2ban','sec-ufw'].forEach(id => {
+  // Security checkboxes — предзаполняем из sec_* полей БД (быстро, без SSH-запроса)
+  // Свежие данные будут загружены при переходе на вкладку Security
+  const _secDbMap = {
+    'sec-fail2ban':       server.sec_fail2ban,       // null = unknown
+    'sec-ufw':            server.sec_ufw,
+    'sec-password-login': server.sec_password_login != null ? !server.sec_password_login : null,  // inverted: true=disabled=good
+    'sec-root-login':     null,  // нет в БД, получим через SSH
+  };
+  Object.entries(_secDbMap).forEach(([id, val]) => {
     const el = document.getElementById(id);
-    if (el) { el.checked = false; el.disabled = true; }
+    if (!el) return;
+    if (val !== null && val !== undefined) {
+      el.checked  = !!val;
+      el.disabled = false;  // разрешаем взаимодействие
+    } else {
+      el.checked  = false;
+      el.disabled = true;   // неизвестно
+    }
   });
   const secMsg = document.getElementById('sec-status-msg');
-  if (secMsg) { secMsg.textContent = ''; secMsg.classList.add('hidden'); }
+  if (server.sec_fail2ban !== null && server.sec_fail2ban !== undefined) {
+    if (secMsg) { secMsg.textContent = 'ℹ️ Данные из БД (на момент настройки). Актуальные — нажмите Обновить'; secMsg.classList.remove('hidden'); secMsg.style.color = '#9ca3af'; }
+  } else {
+    if (secMsg) { secMsg.textContent = ''; secMsg.classList.add('hidden'); }
+  }
 
   // ── Reset action msg ──
   const msg = document.getElementById('settings-action-msg');
@@ -866,15 +1023,25 @@ async function loadSecurityStatus() {
         const el = document.getElementById(id);
         if (el) { el.checked = val; el.disabled = false; }
       });
+
+      // Обновляем кэш serversData с реальными данными
+      const cached = serversData.find(sv => sv.id === serverId);
+      if (cached) {
+        cached.sec_fail2ban       = s.fail2ban;
+        cached.sec_ufw            = s.ufw;
+        cached.sec_password_login = s.password_login;   // труе = enabled (bad)
+        // root_login нет в БД, не кэшируем
+      }
+
       const secMsg = document.getElementById('sec-status-msg');
-      if (secMsg) { secMsg.textContent = '✓ Статус загружен'; secMsg.classList.remove('hidden'); secMsg.style.color = '#4ade80'; }
+      if (secMsg) { secMsg.textContent = '✓ Статус обновлён'; secMsg.classList.remove('hidden'); secMsg.style.color = '#4ade80'; }
     } else {
       const secMsg = document.getElementById('sec-status-msg');
-      if (secMsg) { secMsg.textContent = 'Не удалось загрузить статус'; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
+      if (secMsg) { secMsg.textContent = 'Не удалось получить статус SSH'; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
     }
   } catch (e) {
     const secMsg = document.getElementById('sec-status-msg');
-    if (secMsg) { secMsg.textContent = 'Ошибка загрузки'; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
+    if (secMsg) { secMsg.textContent = `Ошибка загрузки: ${e.message}`; secMsg.classList.remove('hidden'); secMsg.style.color = '#f87171'; }
   } finally {
     if (loading) loading.classList.add('hidden');
     if (refreshBtn) refreshBtn.disabled = false;
@@ -911,10 +1078,16 @@ async function applySecSetting(setting, enabled) {
 }
 
 function _updateStackTab(server) {
+  const isEU = (server.role || '').toUpperCase() === 'EU';
+
+  // Для EU скрываем строку WARP
+  const warpRow = document.getElementById('stack-row-warp');
+  if (warpRow) warpRow.style.display = isEU ? 'none' : '';
+
   const services = [
     { key: 'xray',  label: 'Xray-core',   installed: server.xray_installed },
     { key: 'awg',   label: 'AmneziaWG',   installed: server.awg_installed },
-    { key: 'warp',  label: 'WARP',        installed: server.warp_installed },
+    ...(!isEU ? [{ key: 'warp', label: 'WARP', installed: server.warp_installed }] : []),
     { key: 'naive', label: 'NaiveProxy',  installed: server.naiveproxy_installed },
   ];
   const svcMap = { xray: 'xray', awg: 'awg', warp: 'warp', naive: 'naiveproxy' };
@@ -973,6 +1146,19 @@ async function loadServerInfoTab() {
 }
 
 // ── Actions tab helpers ──
+
+/** Запуск полной повторной настройки сервера из вкладки Actions */
+async function runFullResetup() {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  const server = serversData.find(s => s.id === serverId);
+  if (!server) return;
+  if (!confirm(`Запустить полную повторную настройку сервера "${server.name}"?\n\nЭто займёт 5–15 минут.`)) return;
+
+  closeModal('modal-server-settings');
+  openServerSetupModal(serverId, server.name, server.ip, server.role);
+  await api.request('POST', `/servers/${serverId}/setup/retry`);
+  _startSetupPolling();
+}
 
 async function updateServerStatus() {
   const serverId = parseInt(document.getElementById('settings-server-id').value);
@@ -1212,6 +1398,7 @@ async function confirmDeleteServer(serverId, name) {
   }
 }
 
+window.runFullResetup             = runFullResetup;
 // Expose globally
 window.selectRole                 = selectRole;
 window.toggleServerAdvanced       = toggleServerAdvanced;
@@ -1247,3 +1434,308 @@ window.restartServerServices      = restartServerServices;
 window.redeployServerConfig       = redeployServerConfig;
 window.handleSshKeyFile           = handleSshKeyFile;
 window.handleSshKeyDrop           = handleSshKeyDrop;
+
+// ───────────────── SERVER SETUP PROGRESS ─────────────────
+
+let _setupServerId  = null;
+let _setupPollTimer = null;
+let _setupServer    = null; // полный объект сервера
+
+const SETUP_STEP_MAP = { step1:1, step2:2, step3:3, step4:4, step5:5 };
+
+// Новый порядок: 1-проверка, 2-стек, 3-безопасность, 4-сбор инфо, 5-финал
+const SETUP_STEP_LABELS = {
+  1: 'Проверка подключения',
+  2: 'Установка стека',
+  3: 'Настройка безопасности',
+  4: 'Сбор параметров сервера',
+  5: 'Финальная проверка',
+};
+
+// ── вспомогательные функции UI ──────────────────────────
+
+function _escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _stpSetDot(n, state) {
+  // state: 'pending' | 'running' | 'ok' | 'error' | 'warn'
+  const dot  = document.getElementById(`setup-dot-${n}`);
+  if (!dot) return;
+  dot.className = `stp-dot stp-${state}`;
+  const iconMap = {
+    pending: 'fa-minus',
+    running: 'fa-circle-notch stp-spin',
+    ok:      'fa-check',
+    error:   'fa-xmark',
+    warn:    'fa-triangle-exclamation',
+  };
+  dot.innerHTML = `<i class="fas ${iconMap[state] || 'fa-minus'}"></i>`;
+}
+
+function _stpSetConn(n, done) {
+  const c = document.getElementById(`setup-conn-${n}`);
+  if (c) {
+    c.className = 'stp-connector' + (done ? ' done' : '');
+  }
+}
+
+function _stpSetProgress(pct) {
+  const el = document.getElementById('setup-progress-fill');
+  if (el) el.style.width = pct + '%';
+}
+
+function _stpSetStatusDot(state) {
+  const d = document.getElementById('setup-status-dot');
+  if (!d) return;
+  const cfg = {
+    running: { bg:'#7c3aed', sh:'rgba(124,58,237,0.25)' },
+    ok:      { bg:'#16a34a', sh:'rgba(22,163,74,0.25)' },
+    error:   { bg:'#dc2626', sh:'rgba(220,38,38,0.25)' },
+    idle:    { bg:'#4b5563', sh:'rgba(75,85,99,0.2)' },
+  };
+  const c = cfg[state] || cfg.idle;
+  d.style.background = c.bg;
+  d.style.boxShadow  = `0 0 0 3px ${c.sh}`;
+}
+
+function _stpLogLineClass(line) {
+  if (/error|fail|❌/i.test(line)) return 'err';
+  if (/warn|warning|⚠/i.test(line)) return 'warn';
+  if (/ok|success|done|installed|✅|✓/i.test(line)) return 'ok';
+  if (/^\s+/.test(line)) return 'sub';
+  return '';
+}
+
+function _stpShowLog(n, lines, autoOpen) {
+  const el = document.getElementById(`setup-step-${n}-log`);
+  if (!el) return;
+  el.innerHTML = lines
+    .map(l => `<div class="stp-log-line ${_stpLogLineClass(l)}">${_escHtml(l)}</div>`)
+    .join('');
+  if (autoOpen) el.classList.remove('hidden');
+}
+
+function _stpShowBtn(id, visible) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = visible ? 'flex' : 'none';
+}
+
+// ── открытие модалки ─────────────────────────────────────
+
+function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
+  _setupServerId = serverId;
+  _setupServer   = { id: serverId, name: serverName, ip: serverIp, role: serverRole };
+
+  // Заголовок
+  document.getElementById('setup-modal-title').textContent    = 'Настройка сервера';
+  document.getElementById('setup-modal-subtitle').textContent = 'Шаги выполняются последовательно';
+  document.getElementById('setup-server-name').textContent    = serverName || '';
+  document.getElementById('setup-ip-tag').textContent         = serverIp   || '';
+
+  const roleTag = document.getElementById('setup-role-tag');
+  if (roleTag) {
+    const isRU = (serverRole || '').toUpperCase() === 'RU';
+    roleTag.textContent   = isRU ? 'RU' : 'EU';
+    roleTag.style.background = isRU ? '#1e3b20' : '#1e3a5f';
+    roleTag.style.color      = isRU ? '#86efac' : '#93c5fd';
+  }
+
+  // Сброс шагов
+  for (let i = 1; i <= 5; i++) {
+    _stpSetDot(i, 'pending');
+    document.getElementById(`setup-time-${i}`).textContent = '';
+    const log = document.getElementById(`setup-step-${i}-log`);
+    if (log) { log.innerHTML = ''; log.classList.add('hidden'); }
+  }
+  for (let i = 1; i <= 4; i++) _stpSetConn(i, false);
+
+  _stpSetProgress(0);
+  _stpSetStatusDot('running');
+  document.getElementById('setup-error-block').classList.add('hidden');
+  _stpShowBtn('setup-btn-retry', false);
+  _stpShowBtn('setup-btn-done',  false);
+  _stpShowBtn('setup-btn-cancel', true);
+
+  document.getElementById('modal-server-setup').classList.remove('hidden');
+  _startSetupPolling();
+}
+
+// ── поллинг статуса ──────────────────────────────────────
+
+function _startSetupPolling() {
+  clearInterval(_setupPollTimer);
+  _pollSetupStatus();
+  _setupPollTimer = setInterval(_pollSetupStatus, 2000);
+}
+
+async function _pollSetupStatus() {
+  if (!_setupServerId) return;
+  try {
+    const res = await api.request('GET', `/servers/${_setupServerId}/setup/status`);
+    if (!res.ok) return;
+    _renderSetupProgress(res.data);
+    if (res.data.setup_status === 'done' || res.data.setup_status === 'failed') {
+      clearInterval(_setupPollTimer);
+      _onSetupFinished(res.data);
+    }
+  } catch (e) {
+    console.warn('Setup poll error:', e);
+  }
+}
+
+// ── рендер прогресса ─────────────────────────────────────
+
+function _renderSetupProgress(data) {
+  const currentStep = SETUP_STEP_MAP[data.setup_step] || 0;
+  const lines       = Array.isArray(data.log) ? data.log : [];
+
+  // Разбиваем лог по шагам: строка "[N]..." начинает новый шаг
+  const stepLogs = { 1:[], 2:[], 3:[], 4:[], 5:[] };
+  let cur = 0;
+  for (const line of lines) {
+    const m = line.match(/^\[(\d)\]/);
+    if (m) cur = parseInt(m[1]);
+    if (cur >= 1 && cur <= 5) {
+      // Убираем префикс "[N] " из строки для отображения
+      stepLogs[cur].push(line.replace(/^\[\d\]\s*/, ''));
+    }
+  }
+
+  // Прогресс-бар: (завершённые шаги / 5) × 100, текущий добавляет 50% своего веса
+  const donePct  = Math.max(0, currentStep - 1) * 20;
+  const inProgPct = currentStep > 0 ? 10 : 0;
+  _stpSetProgress(Math.min(donePct + inProgPct, 100));
+
+  for (let i = 1; i <= 5; i++) {
+    if (i < currentStep) {
+      const hasErr = stepLogs[i].some(l => /error|fail|❌/i.test(l));
+      _stpSetDot(i, hasErr ? 'error' : 'ok');
+      if (i <= 4) _stpSetConn(i, !hasErr);
+    } else if (i === currentStep) {
+      _stpSetDot(i, 'running');
+    }
+    // pending — уже выставлен при открытии, не трогаем
+
+    if (stepLogs[i].length > 0) {
+      _stpShowLog(i, stepLogs[i], i === currentStep);
+    }
+  }
+
+  // Подпись прогресса
+  if (currentStep > 0) {
+    const labels = ['','Проверка подключения','Установка стека',
+                    'Настройка безопасности','Сбор параметров сервера','Финальная проверка'];
+    document.getElementById('setup-modal-subtitle').textContent =
+      `Шаг ${currentStep} из 5 · ${labels[currentStep]}...`;
+  }
+}
+
+// ── завершение ────────────────────────────────────────────
+
+async function _onSetupFinished(data) {
+  const success = data.setup_status === 'done';
+  _stpSetStatusDot(success ? 'ok' : 'error');
+  _stpSetProgress(success ? 100 : undefined);
+
+  document.getElementById('setup-modal-title').textContent = success
+    ? 'Сервер настроен' : 'Настройка завершена с ошибкой';
+  document.getElementById('setup-modal-subtitle').textContent = success
+    ? 'Все критичные сервисы работают' : 'Один или несколько шагов не прошли';
+
+  // Финальный статус точки текущего шага
+  const curStep = SETUP_STEP_MAP[data.setup_step] || 0;
+  if (curStep > 0) {
+    const dot = document.getElementById(`setup-dot-${curStep}`);
+    if (dot && dot.className.includes('stp-running')) {
+      _stpSetDot(curStep, success ? 'ok' : 'error');
+    }
+  }
+
+  _stpShowBtn('setup-btn-cancel', false);
+  if (data.setup_error) {
+    document.getElementById('setup-error-text').textContent = data.setup_error;
+    document.getElementById('setup-error-block').classList.remove('hidden');
+  }
+  _stpShowBtn('setup-btn-retry', true);  // кнопка Retry всегда — и при успехе, и при ошибке
+  _stpShowBtn('setup-btn-done',  true);
+
+  // Обновляем список серверов и перерисовываем открытую карточку
+  await loadServers();
+  // Обновляем setup-бейдж на карточке сервера
+  if (_setupServerId) {
+    const srv = serversData.find(s => s.id === _setupServerId);
+    if (srv) {
+      const badge = _getSetupBadgeMeta(srv);
+      const badgeEl = document.getElementById(`setup-badge-${srv.id}`);
+      if (badgeEl) {
+        badgeEl.style.color      = badge.color;
+        badgeEl.style.background = badge.bg;
+        badgeEl.style.borderColor = badge.color + '33';
+        badgeEl.textContent      = badge.label;
+      }
+      // Обновляем online/offline точку
+      const sm  = _getServerStatusMeta(srv);
+      const dot = document.getElementById(`status-dot-${srv.id}`);
+      const txt = document.getElementById(`status-text-${srv.id}`);
+      if (dot) dot.className  = `status-dot ${sm.dot}`;
+      if (txt) { txt.style.color = sm.color; txt.textContent = sm.label; }
+    }
+  }
+}
+
+// ── действия кнопок ──────────────────────────────────────
+
+function toggleSetupStep(num) {
+  const log = document.getElementById(`setup-step-${num}-log`);
+  if (log) log.classList.toggle('hidden');
+}
+
+async function retryServerSetup() {
+  if (!_setupServerId) return;
+  // Сброс UI до исходного состояния
+  for (let i = 1; i <= 5; i++) {
+    _stpSetDot(i, 'pending');
+    document.getElementById(`setup-time-${i}`).textContent = '';
+    const log = document.getElementById(`setup-step-${i}-log`);
+    if (log) { log.innerHTML = ''; log.classList.add('hidden'); }
+  }
+  for (let i = 1; i <= 4; i++) _stpSetConn(i, false);
+  _stpSetProgress(0);
+  _stpSetStatusDot('running');
+  document.getElementById('setup-modal-title').textContent    = 'Настройка сервера';
+  document.getElementById('setup-modal-subtitle').textContent = 'Шаги выполняются последовательно';
+  document.getElementById('setup-error-block').classList.add('hidden');
+  _stpShowBtn('setup-btn-retry', false);
+  _stpShowBtn('setup-btn-done',  false);
+  _stpShowBtn('setup-btn-cancel', true);
+
+  await api.request('POST', `/servers/${_setupServerId}/setup/retry`);
+  _startSetupPolling();
+}
+
+async function cancelServerSetup() {
+  if (!_setupServerId) return;
+  if (!confirm('Отменить настройку и удалить сервер из списка?')) return;
+  clearInterval(_setupPollTimer);
+  await api.request('DELETE', `/servers/${_setupServerId}/setup/cancel`);
+  closeServerSetup();
+  loadServers();
+  toast('Сервер удалён', 'info');
+}
+
+function closeServerSetup() {
+  clearInterval(_setupPollTimer);
+  _setupServerId = null;
+  _setupServer   = null;
+  document.getElementById('modal-server-setup').classList.add('hidden');
+  loadServers();
+}
+
+window.openServerSetupModal = openServerSetupModal;
+window.toggleSetupStep      = toggleSetupStep;
+window.retryServerSetup     = retryServerSetup;
+window.cancelServerSetup    = cancelServerSetup;
+window.closeServerSetup     = closeServerSetup;
+window.closeServerSetup     = closeServerSetup;

@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, List, Any
 from datetime import datetime
 from app.models.server import ServerRole, ServerStatus
 
@@ -42,10 +42,68 @@ class ServerRead(ServerBase):
     awg_installed: bool
     warp_installed: bool
     created_at: datetime
-    updated_at: Optional[datetime]
+    updated_at: Optional[datetime] = None
+
+    # ── Setup flow ──────────────────────────────────────────────────────────
+    setup_status: Optional[str] = None
+    setup_step: Optional[str] = None
+    setup_error: Optional[str] = None
+
+    # ── Server info (собирается после setup) ────────────────────────────────
+    server_timezone: Optional[str] = None
+    xray_version: Optional[str] = None
+    caddy_version: Optional[str] = None
+    awg_version: Optional[str] = None
+    warp_version: Optional[str] = None
+    xray_public_key: Optional[str] = None
+    awg_server_public_key: Optional[str] = None
+
+    # ── Флаги зашифрованных credentials (фронт получает bool, не сам ключ) ─
+    ssh_private_key_enc: Optional[bool] = None   # True = приватный ключ сохранён
+    ssh_password_enc: Optional[bool] = None       # True = пароль сохранён зашифровано
+
+    # ── Актуальные SSH-данные после харденинга ───────────────────────────────
+    ssh_user_actual: Optional[str] = None
+    ssh_port_actual: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode='before')
+    @classmethod
+    def _convert_enc_and_extra(cls, data: Any) -> Any:
+        """
+        Преобразует SQLAlchemy-объект в dict:
+        - ssh_private_key_enc / ssh_password_enc → bool (наличие значения)
+        - подхватываем все поля модели
+        """
+        if not hasattr(data, '__class__') or isinstance(data, dict):
+            return data
+
+        fields = [
+            'id', 'name', 'ip', 'country', 'role', 'ssh_user', 'ssh_port',
+            'domain', 'notes', 'status', 'is_active',
+            'xray_installed', 'naiveproxy_installed', 'awg_installed', 'warp_installed',
+            'created_at', 'updated_at',
+            'setup_status', 'setup_step', 'setup_error',
+            'server_timezone', 'xray_version', 'caddy_version', 'awg_version',
+            'warp_version', 'xray_public_key', 'awg_server_public_key',
+            'ssh_user_actual', 'ssh_port_actual',
+        ]
+        result = {}
+        for f in fields:
+            val = getattr(data, f, None)
+            if val is not None:
+                result[f] = val
+
+        # Зашифрованные поля — только наличие
+        pk_enc = getattr(data, 'ssh_private_key_enc', None)
+        pw_enc = getattr(data, 'ssh_password_enc', None)
+        ssh_key_plain = getattr(data, 'ssh_key', None)   # plain key тоже считаем
+        result['ssh_private_key_enc'] = bool(pk_enc or ssh_key_plain)
+        result['ssh_password_enc'] = bool(pw_enc)
+
+        return result
 
 
 class ServerStatusUpdate(BaseModel):
