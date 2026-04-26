@@ -1335,60 +1335,123 @@
 <!-- SETUP PROGRESS MODAL (automated server setup) -->
 <div id="modal-server-setup" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg">
+
     <!-- Header -->
     <div class="flex items-center justify-between p-5 border-b border-gray-800">
-      <h3 class="text-base font-bold text-white flex items-center gap-2">
-        <i class="fas fa-wand-magic-sparkles text-brand-400"></i>
-        <span id="setup-modal-title">Автонастройка сервера</span>
-      </h3>
-      <button onclick="closeServerSetupModal()" id="setup-modal-close-btn"
-        class="text-gray-500 hover:text-white transition p-1">
+      <div>
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span id="setup-status-dot" style="width:10px;height:10px;border-radius:50%;background:#7c3aed;display:inline-block;flex-shrink:0;transition:background .4s,box-shadow .4s;box-shadow:0 0 0 3px rgba(124,58,237,0.25)"></span>
+          <i class="fas fa-wand-magic-sparkles text-brand-400"></i>
+          <span id="setup-modal-title">Автонастройка сервера</span>
+        </h3>
+        <p id="setup-modal-subtitle" class="text-xs text-gray-500 mt-0.5 ml-6">Шаги выполняются последовательно</p>
+      </div>
+      <button onclick="closeServerSetup()" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
 
-    <!-- Steps progress bar -->
-    <div class="px-5 pt-4">
-      <div class="flex items-center gap-1 mb-4">
-        <div class="setup-step-dot" id="sdot-step1" title="Подключение"></div>
-        <div class="flex-1 h-0.5 bg-gray-800" id="sline-1"></div>
-        <div class="setup-step-dot" id="sdot-step2" title="Стек"></div>
-        <div class="flex-1 h-0.5 bg-gray-800" id="sline-2"></div>
-        <div class="setup-step-dot" id="sdot-step3" title="Безопасность"></div>
-        <div class="flex-1 h-0.5 bg-gray-800" id="sline-3"></div>
-        <div class="setup-step-dot" id="sdot-step4" title="Информация"></div>
-        <div class="flex-1 h-0.5 bg-gray-800" id="sline-4"></div>
-        <div class="setup-step-dot" id="sdot-step5" title="Финальная проверка"></div>
-      </div>
-      <div class="flex justify-between text-xs text-gray-600 mb-3 px-0.5">
-        <span>Подключение</span>
-        <span>Стек</span>
-        <span>Безопасность</span>
-        <span>Инфо</span>
-        <span>Готово</span>
+    <!-- Server info -->
+    <div class="px-5 pt-3 pb-2 flex items-center gap-3">
+      <span id="setup-server-name" class="text-sm font-semibold text-white"></span>
+      <span id="setup-ip-tag" class="font-mono text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded"></span>
+      <span id="setup-role-tag" class="text-xs font-bold px-2 py-0.5 rounded" style="background:#1e3a5f;color:#93c5fd"></span>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="px-5 pb-2">
+      <div class="h-1 bg-gray-800 rounded-full overflow-hidden">
+        <div id="setup-progress-fill" class="h-full bg-brand-500 rounded-full transition-all duration-500" style="width:0%"></div>
       </div>
     </div>
 
-    <!-- Log output -->
-    <div id="setup-log-output"
-      class="mx-5 mb-2 bg-gray-950 rounded-xl p-3 font-mono text-xs text-gray-300 h-56 overflow-y-auto space-y-0.5">
-      <div class="text-gray-600 italic">Ожидание запуска...</div>
-    </div>
+    <!-- Steps -->
+    <div class="px-5 py-3">
+      <div class="flex items-center gap-0">
 
-    <!-- Status line -->
-    <div class="px-5 pb-4">
-      <div id="setup-final-status" class="hidden rounded-lg p-3 text-sm font-medium text-center mb-3"></div>
-      <div class="flex gap-2">
-        <button onclick="closeServerSetupModal()" id="setup-cancel-btn"
-          class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition">
-          Отмена
-        </button>
-        <button onclick="closeServerSetupModal()" id="setup-done-btn"
-          class="hidden flex-1 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-check"></i> Готово
-        </button>
+        <!-- Step 1 -->
+        <div class="stp-dot stp-pending" id="setup-dot-1" title="Проверка подключения">
+          <i class="fas fa-minus"></i>
+        </div>
+        <div class="stp-connector" id="setup-conn-1"></div>
+
+        <!-- Step 2 -->
+        <div class="stp-dot stp-pending" id="setup-dot-2" title="Установка стека">
+          <i class="fas fa-minus"></i>
+        </div>
+        <div class="stp-connector" id="setup-conn-2"></div>
+
+        <!-- Step 3 -->
+        <div class="stp-dot stp-pending" id="setup-dot-3" title="Настройка безопасности">
+          <i class="fas fa-minus"></i>
+        </div>
+        <div class="stp-connector" id="setup-conn-3"></div>
+
+        <!-- Step 4 -->
+        <div class="stp-dot stp-pending" id="setup-dot-4" title="Сбор параметров">
+          <i class="fas fa-minus"></i>
+        </div>
+        <div class="stp-connector" id="setup-conn-4"></div>
+
+        <!-- Step 5 -->
+        <div class="stp-dot stp-pending" id="setup-dot-5" title="Финальная проверка">
+          <i class="fas fa-minus"></i>
+        </div>
+
+      </div>
+      <!-- Step labels -->
+      <div class="flex justify-between mt-1.5 px-0">
+        <span class="text-[10px] text-gray-600 w-6 text-center">Связь</span>
+        <span class="flex-1"></span>
+        <span class="text-[10px] text-gray-600 w-8 text-center">Стек</span>
+        <span class="flex-1"></span>
+        <span class="text-[10px] text-gray-600 w-8 text-center">Безоп.</span>
+        <span class="flex-1"></span>
+        <span class="text-[10px] text-gray-600 w-6 text-center">Инфо</span>
+        <span class="flex-1"></span>
+        <span class="text-[10px] text-gray-600 w-8 text-center">Готово</span>
       </div>
     </div>
+
+    <!-- Step logs (accordion) -->
+    <div class="px-5 space-y-1 max-h-64 overflow-y-auto pb-1">
+      <div id="setup-step-1-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-2-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-3-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-4-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-5-log" class="hidden stp-log-block"></div>
+    </div>
+
+    <!-- Timings row -->
+    <div class="px-5 py-2 flex justify-between text-[10px] text-gray-700">
+      <span id="setup-time-1"></span>
+      <span id="setup-time-2"></span>
+      <span id="setup-time-3"></span>
+      <span id="setup-time-4"></span>
+      <span id="setup-time-5"></span>
+    </div>
+
+    <!-- Error block -->
+    <div id="setup-error-block" class="hidden mx-5 mb-3 p-3 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-300"></div>
+
+    <!-- Action buttons -->
+    <div class="px-5 pb-5 flex gap-2">
+      <button id="setup-btn-cancel" onclick="closeServerSetup()"
+        class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition">
+        Отмена
+      </button>
+      <button id="setup-btn-retry" onclick="retryServerSetup()"
+        style="display:none"
+        class="flex-1 py-2 bg-amber-700 hover:bg-amber-600 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-rotate-right"></i> Повторить
+      </button>
+      <button id="setup-btn-done" onclick="closeServerSetup()"
+        style="display:none"
+        class="flex-1 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-check"></i> Готово
+      </button>
+    </div>
+
   </div>
 </div>
 

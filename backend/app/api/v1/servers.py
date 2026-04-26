@@ -436,3 +436,25 @@ def setup_stream(
 
     return StreamingResponse(event_generator(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/{server_id}/setup/status", summary="Get setup status (polling)")
+def get_setup_status(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Лёгкий polling-endpoint для JS: возвращает текущий статус настройки."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    log_raw = getattr(server, "setup_log", "") or ""
+    log_lines = [l.strip() for l in log_raw.splitlines() if l.strip()]
+
+    return {
+        "setup_status": getattr(server, "setup_status", None),
+        "setup_step":   getattr(server, "setup_step",   None),
+        "setup_error":  getattr(server, "setup_error",  None),
+        "log":          log_lines,
+    }
