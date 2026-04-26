@@ -1526,19 +1526,31 @@ function _stpShowBtn(id, visible) {
 // ── открытие модалки ─────────────────────────────────────
 
 function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
+  // Проверяем что модал существует в DOM
+  const modal = document.getElementById('modal-server-setup');
+  if (!modal) {
+    console.error('[Setup] modal-server-setup не найден в DOM!');
+    toast('Ошибка: модал настройки не найден', 'error');
+    return;
+  }
+
   _setupServerId = serverId;
   _setupServer   = { id: serverId, name: serverName, ip: serverIp, role: serverRole };
 
-  // Заголовок
-  document.getElementById('setup-modal-title').textContent    = 'Настройка сервера';
-  document.getElementById('setup-modal-subtitle').textContent = 'Шаги выполняются последовательно';
-  document.getElementById('setup-server-name').textContent    = serverName || '';
-  document.getElementById('setup-ip-tag').textContent         = serverIp   || '';
+  // Заголовок — безопасно с ?. 
+  const titleEl    = document.getElementById('setup-modal-title');
+  const subtitleEl = document.getElementById('setup-modal-subtitle');
+  const nameEl     = document.getElementById('setup-server-name');
+  const ipEl       = document.getElementById('setup-ip-tag');
+  if (titleEl)    titleEl.textContent    = 'Настройка сервера';
+  if (subtitleEl) subtitleEl.textContent = 'Шаги выполняются последовательно';
+  if (nameEl)     nameEl.textContent     = serverName || '';
+  if (ipEl)       ipEl.textContent       = serverIp   || '';
 
   const roleTag = document.getElementById('setup-role-tag');
   if (roleTag) {
     const isRU = (serverRole || '').toUpperCase() === 'RU';
-    roleTag.textContent   = isRU ? 'RU' : 'EU';
+    roleTag.textContent      = isRU ? 'RU' : 'EU';
     roleTag.style.background = isRU ? '#1e3b20' : '#1e3a5f';
     roleTag.style.color      = isRU ? '#86efac' : '#93c5fd';
   }
@@ -1546,7 +1558,8 @@ function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
   // Сброс шагов
   for (let i = 1; i <= 5; i++) {
     _stpSetDot(i, 'pending');
-    document.getElementById(`setup-time-${i}`).textContent = '';
+    const timeEl = document.getElementById(`setup-time-${i}`);
+    if (timeEl) timeEl.textContent = '';
     const log = document.getElementById(`setup-step-${i}-log`);
     if (log) { log.innerHTML = ''; log.classList.add('hidden'); }
   }
@@ -1554,12 +1567,14 @@ function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
 
   _stpSetProgress(0);
   _stpSetStatusDot('running');
-  document.getElementById('setup-error-block').classList.add('hidden');
-  _stpShowBtn('setup-btn-retry', false);
-  _stpShowBtn('setup-btn-done',  false);
+  const errBlock = document.getElementById('setup-error-block');
+  if (errBlock) errBlock.classList.add('hidden');
+  _stpShowBtn('setup-btn-retry',  false);
+  _stpShowBtn('setup-btn-done',   false);
   _stpShowBtn('setup-btn-cancel', true);
 
-  document.getElementById('modal-server-setup').classList.remove('hidden');
+  modal.classList.remove('hidden');
+  console.log('[Setup] Modal opened for server', serverId, serverName);
   _startSetupPolling();
 }
 

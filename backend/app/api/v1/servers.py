@@ -458,3 +458,24 @@ def get_setup_status(
         "setup_error":  getattr(server, "setup_error",  None),
         "log":          log_lines,
     }
+
+
+@router.post("/{server_id}/setup/retry", summary="Retry automated server setup")
+def retry_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Повторный запуск автонастройки (сбрасывает статус и запускает заново)."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    # Сбрасываем предыдущий статус
+    server.setup_status = None
+    server.setup_step   = None
+    server.setup_error  = None
+    server.setup_log    = None
+    db.commit()
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup restarted"}
