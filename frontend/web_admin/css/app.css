@@ -519,13 +519,63 @@ button.role-card.role-card-active {
   background: #030712;
   border: 1px solid #1f2937;
   border-radius: 8px;
-  padding: 6px 8px;
-  font-family: monospace;
-  font-size: 11px;
-  line-height: 1.5;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  max-height: 260px;
+  overflow-y: auto;
 }
-.stp-log-line       { color: #9ca3af; }
+.stp-log-line {
+  color: #8b95a6;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+}
 .stp-log-line.ok    { color: #4ade80; }
 .stp-log-line.err   { color: #f87171; }
 .stp-log-line.warn  { color: #fbbf24; }
-.stp-log-line.sub   { color: #6b7280; padding-left: 12px; }
+.stp-log-line.wait  { color: #818cf8; }
+.stp-log-line.sub   { color: #6b7280; padding-left: 18px; font-size: 11px; }
+/* иконки в строках лога */
+.stp-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-size: 9px;
+  margin-right: 2px;
+}
+.stp-icon.ok   { color: #4ade80; }
+.stp-icon.err  { color: #f87171; }
+.stp-icon.warn { color: #fbbf24; }
+.stp-icon.wait { color: #818cf8; }
+.stp-icon.info { color: #60a5fa; }
+/* кнопка Отмена */
+#setup-btn-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.25);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #f87171;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+#setup-btn-cancel:hover {
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(239,68,68,0.5);
+  color: #fca5a5;
+}
+#setup-btn-cancel i {
+  font-size: 11px;
+  opacity: 0.85;
+}

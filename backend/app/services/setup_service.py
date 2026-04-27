@@ -278,36 +278,82 @@ def _run(db: Session, server: Server):
         else:
             _update_setup(db, server, log_line="[2.1] ✅ Базовые пакеты установлены")
 
-        # 2.2 Xray-core
+        # 2.2 Xray-core — устанавливаем через уже открытый client (без отдельного SSHClient)
         _update_setup(db, server, log_line="[2.2] Установка Xray-core...")
-        from app.services.deploy_service import install_xray, generate_reality_keys
-        server.ssh_user = cur_user
-        server.ssh_port = cur_port
-        server.ssh_key  = cur_key
-        server.ssh_password = cur_pass
-        db.add(server); db.commit()
+        XRAY_SCRIPT = r"""#!/bin/bash
+export DEBIAN_FRONTEND=noninteractive
+echo "[*] Installing Xray-core..."
+apt-get install -y -qq curl wget unzip 2>/dev/null
 
-        ok, msg = install_xray(server)
-        if ok:
+# Попытка 1: официальный скрипт
+if bash <(curl -fsSL --retry 3 --retry-delay 2 \
+    https://github.com/XTLS/Xray-install/raw/main/install-release.sh) install 2>&1; then
+    echo "[+] Xray installed via official script"
+else
+    echo "[!] Official script failed, trying direct binary download..."
+    ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+    case "$ARCH" in
+      amd64|x86_64) XRAY_ARCH="Xray-linux-64" ;;
+      arm64|aarch64) XRAY_ARCH="Xray-linux-arm64-v8a" ;;
+      *) XRAY_ARCH="Xray-linux-64" ;;
+    esac
+    XRAY_VER=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+    [ -z "$XRAY_VER" ] && XRAY_VER="v25.3.6"
+    XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/${XRAY_ARCH}.zip"
+    echo "[*] Downloading $XRAY_URL"
+    curl -fsSL --retry 3 -o /tmp/xray.zip "$XRAY_URL"
+    mkdir -p /usr/local/bin /usr/local/etc/xray /var/log/xray
+    cd /tmp && unzip -o xray.zip xray -d /usr/local/bin/ 2>/dev/null || \
+        (unzip -o xray.zip -d /tmp/xray_unpack/ && cp /tmp/xray_unpack/xray /usr/local/bin/xray)
+    chmod +x /usr/local/bin/xray 2>/dev/null || true
+    cat > /etc/systemd/system/xray.service << 'SVC_EOF'
+[Unit]
+Description=Xray Service
+After=network.target
+[Service]
+User=nobody
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+SVC_EOF
+fi
+
+mkdir -p /var/log/xray /usr/local/etc/xray
+chmod 755 /var/log/xray
+cat > /usr/local/etc/xray/config.json << 'XRAY_EOF'
+{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"tag":"direct","protocol":"freedom","settings":{}}]}
+XRAY_EOF
+systemctl daemon-reload
+systemctl enable xray
+systemctl restart xray
+echo "[+] Xray installed"
+"""
+        code, out, err = _exec(client, XRAY_SCRIPT, timeout=300)
+        if code != 0:
+            _update_setup(db, server, log_line=f"[2.2] ❌ Xray: {(err or out)[:300]}")
+        else:
             server.xray_installed = True
             db.add(server); db.commit()
             _update_setup(db, server, log_line="[2.2] ✅ Xray-core установлен")
-            _update_setup(db, server, log_line="[2.2] Запуск Xray...")
             # Проверяем что xray запустился
             _, xray_status, _ = _exec(client, "systemctl is-active xray 2>/dev/null || echo inactive")
             first = next((l.strip() for l in xray_status.splitlines() if l.strip()), "")
             if first == "active":
                 _update_setup(db, server, log_line="[2.2] ✅ Xray запущен")
             else:
-                _update_setup(db, server, log_line=f"[2.2] ⚠️ Xray: статус {first or 'unknown'}")
-            # Reality-ключи
-            pub, priv = generate_reality_keys(server)
-            if pub:
-                server.xray_public_key = pub
+                _update_setup(db, server, log_line=f"[2.2] ⚠️ Xray статус: {first or 'unknown'}")
+            # Reality-ключи — напрямую через client
+            _, keys_out, _ = _exec(client, "xray x25519 2>/dev/null || true", timeout=15)
+            xray_pub = None
+            for ln in keys_out.splitlines():
+                if "Public key:" in ln:
+                    xray_pub = ln.split(":", 1)[1].strip()
+            if xray_pub:
+                server.xray_public_key = xray_pub
                 db.add(server); db.commit()
                 _update_setup(db, server, log_line="[2.2] ✅ Reality-ключи сгенерированы")
-        else:
-            _update_setup(db, server, log_line=f"[2.2] ❌ Xray: {msg}")
 
         # 2.3 AmneziaWG
         _update_setup(db, server, log_line="[2.3] Установка AmneziaWG...")
@@ -398,7 +444,8 @@ echo "[+] NaiveProxy setup complete"
             db.add(server); db.commit()
             _update_setup(db, server,
                 log_line=f"[2.4] ✅ NaiveProxy установлен{(' (' + ver + ')') if ver else ''}")
-            _try_link_naiveproxy_subdomain(db, server, client, is_eu)
+            # Привязка поддомена делается позже в рамках настройки подключения
+            pass
 
         # 2.5 WARP (только RU)
         if not is_eu:
@@ -629,12 +676,16 @@ EOF""" + " && systemctl restart fail2ban",
             timeout=8)
 
         # Ждём пока sshd поднимется на новом порту
-        time.sleep(14)
+        # sleep 4 + 3 попытки × 8 сек = максимум ~28 сек, лог на каждую попытку
+        _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание перезапуска SSH на порту {new_port}...")
+        time.sleep(4)
         port_ok = False
-        for attempt in range(5):
+        for attempt in range(3):
+            _update_setup(db, server,
+                log_line=f"[3.9] ⏳ Проверка порта {new_port}, попытка {attempt+1}/3...")
             try:
                 test_cli = _connect(cur_ip, new_port, cur_user,
-                                    private_key_pem=cur_key, timeout=12)
+                                    private_key_pem=cur_key, timeout=8)
                 _exec(test_cli, "ufw delete allow 22/tcp 2>/dev/null; true")
                 test_cli.close()
                 cur_port = new_port
@@ -642,12 +693,13 @@ EOF""" + " && systemctl restart fail2ban",
                 _update_setup(db, server, log_line=f"[3.9] ✅ SSH-порт изменён на {new_port}")
                 break
             except Exception as e:
-                if attempt < 4:
-                    _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание нового порта (попытка {attempt+1}/5)...")
+                if attempt < 2:
+                    _update_setup(db, server,
+                        log_line=f"[3.9] ⏳ Порт {new_port} ещё не готов ({e.__class__.__name__}), ждём...")
                     time.sleep(8)
                 else:
                     # Пробуем откатиться на 22
-                    _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил, откат на 22...")
+                    _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил — откат на порт 22...")
                     try:
                         rb = _connect(cur_ip, 22, cur_user, private_key_pem=cur_key, timeout=10)
                         _exec(rb,
@@ -655,8 +707,9 @@ EOF""" + " && systemctl restart fail2ban",
                             "echo 'Port 22' >> /etc/ssh/sshd_config && "
                             "systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true")
                         rb.close()
+                        cur_port = 22
                         _update_setup(db, server,
-                            log_line="[3.9] ⚠️ Откат выполнен, SSH остаётся на порту 22")
+                            log_line="[3.9] ⚠️ Откат выполнен — SSH остаётся на порту 22")
                     except Exception as rb_e:
                         _update_setup(db, server,
                             log_line=f"[3.9] ⚠️ Откат не удался: {rb_e}")
@@ -941,15 +994,13 @@ def _try_link_naiveproxy_subdomain(db: Session, server: Server,
                        Subdomain.server_id == None)
                .first())
         if not sub:
-            _update_setup(db, server,
-                          log_line=f"[2.4] ⚠️ Нет свободного поддомена {stype} — без домена")
-            return
+            return  # нет свободного поддомена — тихо пропускаем
         server.naiveproxy_subdomain_id = sub.id
         sub.server_id = server.id
         db.add(sub); db.add(server); db.commit()
         _update_setup(db, server, log_line=f"[2.4] 🔗 Привязан поддомен {sub.full_domain}")
     except Exception as e:
-        _update_setup(db, server, log_line=f"[2.4] ⚠️ Автопривязка поддомена: {e}")
+        pass  # Автопривязка поддомена не выполняется на этапе настройки
 
 
 # ─────────────────────────────────────────────────────────────────────────────

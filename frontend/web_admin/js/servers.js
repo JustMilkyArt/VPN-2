@@ -1550,18 +1550,43 @@ function _stpSetStatusDot(state) {
 }
 
 function _stpLogLineClass(line) {
-  if (/error|fail|❌/i.test(line)) return 'err';
-  if (/warn|warning|⚠/i.test(line)) return 'warn';
-  if (/ok|success|done|installed|✅|✓/i.test(line)) return 'ok';
-  if (/^\s+/.test(line)) return 'sub';
+  if (/❌|\berror\b|\bfail\b/i.test(line)) return 'err';
+  if (/⚠|\bwarn/i.test(line)) return 'warn';
+  if (/✅|\bok\b|success|done|installed|установлен|завершен|запущен|активен|изменён|сгенерир|патч|patched/i.test(line)) return 'ok';
+  if (/⏳|ожидани|попытк|проверка порта/i.test(line)) return 'wait';
+  if (/^    /.test(line)) return 'sub';
   return '';
+}
+
+function _stpFormatLine(raw) {
+  // Заменяем emoji-иконки на красивые FA-теги
+  let line = _escHtml(raw);
+  // ✅ → зелёная галочка
+  line = line.replace(/✅/g,
+    '<span class="stp-icon ok"><i class="fas fa-circle-check"></i></span>');
+  // ❌ → красный крест
+  line = line.replace(/❌/g,
+    '<span class="stp-icon err"><i class="fas fa-circle-xmark"></i></span>');
+  // ⚠️ или ⚠ → жёлтый треугольник
+  line = line.replace(/⚠️|⚠/g,
+    '<span class="stp-icon warn"><i class="fas fa-triangle-exclamation"></i></span>');
+  // ⏳ → спиннер
+  line = line.replace(/⏳/g,
+    '<span class="stp-icon wait"><i class="fas fa-circle-notch stp-spin"></i></span>');
+  // 🔗 → ссылка
+  line = line.replace(/🔗/g,
+    '<span class="stp-icon info"><i class="fas fa-link"></i></span>');
+  // ℹ️ → инфо
+  line = line.replace(/ℹ️|ℹ/g,
+    '<span class="stp-icon info"><i class="fas fa-circle-info"></i></span>');
+  return line;
 }
 
 function _stpShowLog(n, lines, autoOpen) {
   const el = document.getElementById(`setup-step-${n}-log`);
   if (!el) return;
   el.innerHTML = lines
-    .map(l => `<div class="stp-log-line ${_stpLogLineClass(l)}">${_escHtml(l)}</div>`)
+    .map(l => `<div class="stp-log-line ${_stpLogLineClass(l)}">${_stpFormatLine(l)}</div>`)
     .join('');
   if (autoOpen) el.classList.remove('hidden');
 }
