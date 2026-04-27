@@ -66,6 +66,12 @@ class ServerRead(ServerBase):
     ssh_user_actual: Optional[str] = None
     ssh_port_actual: Optional[int] = None
 
+    # ── Security flags ───────────────────────────────────────────────────────
+    sec_fail2ban:       Optional[bool] = None
+    sec_ufw:            Optional[bool] = None
+    sec_password_login: Optional[bool] = None
+    sec_ssh_key:        Optional[bool] = None
+
     class Config:
         from_attributes = True
 
@@ -89,6 +95,7 @@ class ServerRead(ServerBase):
             'server_timezone', 'xray_version', 'caddy_version', 'awg_version',
             'warp_version', 'xray_public_key', 'awg_server_public_key',
             'ssh_user_actual', 'ssh_port_actual',
+            'sec_fail2ban', 'sec_ufw', 'sec_password_login', 'sec_ssh_key',
         ]
         result = {}
         for f in fields:

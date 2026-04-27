@@ -68,6 +68,12 @@ class Server(Base):
     ssh_user_actual = Column(String(100), nullable=True)
     ssh_port_actual = Column(Integer, nullable=True)
 
+    # ── Security flags (заполняются на шаге 4 настройки) ───────────
+    sec_fail2ban       = Column(Boolean, nullable=True)   # fail2ban активен
+    sec_ufw            = Column(Boolean, nullable=True)   # ufw активен
+    sec_password_login = Column(Boolean, nullable=True)   # True = пароль ВКЛЮЧЁН (плохо)
+    sec_ssh_key        = Column(Boolean, nullable=True)   # SSH-ключ сохранён
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -337,69 +337,67 @@ echo "[+] AmneziaWG installed"
             _update_setup(db, server,
                 log_line="[2.3] ✅ AmneziaWG установлен, запуск после генерации конфига")
 
-        # 2.4 NaiveProxy (Caddy) — скачиваем готовый бинарник с GitHub
-        _update_setup(db, server, log_line="[2.4] Установка Caddy (NaiveProxy)...")
+        # 2.4 NaiveProxy — устанавливаем бинарник напрямую с GitHub (без Caddy)
+        _update_setup(db, server, log_line="[2.4] Установка NaiveProxy (бинарник)...")
         NAIVE_SCRIPT = r"""export DEBIAN_FRONTEND=noninteractive
 set -e
-echo "[*] Installing Caddy (NaiveProxy) from GitHub release..."
+echo "[*] Installing NaiveProxy binary from GitHub releases..."
 
-# Устанавливаем debian-keyring и apt-transport-https
-apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+# Архитектура
+ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+case "$ARCH" in
+  amd64|x86_64) ARCH_TAG="linux-x64" ;;
+  arm64|aarch64) ARCH_TAG="linux-arm64" ;;
+  *) ARCH_TAG="linux-x64" ;;
+esac
 
-# Скачиваем и устанавливаем официальный Caddy (без xcaddy и компиляции)
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  > /etc/apt/sources.list.d/caddy-stable.list
-apt-get update -qq
-apt-get install -y -qq caddy
-
-# Скачиваем готовый бинарник caddy с NaiveProxy плагином из GitHub releases
-NAIVE_VERSION=$(curl -s https://api.github.com/repos/klzgrad/naiveproxy/releases/latest \
-  | grep '"tag_name"' | cut -d'"' -f4 | head -1)
-echo "[*] NaiveProxy version: $NAIVE_VERSION"
-
-ARCH=$(dpkg --print-architecture)
-if [ "$ARCH" = "amd64" ]; then
-  NAIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download/${NAIVE_VERSION}/naiveproxy-${NAIVE_VERSION}-linux-x64.tar.xz"
-elif [ "$ARCH" = "arm64" ]; then
-  NAIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download/${NAIVE_VERSION}/naiveproxy-${NAIVE_VERSION}-linux-arm64.tar.xz"
-else
-  echo "[!] Unsupported arch: $ARCH, trying amd64"
-  NAIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download/${NAIVE_VERSION}/naiveproxy-${NAIVE_VERSION}-linux-x64.tar.xz"
+# Последняя версия
+NAIVE_VERSION=$(curl -sf https://api.github.com/repos/klzgrad/naiveproxy/releases/latest   | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+if [ -z "$NAIVE_VERSION" ]; then
+  echo "[!] Could not fetch version, trying fallback tag"
+  NAIVE_VERSION=$(curl -sf https://github.com/klzgrad/naiveproxy/releases     | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
 fi
+echo "[*] NaiveProxy version: ${NAIVE_VERSION}"
 
-# Скачиваем и распаковываем
+NAIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download/${NAIVE_VERSION}/naiveproxy-${NAIVE_VERSION}-${ARCH_TAG}.tar.xz"
+echo "[*] Downloading: $NAIVE_URL"
+
 cd /tmp
-curl -L -o naive.tar.xz "$NAIVE_URL"
-tar -xf naive.tar.xz
-NAIVE_DIR=$(tar -tf naive.tar.xz 2>/dev/null | head -1 | cut -d/ -f1 || ls -d naiveproxy-* 2>/dev/null | head -1)
+rm -f naive.tar.xz
+curl -fsSL -o naive.tar.xz "$NAIVE_URL"
+tar -xf naive.tar.xz 2>/dev/null || unxz naive.tar.xz && tar -xf naive.tar 2>/dev/null || true
 
-# Ищем бинарник naive в директории
+# Ищем бинарник
 NAIVE_BIN=$(find /tmp -name "naive" -type f 2>/dev/null | head -1)
 if [ -n "$NAIVE_BIN" ]; then
   cp "$NAIVE_BIN" /usr/local/bin/naive
   chmod +x /usr/local/bin/naive
-  echo "[+] NaiveProxy (naive) installed to /usr/local/bin/naive"
+  NAIVE_VER=$(/usr/local/bin/naive --version 2>/dev/null || echo "installed")
+  echo "[+] NaiveProxy installed: $NAIVE_VER"
 else
-  echo "[!] Could not find naive binary, trying alternative..."
-  # Fallback: скачиваем caddy с форвард-проксей плагином (pre-built)
-  CADDY_URL="https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com%2Fklzgrad%2Fforwardproxy%40naive"
-  curl -L -o /usr/local/bin/caddy-naive "$CADDY_URL" || true
-  chmod +x /usr/local/bin/caddy-naive 2>/dev/null || true
+  echo "[!] naive binary not found in archive"
+  ls /tmp/naiveproxy-* 2>/dev/null || true
+  exit 1
 fi
 
-mkdir -p /etc/caddy-naive
-echo "[+] Caddy (NaiveProxy) setup complete"
+# Директория конфигов
+mkdir -p /etc/naiveproxy
+echo "[+] NaiveProxy setup complete"
 """
         code, out, err = _exec(client, NAIVE_SCRIPT, timeout=300)
         if code != 0:
-            _update_setup(db, server, log_line=f"[2.4] ❌ Caddy (NaiveProxy): {err[:300]}")
+            _update_setup(db, server, log_line=f"[2.4] ❌ NaiveProxy: {err[:300]}")
         else:
             server.naiveproxy_installed = True
+            # Версия
+            _, ver_out, _ = _exec(client,
+                "/usr/local/bin/naive --version 2>/dev/null || echo ''", timeout=10)
+            ver = ver_out.strip().splitlines()[0] if ver_out.strip() else None
+            if ver:
+                server.caddy_version = ver  # reuse caddy_version field for naive version
             db.add(server); db.commit()
             _update_setup(db, server,
-                log_line="[2.4] ✅ Caddy (NaiveProxy) установлен, запуск после генерации конфига (NaiveProxy)")
+                log_line=f"[2.4] ✅ NaiveProxy установлен{(' (' + ver + ')') if ver else ''}")
             _try_link_naiveproxy_subdomain(db, server, client, is_eu)
 
         # 2.5 WARP (только RU)
@@ -759,15 +757,36 @@ EOF""" + " && systemctl restart fail2ban",
         sec_password_auth_disabled = bool(pw_lines) and all("no" in l for l in pw_lines)
         sec_ssh_key_set            = bool(cur_key)
 
-        # Сохраняем флаги в поля модели (если поля есть)
-        for attr, val in [
-            ("sec_fail2ban",         sec_fail2ban_active),
-            ("sec_ufw",              sec_ufw_active),
-            ("sec_password_login",   not sec_password_auth_disabled),  # inverted: True=enabled
-            ("sec_ssh_key",          sec_ssh_key_set),
-        ]:
-            if hasattr(server, attr):
-                setattr(server, attr, val)
+        # ── Сохраняем ВСЕ параметры безопасности и SSH-доступа ──────────────────
+        # sec_* флаги
+        server.sec_fail2ban       = sec_fail2ban_active
+        server.sec_ufw            = sec_ufw_active
+        server.sec_password_login = not sec_password_auth_disabled   # True = пароль включён (плохо)
+        server.sec_ssh_key        = sec_ssh_key_set
+
+        # Актуальные SSH-параметры после харденинга
+        server.ssh_user_actual = cur_user
+        server.ssh_port_actual = cur_port
+
+        # Зашифрованные credentials
+        if cur_key:
+            try:
+                server.ssh_private_key_enc = encrypt_value(cur_key)
+            except Exception as _e:
+                _update_setup(db, server, log_line=f"[4] ⚠️ Не удалось зашифровать SSH-ключ: {_e}")
+                server.ssh_key = cur_key   # fallback — сохраняем plain
+        if cur_pass:
+            try:
+                server.ssh_password_enc = encrypt_value(cur_pass)
+                server.ssh_password = None  # убираем plain-text пароль
+            except Exception as _e:
+                _update_setup(db, server, log_line=f"[4] ⚠️ Не удалось зашифровать пароль: {_e}")
+
+        # Обновляем основные поля SSH (используются при последующих подключениях)
+        server.ssh_user = cur_user
+        server.ssh_port = cur_port
+        if cur_key:
+            server.ssh_key = cur_key
 
         db.add(server); db.commit()
 

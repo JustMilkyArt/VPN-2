@@ -215,51 +215,9 @@ async function showAddConnectionModal() {
 }
 
 // ─── FORM SUBMIT ─────────────────────────────────────────────────────────────
-document.getElementById('add-connection-form').addEventListener('submit', async (e) => {
+document.getElementById('add-connection-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  const form = e.target;
-  const formData = new FormData(form);
-  const data = {};
-
-  for (const [k, v] of formData.entries()) {
-    if (v !== '') data[k] = v;
-  }
-
-  if (!data.server_id) { toast('Выберите сервер', 'error'); return; }
-  if (!data.protocol)  { toast('Выберите протокол', 'error'); return; }
-
-  data.server_id = parseInt(data.server_id);
-  if (data.exit_server_id) data.exit_server_id = parseInt(data.exit_server_id);
-
-  const submitBtn = document.getElementById('conn-submit-btn');
-  const progressEl = document.getElementById('add-connection-progress');
-  const errorEl = document.getElementById('add-connection-error');
-
-  submitBtn.disabled = true;
-  submitBtn.innerHTML = '<span class="spinner"></span> Деплой...';
-  progressEl.classList.remove('hidden');
-  errorEl.classList.add('hidden');
-
-  const res = await api.createConnection(data);
-
-  submitBtn.disabled = false;
-  submitBtn.innerHTML = '<i class="fas fa-rocket text-xs"></i> Создать и задеплоить';
-  progressEl.classList.add('hidden');
-
-  if (res.ok) {
-    closeModal('modal-add-connection');
-    const conn = res.data;
-    toast(
-      conn.status === 'active'
-        ? `✓ Подключение "${conn.name}" задеплоено`
-        : `⚠ Подключение создано, но деплой завершился с ошибкой`,
-      conn.status === 'active' ? 'success' : 'error', 6000
-    );
-    loadConnectionsGrouped();
-  } else {
-    errorEl.textContent = typeof res.error === 'string' ? res.error : JSON.stringify(res.error);
-    errorEl.classList.remove('hidden');
-  }
+  closeModal('modal-add-connection');
 });
 
 // Attach change listeners

@@ -665,83 +665,132 @@ function _renderParamsTab() {
   const el = document.getElementById('sd-params-content');
   if (!server || !el) return;
 
-  const row = (label, value, mono = false) => `
-    <div class="flex items-start justify-between py-2 border-b border-gray-800 last:border-0">
-      <span class="text-gray-500 text-xs">${label}</span>
-      <span class="${mono ? 'font-mono' : ''} text-xs text-gray-200 text-right max-w-[60%] break-all">${value}</span>
-    </div>`;
-
-  // Используем has_ssh_key / has_ssh_password из API (безопасные флаги, секреты не передаются)
-  const hasKey     = !!(server.has_ssh_key);
-  const hasPassEnc = !!(server.has_ssh_password);
-  const portOk  = server.ssh_port_actual || server.ssh_port || 22;
-  const userOk  = server.ssh_user_actual || server.ssh_user || '—';
-  const isEU    = (server.role || '').toUpperCase() === 'EU';
-
-  // SSH-ключ: статус
-  let keyStatus;
-  if (hasKey) keyStatus = '<span class="text-green-400">✅ сохранён</span>';
-  else keyStatus = '<span class="text-gray-500">— нет</span>';
-
-  // Пароль SSH: статус
-  let passStatus;
-  if (server.ssh_password) {
-    passStatus = '<span class="text-yellow-400">⚠️ хранится в открытом виде</span>';
-  } else if (hasPassEnc) {
-    passStatus = '<span class="text-green-400">✅ зашифрован в БД</span>';
-  } else if (hasKey) {
-    passStatus = '<span class="text-green-400">✅ отключён (вход по ключу)</span>';
-  } else {
-    passStatus = '<span class="text-gray-500">— нет</span>';
-  }
-
-  // Setup badge
+  const isEU = (server.role || '').toUpperCase() === 'EU';
   const badge = _getSetupBadgeMeta(server);
 
+  // helper — строка параметра
+  const row = (label, valueHtml, mono = false) =>
+    `<div class="flex items-start justify-between py-1.5 border-b border-white/5 last:border-0">
+      <span class="text-gray-500 text-xs flex-shrink-0 mr-3">${label}</span>
+      <span class="${mono ? 'font-mono' : ''} text-xs text-gray-200 text-right break-all">${valueHtml}</span>
+    </div>`;
+
+  // ── SSH параметры ─────────────────────────────────────────────
+  const portOk  = server.ssh_port_actual || server.ssh_port || 22;
+  const userOk  = server.ssh_user_actual || server.ssh_user || 'root';
+
+  const hasKey     = !!(server.ssh_private_key_enc || server.has_ssh_key);
+  const hasPassEnc = !!(server.ssh_password_enc     || server.has_ssh_password);
+
+  const keyHtml = hasKey
+    ? '<span class="text-emerald-400">✅ сохранён в БД</span>'
+    : '<span class="text-gray-600">не задан</span>';
+
+  let passHtml;
+  if (server.ssh_password) {
+    passHtml = '<span class="text-yellow-400">⚠ открытый текст</span>';
+  } else if (hasPassEnc) {
+    passHtml = '<span class="text-emerald-400">✅ зашифрован</span>';
+  } else if (hasKey) {
+    passHtml = '<span class="text-gray-500">— вход по ключу</span>';
+  } else {
+    passHtml = '<span class="text-gray-600">не задан</span>';
+  }
+
+  // ── Security флаги ────────────────────────────────────────────
+  const secIcon = (v) => {
+    if (v === true)  return '<span class="text-emerald-400">✅</span>';
+    if (v === false) return '<span class="text-red-400">❌</span>';
+    return '<span class="text-gray-600">—</span>';
+  };
+  // Для пароль-логин: True = включён (плохо), False = выключен (хорошо)
+  const passLoginHtml = server.sec_password_login === false
+    ? '<span class="text-emerald-400">✅ отключён</span>'
+    : server.sec_password_login === true
+      ? '<span class="text-yellow-400">⚠ включён</span>'
+      : '<span class="text-gray-600">—</span>';
+
+  // ── Версии сервисов ───────────────────────────────────────────
+  const ver = (installed, version, label) => {
+    if (!installed && !version) return `<span class="text-gray-600">не установлен</span>`;
+    if (version) return `<span class="text-gray-200 font-mono">${version}</span>`;
+    return `<span class="text-gray-400">${label} установлен</span>`;
+  };
+
+  // ── Xray public key ───────────────────────────────────────────
+  const xrayKey = server.xray_public_key
+    ? `<span class="font-mono text-gray-400 break-all text-[10px]">${server.xray_public_key.slice(0,32)}…</span>`
+    : '<span class="text-gray-600">—</span>';
+
   el.innerHTML = `
-  <!-- Блок 1: SSH-доступ -->
-  <div class="space-y-1 text-sm">
-    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">SSH — доступ</div>
-    ${row('Пользователь', userOk, true)}
-    ${row('Порт', portOk, true)}
-    ${row('SSH-ключ', keyStatus)}
-    ${row('Пароль SSH', passStatus)}
-  </div>
-
-  <!-- Блок 2: Версии сервисов + Timezone -->
-  <div class="space-y-1 text-sm mt-5 pt-4 border-t border-gray-800">
-    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">Сервисы &amp; окружение</div>
-    ${row('Timezone', server.server_timezone || '—')}
-    ${row('Xray',  server.xray_version  || (server.xray_installed  ? 'установлен' : '—'), true)}
-    ${row('AWG',   server.awg_version   || (server.awg_installed   ? 'установлен' : '—'), true)}
-    ${row('Caddy', server.caddy_version || (server.naiveproxy_installed ? 'установлен' : '—'), true)}
-    ${!isEU ? row('WARP', server.warp_version || (server.warp_installed ? 'установлен' : '—'), true) : ''}
-  </div>
-
-  <!-- Блок 3: Статус настройки -->
-  <div class="space-y-1 text-sm mt-5 pt-4 border-t border-gray-800">
-    <div class="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">Статус настройки</div>
-    <div class="flex items-center justify-between py-2">
-      <span class="text-gray-500 text-xs">Статус</span>
-      <span style="font-size:0.65rem;font-weight:600;padding:1px 8px;border-radius:999px;
-                   color:${badge.color};background:${badge.bg};border:1px solid ${badge.color}33;">
-        ${badge.label}
-      </span>
+  <!-- 1. SSH-доступ -->
+  <section class="mb-4">
+    <div class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">SSH — доступ</div>
+    <div class="bg-white/3 rounded-xl border border-white/6 px-3 py-1">
+      ${row('Пользователь', userOk, true)}
+      ${row('Порт', String(portOk), true)}
+      ${row('SSH-ключ', keyHtml)}
+      ${row('Пароль', passHtml)}
     </div>
-    ${server.setup_error ? `
-    <div class="py-2 border-t border-gray-800">
-      <span class="text-gray-500 text-xs block mb-1">Ошибка</span>
-      <span class="text-red-400 text-xs break-all">${server.setup_error}</span>
-    </div>` : ''}
-  </div>
+  </section>
+
+  <!-- 2. Безопасность -->
+  <section class="mb-4">
+    <div class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">Безопасность</div>
+    <div class="bg-white/3 rounded-xl border border-white/6 px-3 py-1">
+      ${row('Fail2Ban',         secIcon(server.sec_fail2ban))}
+      ${row('UFW',              secIcon(server.sec_ufw))}
+      ${row('Вход по паролю',   passLoginHtml)}
+      ${row('SSH-ключ задан',   secIcon(server.sec_ssh_key))}
+    </div>
+  </section>
+
+  <!-- 3. Стек сервисов -->
+  <section class="mb-4">
+    <div class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">Стек</div>
+    <div class="bg-white/3 rounded-xl border border-white/6 px-3 py-1">
+      ${row('Xray-core',   ver(server.xray_installed,        server.xray_version,   'Xray'))}
+      ${row('AmneziaWG',   ver(server.awg_installed,         server.awg_version,    'AWG'))}
+      ${row('NaiveProxy',  ver(server.naiveproxy_installed,  server.caddy_version,  'naive'))}
+      ${!isEU ? row('WARP', ver(server.warp_installed, server.warp_version, 'WARP')) : ''}
+      ${row('Timezone', server.server_timezone || '—')}
+    </div>
+  </section>
+
+  <!-- 4. Ключи протоколов -->
+  <section class="mb-4">
+    <div class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">Ключи протоколов</div>
+    <div class="bg-white/3 rounded-xl border border-white/6 px-3 py-1">
+      ${row('Xray Reality pubkey', xrayKey)}
+      ${row('AWG server pubkey', server.awg_server_public_key
+        ? '<span class="font-mono text-gray-400 text-[10px]">' + server.awg_server_public_key.slice(0,24) + '…</span>'
+        : '<span class="text-gray-600">—</span>')}
+    </div>
+  </section>
+
+  <!-- 5. Статус настройки -->
+  <section class="mb-4">
+    <div class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">Статус настройки</div>
+    <div class="bg-white/3 rounded-xl border border-white/6 px-3 py-1">
+      <div class="flex items-center justify-between py-1.5">
+        <span class="text-gray-500 text-xs">Статус</span>
+        <span style="font-size:0.65rem;font-weight:600;padding:1px 8px;border-radius:999px;
+                     color:${badge.color};background:${badge.bg};border:1px solid ${badge.color}22;">
+          ${badge.label}
+        </span>
+      </div>
+      ${server.setup_error ? `
+      <div class="py-1.5 border-t border-white/5">
+        <span class="text-red-400 text-xs break-all">${_escHtml(server.setup_error)}</span>
+      </div>` : ''}
+    </div>
+  </section>
 
   <!-- Кнопка перезапуска -->
-  <div class="mt-5 pt-3 border-t border-gray-800">
-    <button onclick="openServerSetupModal(${server.id}, '${server.name}', '${server.ip}', '${server.role}')"
-      class="w-full py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-xs font-medium text-white transition flex items-center justify-center gap-2">
-      <i class="fas fa-rotate-right"></i> Перезапустить настройку
-    </button>
-  </div>`;
+  <button onclick="openServerSetupModal(${server.id}, '${_escHtml(server.name)}', '${server.ip}', '${server.role}')"
+    class="w-full py-2 bg-brand-600/80 hover:bg-brand-500 rounded-xl text-xs font-medium text-white transition flex items-center justify-center gap-2">
+    <i class="fas fa-rotate-right text-xs"></i> Перезапустить настройку
+  </button>`;
 }
 
 async function showServerDetail(serverId) {
@@ -1569,6 +1618,8 @@ function openServerSetupModal(serverId, serverName, serverIp, serverRole) {
   _stpSetStatusDot('running');
   const errBlock = document.getElementById('setup-error-block');
   if (errBlock) errBlock.classList.add('hidden');
+  const resBlock = document.getElementById('setup-result-block');
+  if (resBlock) resBlock.classList.add('hidden');
   _stpShowBtn('setup-btn-retry',  false);
   _stpShowBtn('setup-btn-done',   false);
   _stpShowBtn('setup-btn-cancel', true);
@@ -1671,14 +1722,41 @@ async function _onSetupFinished(data) {
 
   _stpShowBtn('setup-btn-cancel', false);
   if (data.setup_error) {
-    document.getElementById('setup-error-text').textContent = data.setup_error;
+    const errEl = document.getElementById('setup-error-text');
+    if (errEl) errEl.textContent = data.setup_error;
     document.getElementById('setup-error-block').classList.remove('hidden');
   }
-  _stpShowBtn('setup-btn-retry', true);  // кнопка Retry всегда — и при успехе, и при ошибке
+  _stpShowBtn('setup-btn-retry', true);
   _stpShowBtn('setup-btn-done',  true);
 
-  // Обновляем список серверов и перерисовываем открытую карточку
+  // Обновляем список серверов
   await loadServers();
+
+  // Показываем блок итоговых параметров (SSH-доступ после харденинга)
+  const resultBlock = document.getElementById('setup-result-block');
+  const resultContent = document.getElementById('setup-result-content');
+  if (resultBlock && resultContent && _setupServerId) {
+    const srv = serversData.find(s => s.id === _setupServerId);
+    if (srv) {
+      const portOk = srv.ssh_port_actual || srv.ssh_port || 22;
+      const userOk = srv.ssh_user_actual || srv.ssh_user || 'root';
+      const hasKey = !!(srv.ssh_private_key_enc || srv.has_ssh_key);
+      const secRow = (label, ok, okText, badText) =>
+        `<div class="flex justify-between items-center">
+          <span class="text-gray-500">${label}</span>
+          <span class="${ok ? 'text-emerald-400' : 'text-yellow-400'}">${ok ? okText : badText}</span>
+        </div>`;
+      resultContent.innerHTML = `
+        ${secRow('Пользователь', true, `<span class="font-mono">${userOk}</span>`, '')}
+        ${secRow('Порт SSH', true, `<span class="font-mono">${portOk}</span>`, '')}
+        ${secRow('SSH-ключ', hasKey, '✅ сохранён', '⚠ не задан')}
+        ${secRow('Fail2Ban', srv.sec_fail2ban === true, '✅ активен', '⚠ неактивен')}
+        ${secRow('UFW', srv.sec_ufw === true, '✅ активен', '⚠ неактивен')}
+        ${secRow('Вход по паролю', srv.sec_password_login === false, '✅ отключён', '⚠ включён')}
+      `;
+      resultBlock.classList.remove('hidden');
+    }
+  }
   // Обновляем setup-бейдж на карточке сервера
   if (_setupServerId) {
     const srv = serversData.find(s => s.id === _setupServerId);
@@ -1745,7 +1823,11 @@ function closeServerSetup() {
   clearInterval(_setupPollTimer);
   _setupServerId = null;
   _setupServer   = null;
-  document.getElementById('modal-server-setup').classList.add('hidden');
+  const m = document.getElementById('modal-server-setup');
+  if (m) m.classList.add('hidden');
+  // Скрываем блок итоговых параметров для следующего открытия
+  const rb = document.getElementById('setup-result-block');
+  if (rb) rb.classList.add('hidden');
   loadServers();
 }
 
