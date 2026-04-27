@@ -127,6 +127,34 @@ server {{
 }}
 """
 
+# Nginx template for Swagger API docs subdomain
+NGINX_SWAGGER_TEMPLATE = """
+server {{
+    listen 80;
+    server_name {full_name};
+    return 301 https://$host$request_uri;
+}}
+
+server {{
+    listen 443 ssl;
+    server_name {full_name};
+
+    ssl_certificate     /etc/letsencrypt/live/{full_name}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{full_name}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {{
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+"""
+
+
 
 def _append_log(subdomain: Subdomain, step: str, status: str, detail: str = ""):
     """Append a step entry to the subdomain's setup_log JSON array."""
@@ -168,14 +196,22 @@ async def run_subdomain_setup(subdomain_id: int):
         stype = subdomain.subdomain_type
 
         # ── VPN / None subdomains ──────────────────────────────────────────────
-        if stype in (SubdomainType.vpn, SubdomainType.none):
-            _append_log(subdomain, "Резервирование поддомена", "ok",
-                        "Поддомен зарегистрирован. A-запись и SSL будут созданы при настройке подключения.")
+        if stype in (SubdomainType.vpn, SubdomainType.none,
+                     SubdomainType.naiveproxy_eu, SubdomainType.naiveproxy_ru):
+            _type_names = {
+                SubdomainType.vpn: "VPN-поддомен",
+                SubdomainType.none: "Поддомен",
+                SubdomainType.naiveproxy_eu: "NaiveProxy EU поддомен",
+                SubdomainType.naiveproxy_ru: "NaiveProxy RU поддомен",
+            }
+            _label = _type_names.get(stype, "Поддомен")
+            _append_log(subdomain, f"Резервирование: {_label}", "ok",
+                        "Поддомен зарегистрирован. A-запись настраивается при установке стека.")
             subdomain.status = SubdomainStatus.reserved
             _save(db, subdomain)
             return
 
-        # ── Admin panel / Client site ──────────────────────────────────────────
+        # ── Admin panel / Client site / Swagger ───────────────────────────────
         target_ip = subdomain.target_ip or ADMIN_SERVER_IP
         full_name = subdomain.full_name
 
@@ -301,6 +337,8 @@ async def run_subdomain_setup(subdomain_id: int):
         try:
             if stype == SubdomainType.admin_panel:
                 nginx_conf = NGINX_ADMIN_TEMPLATE.format(full_name=full_name)
+            elif stype == SubdomainType.swagger:
+                nginx_conf = NGINX_SWAGGER_TEMPLATE.format(full_name=full_name)
             else:
                 nginx_conf = NGINX_CLIENT_TEMPLATE.format(full_name=full_name)
 

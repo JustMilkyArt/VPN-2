@@ -439,7 +439,7 @@
         <div>
           <label class="form-label">Название сервера</label>
           <input name="name" type="text" id="add-server-name"
-                 placeholder="Например: EU-NL-01" class="form-input" required>
+                 placeholder="Название сервера" class="form-input" required>
         </div>
 
         <!-- IP -->
@@ -1242,7 +1242,7 @@
       </div>
       <div>
         <label class="form-label">Домен</label>
-        <input id="add-domain-name" type="text" placeholder="milkyims.com" class="form-input" autocomplete="off">
+        <input id="add-domain-name" type="text" placeholder="example.com" class="form-input" autocomplete="off">
       </div>
       <div>
         <label class="form-label">Porkbun API Key</label>
@@ -1268,48 +1268,61 @@
 <!-- CREATE SUBDOMAIN MODAL -->
 <div id="modal-create-subdomain" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-sitemap text-brand-400"></i>Создать поддомен
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-sitemap text-brand-400"></i>Новый поддомен
       </h3>
       <button onclick="closeCreateSubdomainModal()" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <div class="p-6 space-y-4">
-      <div class="text-sm text-gray-400">
-        Домен: <span id="subdomain-domain-name" class="font-semibold text-white"></span>
+    <div class="p-5 space-y-4">
+      <!-- Domain badge -->
+      <div class="flex items-center gap-2 px-3 py-2 bg-gray-800 rounded-lg text-sm">
+        <i class="fas fa-globe text-gray-400 text-xs"></i>
+        <span id="subdomain-domain-name" class="font-mono text-brand-300 font-medium"></span>
       </div>
+
+      <!-- Subdomain name -->
       <div>
-        <label class="form-label">Имя поддомена</label>
-        <input id="subdomain-name-input" type="text" placeholder="Введите логин" class="form-input" oninput="onSubdomainNameInput()" autocomplete="off">
-        <div class="mt-1 text-xs text-gray-400">
-          Полное имя: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
+        <label class="form-label">Поддомен</label>
+        <div class="flex items-center gap-0">
+          <input id="subdomain-name-input" type="text"
+            placeholder="имя"
+            class="form-input rounded-r-none flex-1 font-mono"
+            oninput="onSubdomainNameInput()"
+            autocomplete="off">
+          <span id="subdomain-domain-suffix" class="px-3 py-2.5 bg-gray-700 border border-l-0 border-gray-600 rounded-r-lg text-sm text-gray-400 font-mono whitespace-nowrap"></span>
+        </div>
+        <div class="mt-1 text-xs text-gray-500">
+          Итог: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
         </div>
       </div>
+
+      <!-- Type select -->
       <div>
-        <label class="form-label">Назначение</label>
+        <label class="form-label">Тип</label>
         <div class="custom-select-wrap">
-          <select id="subdomain-type-select" class="form-input custom-select">
-            <option value="admin_panel">🖥 Админ-панель</option>
+          <select id="subdomain-type-select" class="form-input custom-select" onchange="onSubdomainTypeChange()">
+            <option value="admin_panel">🛡 Админ-панель</option>
             <option value="client_site">🌐 Клиентский сайт</option>
+            <option value="swagger">📋 Swagger API</option>
+            <option value="naiveproxy_eu">🇪🇺 NaiveProxy EU</option>
+            <option value="naiveproxy_ru">🇷🇺 NaiveProxy RU</option>
             <option value="vpn">🔒 VPN</option>
             <option value="none">— Без назначения</option>
           </select>
         </div>
-        <div class="mt-2 text-xs text-gray-400 space-y-1">
-          <div><span class="text-brand-400">Админ-панель</span> — создаст A-запись, SSL и настроит Nginx для переключения на HTTPS</div>
-          <div><span class="text-purple-400">Клиентский сайт</span> — зарезервирует поддомен (настройка позже)</div>
-          <div><span class="text-green-400">VPN</span> — зарезервирует поддомен для использования в подключениях</div>
-        </div>
+        <p id="subdomain-type-hint" class="mt-1.5 text-xs text-gray-400 min-h-[1rem]"></p>
       </div>
+
       <div id="create-subdomain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
       <div class="flex gap-3 pt-1">
         <button type="button" onclick="closeCreateSubdomainModal()"
           class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
         <button id="create-subdomain-btn" type="button" onclick="submitCreateSubdomain()"
           class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-rocket text-xs"></i>Создать
+          <i class="fas fa-plus text-xs"></i>Создать
         </button>
       </div>
     </div>
