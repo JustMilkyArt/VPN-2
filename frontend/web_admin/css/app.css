@@ -539,43 +539,27 @@ button.role-card.role-card-active {
 .stp-log-line.wait  { color: #818cf8; }
 .stp-log-line.sub   { color: #6b7280; padding-left: 18px; font-size: 11px; }
 /* иконки в строках лога */
+/* иконки в логах — plain text символы, без FA */
 .stp-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  font-size: 9px;
-  margin-right: 2px;
+  display: inline;
+  font-style: normal;
+  line-height: 1;
 }
-.stp-icon.ok   { color: #4ade80; }
-.stp-icon.err  { color: #f87171; }
-.stp-icon.warn { color: #fbbf24; }
-.stp-icon.wait { color: #818cf8; }
-.stp-icon.info { color: #60a5fa; }
 /* кнопка Отмена */
 #setup-btn-cancel {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 18px;
-  background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.25);
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 500;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(239,68,68,0.3);
   color: #f87171;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
 }
 #setup-btn-cancel:hover {
-  background: rgba(239,68,68,0.18);
+  background: rgba(239,68,68,0.12);
   border-color: rgba(239,68,68,0.5);
   color: #fca5a5;
 }
-#setup-btn-cancel i {
-  font-size: 11px;
-  opacity: 0.85;
-}
+
+/* пульсирующая точка для ⏳ */
+@keyframes stp-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+.stp-spin-dot { animation: stp-pulse 1.2s ease-in-out infinite; }

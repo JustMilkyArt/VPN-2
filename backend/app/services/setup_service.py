@@ -486,8 +486,20 @@ echo "[+] NaiveProxy setup complete"
     try:
         # 3.1 apt upgrade (только критичные пакеты — openssh-server, openssl)
         _update_setup(db, server, log_line="[3.1] Обновление критичных пакетов (SSH, OpenSSL)...")
+        _update_setup(db, server, log_line="[3.1] ⏳ Может занять 1-2 минуты...")
+        # Сначала убиваем unattended-upgrades чтобы не блокировал apt
+        _exec(client,
+            "systemctl stop unattended-upgrades 2>/dev/null || true; "
+            "pkill -9 -f unattended-upgrades 2>/dev/null || true; "
+            "pkill -9 -f apt-get 2>/dev/null || true; "
+            "pkill -9 -f dpkg 2>/dev/null || true; "
+            "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
+            "dpkg --configure -a 2>/dev/null || true",
+            timeout=30)
+        _update_setup(db, server, log_line="[3.1] ⏳ Блокировки APT сняты, устанавливаем пакеты...")
         code, _, err = _exec(client,
             "DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -qq "
+            "-o DPkg::Lock::Timeout=60 "
             "openssh-server openssl 2>/dev/null || true",
             timeout=120)
         if code != 0:
@@ -730,12 +742,34 @@ EOF""" + " && systemctl restart fail2ban",
         _update_setup(db, server,
                       log_line=f"[3] Credentials: user={cur_user} port={cur_port}")
 
-        # Переподключаемся для шагов 4-5
+        # Переподключаемся для шагов 4-5 — с fallback на оригинальные credentials
         try:
             client.close()
         except Exception:
             pass
-        client = _connect(cur_ip, cur_port, cur_user, private_key_pem=cur_key)
+        reconnected = False
+        for rc_port in sorted(set([cur_port, 22])):
+            for rc_key, rc_pass in [(cur_key, None), (cur_key, cur_pass), (None, cur_pass)]:
+                try:
+                    client = _connect(cur_ip, rc_port, cur_user,
+                                      password=rc_pass, private_key_pem=rc_key,
+                                      timeout=12)
+                    cur_port = rc_port
+                    reconnected = True
+                    _update_setup(db, server,
+                        log_line=f"[3] ✅ Переподключение: {cur_user}@{cur_ip}:{rc_port}")
+                    break
+                except Exception:
+                    pass
+            if reconnected:
+                break
+        if not reconnected:
+            _update_setup(db, server, status="failed",
+                          error="Не удалось переподключиться после шага 3",
+                          log_line="[3] ❌ Переподключение не удалось — настройка прервана")
+            server.status = ServerStatus.NOT_CONFIGURED
+            db.add(server); db.commit()
+            return
 
     except Exception as e:
         _update_setup(db, server, log_line=f"[3] ⚠️ Шаг безопасности упал: {e}")
@@ -772,6 +806,24 @@ EOF""" + " && systemctl restart fail2ban",
     # ═══════════════════════════════════════════════════════════════════════════
     _update_setup(db, server, step="step4", log_line="[4] Сбор информации о сервере...")
     try:
+        # Определяем страну по IP через ip-api.com (если ещё не определена)
+        if not server.country or server.country in ("??", ""):
+            _update_setup(db, server, log_line="[4] ⏳ Определение страны по IP...")
+            try:
+                import urllib.request, json as _json
+                geo_url = f"http://ip-api.com/json/{server.ip}?fields=status,country,countryCode"
+                with urllib.request.urlopen(geo_url, timeout=8) as _r:
+                    _geo = _json.loads(_r.read().decode())
+                if _geo.get("status") == "success" and _geo.get("countryCode"):
+                    server.country = _geo["countryCode"].upper()
+                    db.add(server); db.commit()
+                    _update_setup(db, server,
+                        log_line=f"[4] ✅ Страна определена: {_geo['country']} ({server.country})")
+                else:
+                    _update_setup(db, server, log_line="[4] ⚠️ Страна не определена (ip-api)")
+            except Exception as _ge:
+                _update_setup(db, server, log_line=f"[4] ⚠️ Гео-запрос не удался: {_ge}")
+
         _, tz_out,   _ = _exec(client,
             "cat /etc/timezone 2>/dev/null || "
             "timedatectl | grep 'Time zone' | awk '{print $3}'")

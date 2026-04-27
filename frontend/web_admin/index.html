@@ -446,11 +446,11 @@
         <div>
           <label class="form-label">IP-адрес</label>
           <input name="ip" id="add-server-ip" type="text"
-                 placeholder="Введите IP-адрес" class="form-input" required
-                 oninput="detectIpInfo()">
-          <div id="add-server-geo" class="hidden mt-2 flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
-            <img id="add-server-flag-img" src="" alt="" class="w-6 h-4 rounded-sm object-cover">
-            <span id="add-server-geo-text" class="text-xs text-gray-400"></span>
+                 placeholder="Введите IP-адрес" class="form-input" required>
+          <!-- geo-блок скрыт: страна определяется автоматически в шаге 4 настройки -->
+          <div id="add-server-geo" class="hidden">
+            <img id="add-server-flag-img" src="" alt="" class="hidden">
+            <span id="add-server-geo-text" class="hidden"></span>
           </div>
         </div>
 
@@ -1446,8 +1446,9 @@
 
     <!-- Кнопки -->
     <div class="px-6 pb-5 pt-2 flex gap-2">
-      <button id="setup-btn-cancel" onclick="cancelServerSetup()">
-        <i class="fas fa-xmark"></i> Отмена
+      <button id="setup-btn-cancel" onclick="cancelServerSetup()"
+        class="py-2.5 px-5 rounded-xl text-sm font-medium transition flex items-center justify-center gap-2 h-10">
+        <i class="fas fa-xmark text-xs"></i> Отмена
       </button>
       <button id="setup-btn-retry" onclick="retryServerSetup()"
         style="display:none"

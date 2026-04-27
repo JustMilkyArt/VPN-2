@@ -553,26 +553,7 @@ document.getElementById('add-server-form')?.addEventListener('submit', async (e)
   const errEl = document.getElementById('add-server-error');
   errEl.classList.add('hidden');
 
-  // Детект страны по IP перед созданием
-  const ipVal = form.querySelector('[name=ip]').value.trim();
-  if (ipVal && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ipVal)) {
-    clearTimeout(_ipDetectTimer);
-    try {
-      const resp = await fetch(`https://ip-api.com/json/${ipVal}?fields=status,country,countryCode`);
-      const data = await resp.json();
-      if (data.status === 'success' && data.countryCode) {
-        const code = data.countryCode.toLowerCase();
-        document.getElementById('add-server-country').value = data.countryCode.toUpperCase();
-        const flagImg = document.getElementById('add-server-flag-img');
-        const geoText = document.getElementById('add-server-geo-text');
-        const geoEl   = document.getElementById('add-server-geo');
-        flagImg.src = `https://flagcdn.com/24x18/${code}.png`;
-        flagImg.alt = data.country;
-        geoText.textContent = data.country;
-        geoEl.classList.remove('hidden');
-      }
-    } catch { /* тихо игнорируем */ }
-  }
+  // Страна определяется автоматически в шаге 4 автонастройки
 
   const role = form.querySelector('[name=role]:checked')?.value;
   if (!role) {
@@ -1559,26 +1540,11 @@ function _stpLogLineClass(line) {
 }
 
 function _stpFormatLine(raw) {
-  // Заменяем emoji-иконки на красивые FA-теги
+  // Экранируем HTML, затем возвращаем чистые unicode-символы как есть
+  // ✅ ⚠️ ✖️ ℹ️ 🔗 ⏳ — отображаются нативно браузером без FA
   let line = _escHtml(raw);
-  // ✅ → зелёная галочка
-  line = line.replace(/✅/g,
-    '<span class="stp-icon ok"><i class="fas fa-circle-check"></i></span>');
-  // ❌ → красный крест
-  line = line.replace(/❌/g,
-    '<span class="stp-icon err"><i class="fas fa-circle-xmark"></i></span>');
-  // ⚠️ или ⚠ → жёлтый треугольник
-  line = line.replace(/⚠️|⚠/g,
-    '<span class="stp-icon warn"><i class="fas fa-triangle-exclamation"></i></span>');
-  // ⏳ → спиннер
-  line = line.replace(/⏳/g,
-    '<span class="stp-icon wait"><i class="fas fa-circle-notch stp-spin"></i></span>');
-  // 🔗 → ссылка
-  line = line.replace(/🔗/g,
-    '<span class="stp-icon info"><i class="fas fa-link"></i></span>');
-  // ℹ️ → инфо
-  line = line.replace(/ℹ️|ℹ/g,
-    '<span class="stp-icon info"><i class="fas fa-circle-info"></i></span>');
+  // ❌ → ✖ (минималистичный крест)
+  line = line.replace(/❌/g, '✖');
   return line;
 }
 
