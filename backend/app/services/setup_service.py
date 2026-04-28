@@ -534,7 +534,6 @@ echo "[+] NaiveProxy setup complete"
     try:
         # 3.1 apt upgrade (только критичные пакеты — openssh-server, openssl)
         _update_setup(db, server, log_line="[3.1] Обновление критичных пакетов (SSH, OpenSSL)...")
-        _update_setup(db, server, log_line="[3.1] ⏳ Может занять 1-2 минуты...")
         # Сначала убиваем unattended-upgrades чтобы не блокировал apt
         _exec(client,
             "systemctl stop unattended-upgrades 2>/dev/null || true; "
@@ -544,7 +543,6 @@ echo "[+] NaiveProxy setup complete"
             "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
             "dpkg --configure -a 2>/dev/null || true",
             timeout=30)
-        _update_setup(db, server, log_line="[3.1] ⏳ Блокировки APT сняты, устанавливаем пакеты...")
         code, _, err = _exec(client,
             "DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -qq "
             "-o DPkg::Lock::Timeout=60 "
@@ -714,54 +712,57 @@ EOF""" + " && systemctl restart fail2ban",
             _update_setup(db, server, log_line="[3.8] ✅ Парольная аутентификация отключена (включая cloud-init drop-in)")
 
         # 3.9 Смена SSH-порта
-        # Используем nohup + sleep: systemd-run со скобками работает ненадёжно в paramiko
+        # Стратегия безопасной смены порта:
+        # 1. Открываем новый порт в UFW (порт 22 НЕ закрываем до успешной проверки)
+        # 2. Пишем новый порт в sshd_config
+        # 3. Перезапускаем ssh через nohup (Ubuntu 24.04: ssh.socket + ssh.service)
+        # 4. Проверяем новый порт — если OK, закрываем 22; если нет — откат
         _update_setup(db, server, log_line="[3.9] Смена SSH-порта...")
         new_port = _gen_ssh_port()
 
-        # Сначала открываем новый порт в UFW (если активен)
+        # Шаг A: открываем новый порт в UFW (порт 22 пока оставляем открытым!)
         _exec(client, f"ufw allow {new_port}/tcp 2>/dev/null || true", timeout=15)
 
-        # Меняем конфиг sshd (основной конфиг, drop-ins не поддерживают Port)
+        # Шаг B: меняем Port в sshd_config
         _exec(client,
             f"sed -i '/^#*Port /d' /etc/ssh/sshd_config && "
             f"echo 'Port {new_port}' >> /etc/ssh/sshd_config",
             timeout=15)
 
-        # Смена SSH-порта: создаём override для ssh.socket с новым портом
-        # ssh.socket в Ubuntu 24.04 имеет жёстко прошитый ListenStream=22 в юнит-файле.
-        # Override /etc/systemd/system/ssh.socket.d/port.conf переопределяет порт.
-        # Сначала создаём override СИНХРОННО (до nohup), потом перезапускаем.
+        # Шаг C: для Ubuntu 24.04 (ssh.socket) — создаём override с новым портом
+        # Это нужно чтобы socket перешёл на новый порт при restart
         _exec(client,
-            "mkdir -p /etc/systemd/system/ssh.socket.d",
-            timeout=5)
-        # Записываем override: сначала очищаем ListenStream, потом задаём новый порт
-        _exec(client,
-            f"printf '[Socket]\\nListenStream=\\nListenStream={new_port}\\n'"
-            f" > /etc/systemd/system/ssh.socket.d/port.conf",
-            timeout=5)
-        _exec(client, "systemctl daemon-reload", timeout=10)
-        # Перезапускаем ssh.socket с задержкой (чтобы текущая сессия не оборвалась сразу)
+            f"mkdir -p /etc/systemd/system/ssh.socket.d && "
+            f"printf '[Socket]\nListenStream=\nListenStream={new_port}\n'"
+            f" > /etc/systemd/system/ssh.socket.d/port.conf && "
+            f"systemctl daemon-reload",
+            timeout=15)
+
+        # Шаг D: перезапускаем SSH через nohup с задержкой
+        # Порядок: сначала ssh.service (применяет sshd_config),
+        # потом ssh.socket (переключает сокет на новый порт)
         _exec(client,
             "nohup bash -c "
-            "'sleep 4 && systemctl restart ssh.socket 2>/dev/null && "
-            "systemctl restart ssh.service 2>/dev/null || "
-            "systemctl restart sshd 2>/dev/null || "
-            "systemctl restart ssh 2>/dev/null' "
+            "'sleep 3 && "
+            "systemctl restart ssh.service 2>/dev/null; "
+            "sleep 1 && "
+            "systemctl restart ssh.socket 2>/dev/null || "
+            "systemctl restart sshd 2>/dev/null' "
             "> /tmp/sshd_restart.log 2>&1 &",
-            timeout=10)
+            timeout=8)
 
-        # Ждём пока sshd поднимется на новом порту
-        # sleep 4 + 3 попытки × 8 сек = максимум ~28 сек, лог на каждую попытку
-        _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание перезапуска SSH на порту {new_port}...")
-        time.sleep(12)  # ssh.socket дольше поднимается после override
+        # Шаг E: ждём и проверяем новый порт
+        _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание SSH на порту {new_port}...")
+        time.sleep(8)
         port_ok = False
         for attempt in range(4):
             _update_setup(db, server,
                 log_line=f"[3.9] ⏳ Проверка порта {new_port}, попытка {attempt+1}/4...")
             try:
                 test_cli = _connect(cur_ip, new_port, cur_user,
-                                    private_key_pem=cur_key, timeout=12)
-                _exec(test_cli, "ufw delete allow 22/tcp 2>/dev/null; true")
+                                    private_key_pem=cur_key, timeout=10)
+                # Порт новый работает — теперь закрываем старый 22 в UFW
+                _exec(test_cli, "ufw delete allow 22/tcp 2>/dev/null || true", timeout=10)
                 test_cli.close()
                 cur_port = new_port
                 port_ok = True
@@ -771,16 +772,25 @@ EOF""" + " && systemctl restart fail2ban",
                 if attempt < 3:
                     _update_setup(db, server,
                         log_line=f"[3.9] ⏳ Порт {new_port} ещё не готов ({e.__class__.__name__}), ждём...")
-                    time.sleep(12)
+                    time.sleep(10)
                 else:
-                    # Пробуем откатиться на 22
+                    # Новый порт не поднялся — откатываемся на 22
+                    # Порт 22 в UFW ещё открыт, поэтому откат возможен
                     _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил — откат на порт 22...")
                     try:
                         rb = _connect(cur_ip, 22, cur_user, private_key_pem=cur_key, timeout=10)
                         _exec(rb,
+                            # Восстанавливаем конфиг
                             "sed -i '/^Port /d' /etc/ssh/sshd_config && "
                             "echo 'Port 22' >> /etc/ssh/sshd_config && "
-                            "systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true")
+                            # Убираем override ssh.socket
+                            "rm -f /etc/systemd/system/ssh.socket.d/port.conf && "
+                            "systemctl daemon-reload && "
+                            # Перезапускаем
+                            "systemctl restart ssh.service 2>/dev/null; "
+                            "systemctl restart ssh.socket 2>/dev/null || "
+                            "systemctl restart sshd 2>/dev/null || true",
+                            timeout=20)
                         rb.close()
                         cur_port = 22
                         _update_setup(db, server,
