@@ -1540,10 +1540,9 @@ function _stpLogLineClass(line) {
 }
 
 function _stpFormatLine(raw) {
-  // Экранируем HTML, затем возвращаем чистые unicode-символы как есть
-  // ✅ ⚠️ ✖️ ℹ️ 🔗 ⏳ — отображаются нативно браузером без FA
+  // Экранируем HTML — emoji (✅ ⚠️ ✖ ⏳ 🔗 ℹ️) отображаются нативно браузером
   let line = _escHtml(raw);
-  // ❌ → ✖ (минималистичный крест)
+  // ❌ → ✖ (лаконичнее)
   line = line.replace(/❌/g, '✖');
   return line;
 }

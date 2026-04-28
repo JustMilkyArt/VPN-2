@@ -15,6 +15,7 @@ import logging
 import random
 import secrets
 import string
+import select
 import time
 from typing import Optional, Tuple
 
@@ -125,11 +126,58 @@ def _connect(ip: str, port: int, user: str,
 
 
 def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = 120) -> Tuple[int, str, str]:
-    stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout)
-    code = stdout.channel.recv_exit_status()
-    out  = stdout.read().decode("utf-8", errors="replace")
-    err  = stderr.read().decode("utf-8", errors="replace")
-    return code, out, err
+    """
+    Выполняет команду по SSH с жёстким таймаутом через select().
+    recv_exit_status() блокируется вечно при зависании процесса — 
+    поэтому читаем через select с дедлайном.
+    """
+    transport = client.get_transport()
+    if transport is None or not transport.is_active():
+        return -1, "", "SSH transport не активен"
+
+    chan = transport.open_session()
+    chan.settimeout(timeout)
+    chan.exec_command(cmd)
+
+    out_chunks = []
+    err_chunks = []
+    deadline = time.time() + timeout
+
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            chan.close()
+            return -1, "".join(out_chunks), "".join(err_chunks) + f"\n[TIMEOUT after {timeout}s]"
+
+        wait = min(remaining, 2.0)
+        r, _, _ = select.select([chan], [], [], wait)
+
+        if chan in r:
+            if chan.recv_ready():
+                data = chan.recv(65536)
+                if data:
+                    out_chunks.append(data.decode("utf-8", errors="replace"))
+            if chan.recv_stderr_ready():
+                data = chan.recv_stderr(65536)
+                if data:
+                    err_chunks.append(data.decode("utf-8", errors="replace"))
+
+        if chan.exit_status_ready():
+            # Дочитываем остатки буфера
+            while chan.recv_ready():
+                data = chan.recv(65536)
+                if data:
+                    out_chunks.append(data.decode("utf-8", errors="replace"))
+            while chan.recv_stderr_ready():
+                data = chan.recv_stderr(65536)
+                if data:
+                    err_chunks.append(data.decode("utf-8", errors="replace"))
+            code = chan.recv_exit_status()
+            chan.close()
+            return code, "".join(out_chunks), "".join(err_chunks)
+
+    # Недостижимо, но на всякий случай
+    return -1, "".join(out_chunks), "".join(err_chunks)
 
 
 def _clear_apt_locks(client: paramiko.SSHClient, db, server) -> None:

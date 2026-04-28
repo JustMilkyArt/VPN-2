@@ -539,12 +539,7 @@ button.role-card.role-card-active {
 .stp-log-line.wait  { color: #818cf8; }
 .stp-log-line.sub   { color: #6b7280; padding-left: 18px; font-size: 11px; }
 /* иконки в строках лога */
-/* иконки в логах — plain text символы, без FA */
-.stp-icon {
-  display: inline;
-  font-style: normal;
-  line-height: 1;
-}
+/* stp-icon: emoji отображаются нативно, без дополнительных стилей */
 /* кнопка Отмена */
 #setup-btn-cancel {
   background: rgba(255,255,255,0.04);
