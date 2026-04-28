@@ -555,58 +555,52 @@ echo "[+] NaiveProxy setup complete"
         else:
             _update_setup(db, server, log_line="[3.1] ✅ Критичные пакеты обновлены")
 
-        # 3.2 Fail2Ban + UFW
+        # 3.2 Fail2Ban + UFW — одной командой apt (с повторной попыткой при dpkg lock)
         _update_setup(db, server, log_line="[3.2] Установка Fail2Ban и UFW...")
-        # Сначала принудительно очищаем все apt/dpkg блокировки
-        _exec(client,
-            "pkill -9 -f apt-get 2>/dev/null || true; "
-            "pkill -9 -f dpkg 2>/dev/null || true; "
-            "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
-            "dpkg --configure -a --force-all 2>/dev/null || true; "
-            "sleep 3",
-            timeout=45)
         code, _, err = _exec(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "-o DPkg::Lock::Timeout=60 fail2ban ufw",
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
             timeout=180)
         if code != 0:
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:100]}. Повтор...")
+            # Повторная попытка после очистки dpkg locks
+            _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:150]}. Очищаем lock и повторяем...")
             _exec(client,
-                "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
-                "dpkg --configure -a --force-all 2>/dev/null || true; sleep 5",
+                "pkill -9 -f apt-get 2>/dev/null || true; "
+                "pkill -9 -f dpkg 2>/dev/null || true; "
+                "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
+                "dpkg --configure -a 2>/dev/null || true; sleep 5",
                 timeout=30)
             code, _, err = _exec(client,
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-                "-o DPkg::Lock::Timeout=60 fail2ban ufw",
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
                 timeout=180)
         if code != 0:
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW: {err[:200]}")
+            _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW не удалась: {err[:200]}")
         else:
             _update_setup(db, server, log_line="[3.2] ✅ Fail2Ban и UFW установлены")
 
         # 3.3 Запуск и настройка Fail2Ban
         _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
-        # Пишем конфиг через printf (heredoc нестабилен в paramiko exec_command)
-        jail_cfg = "[DEFAULT]\nbantime  = 3600\nfindtime = 600\nmaxretry = 5\n\n[sshd]\nenabled = true\n"
         code, _, err = _exec(client,
-            f"printf '{jail_cfg}' > /etc/fail2ban/jail.local && "
-            "systemctl enable fail2ban 2>/dev/null || true",
-            timeout=20)
-        # Запускаем / рестартуем fail2ban
-        code, _, err = _exec(client,
-            "systemctl restart fail2ban 2>/dev/null || systemctl start fail2ban 2>/dev/null || true",
-            timeout=30)
-        _, fb_status, _ = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
-        fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
-        if fb_first == "active":
-            sec_fail2ban_active = True
-            _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
+            "systemctl enable fail2ban && systemctl start fail2ban && "
+            """cat > /etc/fail2ban/jail.local << 'EOF'
+[DEFAULT]
+bantime  = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+EOF""" + " && systemctl restart fail2ban",
+            timeout=60)
+        if code != 0:
+            _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban: {err[:200]}")
         else:
-            # Показываем реальную причину сбоя
-            _, fb_log, _ = _exec(client,
-                "journalctl -u fail2ban -n 5 --no-pager 2>/dev/null | tail -3 || echo 'нет логов'")
-            _update_setup(db, server,
-                log_line=f"[3.3] ⚠️ Fail2Ban статус: {fb_first} — {fb_log.strip()[:150]}")
+            _, fb_status, _ = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
+            fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
+            if fb_first == "active":
+                sec_fail2ban_active = True
+                _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
+            else:
+                _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban установлен, статус: {fb_first}")
 
         # 3.4 Настройка UFW
         # Используем текущий SSH порт (ещё не изменён на шаге 3.9)
@@ -630,7 +624,7 @@ echo "[+] NaiveProxy setup complete"
         if code != 0:
             _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {err[:200]}")
         else:
-            _, ufw_status, _ = _exec(client, "ufw status | head -1 || echo unknown")
+            _, ufw_status, _ = _exec(client, "sudo ufw status 2>/dev/null | head -1 || ufw status | head -1 || echo unknown")
             ufw_first = next((l.strip() for l in ufw_status.splitlines() if l.strip()), "")
             if "active" in ufw_first.lower():
                 sec_ufw_active = True
@@ -733,13 +727,24 @@ echo "[+] NaiveProxy setup complete"
             f"echo 'Port {new_port}' >> /etc/ssh/sshd_config",
             timeout=15)
 
-        # Перезапускаем SSH через nohup с задержкой 6 секунд
-        # Ubuntu 24.04 использует ssh.socket (socket-activation), а не sshd.service
-        # Порядок: сначала restart ssh.service (применяет конфиг), затем restart ssh.socket
+        # Смена SSH-порта: создаём override для ssh.socket с новым портом
+        # ssh.socket в Ubuntu 24.04 имеет жёстко прошитый ListenStream=22 в юнит-файле.
+        # Override /etc/systemd/system/ssh.socket.d/port.conf переопределяет порт.
+        # Сначала создаём override СИНХРОННО (до nohup), потом перезапускаем.
+        _exec(client,
+            "mkdir -p /etc/systemd/system/ssh.socket.d",
+            timeout=5)
+        # Записываем override: сначала очищаем ListenStream, потом задаём новый порт
+        _exec(client,
+            f"printf '[Socket]\\nListenStream=\\nListenStream={new_port}\\n'"
+            f" > /etc/systemd/system/ssh.socket.d/port.conf",
+            timeout=5)
+        _exec(client, "systemctl daemon-reload", timeout=10)
+        # Перезапускаем ssh.socket с задержкой (чтобы текущая сессия не оборвалась сразу)
         _exec(client,
             "nohup bash -c "
-            "'sleep 5 && systemctl restart ssh.service 2>/dev/null; "
-            "sleep 2 && systemctl restart ssh.socket 2>/dev/null || "
+            "'sleep 4 && systemctl restart ssh.socket 2>/dev/null && "
+            "systemctl restart ssh.service 2>/dev/null || "
             "systemctl restart sshd 2>/dev/null || "
             "systemctl restart ssh 2>/dev/null' "
             "> /tmp/sshd_restart.log 2>&1 &",
@@ -748,7 +753,7 @@ echo "[+] NaiveProxy setup complete"
         # Ждём пока sshd поднимется на новом порту
         # sleep 4 + 3 попытки × 8 сек = максимум ~28 сек, лог на каждую попытку
         _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание перезапуска SSH на порту {new_port}...")
-        time.sleep(10)  # Ubuntu 24.04 ssh.socket дольше поднимается
+        time.sleep(12)  # ssh.socket дольше поднимается после override
         port_ok = False
         for attempt in range(4):
             _update_setup(db, server,
@@ -904,7 +909,7 @@ echo "[+] NaiveProxy setup complete"
         # ── Security flags — записываем в БД ──────────────────────────────
         # Перепроверяем реальный статус на сервере (надёжнее флагов из шага 3)
         _, fb_chk, _  = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
-        _, ufw_chk, _ = _exec(client, "ufw status 2>/dev/null | head -1 || echo unknown")
+        _, ufw_chk, _ = _exec(client, "sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1 || echo unknown")
         # ВАЖНО: PasswordAuthentication проверяем с учётом drop-in файлов (cloud-init и др.)
         # Если хоть один файл содержит "PasswordAuthentication yes" — auth включена
         _, pw_chk, _  = _exec(client,
@@ -953,12 +958,23 @@ echo "[+] NaiveProxy setup complete"
 
         db.add(server); db.commit()
 
+        # Проверяем что хотя бы один параметр прочитан (признак живого SSH-соединения)
+        if not server.server_timezone and not server.xray_version and not server.awg_version:
+            _update_setup(db, server, status="failed",
+                          error="SSH-соединение по новым credentials не работает",
+                          log_line="[4] ❌ Данные не прочитаны — проверьте SSH-доступ")
+            server.status = ServerStatus.NOT_CONFIGURED
+            db.add(server); db.commit()
+            try: client.close()
+            except Exception: pass
+            return
+
         # Логируем всё собранное
         _update_setup(db, server, log_line="[4] ✅ Информация собрана")
         _update_setup(db, server, log_line=f"[4]    Timezone  : {server.server_timezone or '—'}")
         _update_setup(db, server, log_line=f"[4]    Xray      : {server.xray_version    or '—'}")
         _update_setup(db, server, log_line=f"[4]    AWG       : {server.awg_version     or '—'}")
-        _update_setup(db, server, log_line=f"[4]    NaiveProxy: {server.caddy_version   or '—'}")
+        _update_setup(db, server, log_line=f"[4]    Caddy     : {server.caddy_version   or '—'}")
         if not is_eu:
             _update_setup(db, server, log_line=f"[4]    WARP      : {server.warp_version or '—'}")
         _update_setup(db, server, log_line=
@@ -973,7 +989,14 @@ echo "[+] NaiveProxy setup complete"
             f"[4]    Passwd auth: {'✅ отключена' if sec_password_auth_disabled else '⚠️ включена'}")
 
     except Exception as e:
-        _update_setup(db, server, log_line=f"[4] ⚠️ Сбор информации: {e}")
+        _update_setup(db, server, status="failed",
+                      error=f"Ошибка сбора данных сервера: {e}",
+                      log_line=f"[4] ❌ Сбор информации не удался: {e}")
+        server.status = ServerStatus.NOT_CONFIGURED
+        db.add(server); db.commit()
+        try: client.close()
+        except Exception: pass
+        return
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ШАГ 5 — Финальная проверка (install vs start — раздельно)
@@ -994,12 +1017,12 @@ echo "[+] NaiveProxy setup complete"
         ("Xray",
             "which xray || test -f /usr/local/bin/xray",
             "systemctl is-active xray 2>/dev/null || echo inactive",
-            False),  # не critical — может быть не установлен при первом запуске
+            True),
         ("AmneziaWG",
             "which awg || dpkg -l amneziawg 2>/dev/null | grep -q '^ii'",
             None,  # запуск после генерации конфига — не проверяем
             False),
-        ("NaiveProxy",
+        ("Caddy (NaiveProxy)",
             "which caddy || test -f /usr/local/bin/caddy-naive || test -f /usr/local/bin/naive",
             None,  # запуск после генерации конфига — не проверяем
             False),
@@ -1009,7 +1032,7 @@ echo "[+] NaiveProxy setup complete"
             False),
         ("UFW",
             "which ufw || dpkg -l ufw 2>/dev/null | grep -q '^ii'",
-            "ufw status 2>/dev/null | head -1 || echo unknown",
+            "sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1 || echo unknown",
             False),
     ]
     if not is_eu:

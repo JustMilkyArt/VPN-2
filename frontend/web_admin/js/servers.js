@@ -974,15 +974,19 @@ function showServerSettings(serverId) {
   // Роль и страна — readonly, показываем как текст
   document.getElementById('settings-role').value         = server.role === 'EU' ? 'EU Exit' : 'RU Entry';
   document.getElementById('settings-country').value      = server.country || '—';
-  document.getElementById('settings-ssh-user').value     = server.ssh_user || 'root';
-  document.getElementById('settings-ssh-port').value     = server.ssh_port || 22;
-  // Sensitive fields — clear value AND placeholder
+  document.getElementById('settings-ssh-user').value     = server.ssh_user_actual || server.ssh_user || 'root';
+  document.getElementById('settings-ssh-port').value     = server.ssh_port_actual || server.ssh_port || 22;
+  // Sensitive fields — clear value AND show status in placeholder
   const pwdInput = document.getElementById('settings-ssh-password');
   pwdInput.value = '';
-  pwdInput.placeholder = 'Введите новый пароль для изменения';
+  pwdInput.placeholder = server.ssh_password_enc
+    ? '••••••••  (сохранён зашифровано)'
+    : 'Введите новый пароль для изменения';
   const keyInput = document.getElementById('settings-ssh-key');
   keyInput.value = '';
-  keyInput.placeholder = 'Вставьте приватный ключ для изменения';
+  keyInput.placeholder = server.ssh_private_key_enc
+    ? '-----BEGIN OPENSSH PRIVATE KEY-----\n(ключ сохранён, нажмите «Скопировать ключ»)'
+    : 'Вставьте приватный ключ для изменения';
   // Дата добавления сервера
   const createdEl = document.getElementById('sov-created');
   if (createdEl) {
@@ -1784,6 +1788,15 @@ async function _onSetupFinished(data) {
       if (txt) { txt.style.color = sm.color; txt.textContent = sm.label; }
     }
   }
+
+  // Если карточка сервера открыта для этого же сервера — обновляем все вкладки
+  if (success && _setupServerId) {
+    const settingsId = parseInt(document.getElementById('settings-server-id')?.value);
+    const modal = document.getElementById('modal-server-settings');
+    if (settingsId === _setupServerId && modal && !modal.classList.contains('hidden')) {
+      _refreshServerCard(_setupServerId);
+    }
+  }
 }
 
 // ── действия кнопок ──────────────────────────────────────
@@ -1838,7 +1851,34 @@ function closeServerSetup() {
   loadServers();
 }
 
+
+async function copyPrivateSshKey() {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  if (!serverId) return;
+  const btn = document.getElementById('btn-copy-ssh-key');
+  const msg = document.getElementById('copy-key-msg');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:10px;height:10px"></span> Загружаю...'; }
+  try {
+    const res = await api.request('GET', `/servers/${serverId}/ssh-key`);
+    if (res.ok && res.data?.private_key) {
+      await navigator.clipboard.writeText(res.data.private_key);
+      if (msg) { msg.textContent = '✓ Ключ скопирован в буфер обмена'; msg.style.color = '#4ade80'; msg.classList.remove('hidden'); }
+      // Также вставляем в поле для наглядности
+      const keyInput = document.getElementById('settings-ssh-key');
+      if (keyInput) keyInput.value = res.data.private_key;
+    } else {
+      if (msg) { msg.textContent = '✗ Ключ не найден'; msg.style.color = '#f87171'; msg.classList.remove('hidden'); }
+    }
+  } catch (e) {
+    if (msg) { msg.textContent = `✗ Ошибка: ${e.message}`; msg.style.color = '#f87171'; msg.classList.remove('hidden'); }
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-copy text-xs"></i> Скопировать приватный ключ'; }
+    setTimeout(() => { if (msg) msg.classList.add('hidden'); }, 5000);
+  }
+}
+
 window.openServerSetupModal = openServerSetupModal;
+window._refreshServerCard   = _refreshServerCard;
 window.toggleSetupStep      = toggleSetupStep;
 window.retryServerSetup     = retryServerSetup;
 window.cancelServerSetup    = cancelServerSetup;

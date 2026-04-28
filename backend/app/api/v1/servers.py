@@ -313,6 +313,30 @@ def uninstall_stack_endpoint(
     return {"success": ok, "message": msg}
 
 
+
+
+@router.get("/{server_id}/ssh-key", summary="Get decrypted private SSH key")
+def get_ssh_key(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    # Пробуем получить ключ: сначала зашифрованный, потом plain
+    private_key = None
+    if server.ssh_private_key_enc:
+        try:
+            private_key = decrypt_value(server.ssh_private_key_enc)
+        except Exception:
+            pass
+    if not private_key and server.ssh_key:
+        private_key = server.ssh_key
+    if not private_key:
+        raise HTTPException(status_code=404, detail="SSH key not found")
+    return {"private_key": private_key}
+
 @router.get("/{server_id}/security", summary="Get real security status from server")
 def get_security(
     server_id: int,
@@ -377,7 +401,7 @@ def check_all_status(
 from fastapi.responses import StreamingResponse
 import json as _json
 import time as _time
-from app.services.setup_service import run_server_setup
+from app.services.setup_service import decrypt_value, run_server_setup
 
 
 @router.post("/{server_id}/setup", summary="Start automated server setup")

@@ -34,7 +34,7 @@ class SSHClient:
         }
 
         if self.server.ssh_key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.server.ssh_key))
+            pkey = _load_private_key(self.server.ssh_key)
             connect_kwargs["pkey"] = pkey
         elif self.server.ssh_password:
             connect_kwargs["password"] = self.server.ssh_password
@@ -107,7 +107,7 @@ class SSHService:
             "auth_timeout": 30,
         }
         if self.key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.key))
+            pkey = _load_private_key(self.key)
             connect_kwargs["pkey"] = pkey
         elif self.password:
             connect_kwargs["password"] = self.password
@@ -346,8 +346,8 @@ def get_security_status(server: Server) -> dict:
             _, out, _ = ssh.exec("systemctl is-active fail2ban 2>/dev/null", timeout=5)
             result["fail2ban"] = out.strip() == "active"
 
-            # UFW
-            _, out, _ = ssh.exec("ufw status 2>/dev/null | head -1", timeout=5)
+            # UFW — запускаем через sudo (непривилегированный юзер не видит статус)
+            _, out, _ = ssh.exec("sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1", timeout=8)
             result["ufw"] = "active" in out.lower()
 
             # PasswordAuthentication
@@ -402,10 +402,10 @@ def apply_security_setting(server: Server, setting: str, enabled: bool) -> Tuple
                         "ufw allow 443/tcp",
                         "ufw allow 51820/udp",
                         "ufw allow 51821/udp",
-                        "echo 'y' | ufw enable",
+                        "DEBIAN_FRONTEND=noninteractive sudo ufw --force enable",
                     ]
                 else:
-                    cmds = ["echo 'y' | ufw disable"]
+                    cmds = ["DEBIAN_FRONTEND=noninteractive sudo ufw --force disable"]
                 for cmd in cmds:
                     code, _, err = ssh.exec(cmd, timeout=60)
                     if code != 0:
