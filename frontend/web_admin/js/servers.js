@@ -1667,9 +1667,11 @@ function _renderSetupProgress(data) {
 
   for (let i = 1; i <= 5; i++) {
     if (i < currentStep) {
-      const hasErr = stepLogs[i].some(l => /error|fail|❌/i.test(l));
-      _stpSetDot(i, hasErr ? 'error' : 'ok');
-      if (i <= 4) _stpSetConn(i, !hasErr);
+      // Шаг завершён — всегда зелёный (предупреждения ⚠️ не делают шаг красным)
+      // Красным только если есть критическая ошибка ❌ (не ⚠️)
+      const hasCritErr = stepLogs[i].some(l => /❌|✖/.test(l) && !/⚠/.test(l.slice(0,3)));
+      _stpSetDot(i, hasCritErr ? 'error' : 'ok');
+      if (i <= 4) _stpSetConn(i, true);  // линия всегда зелёная между завершёнными шагами
     } else if (i === currentStep) {
       _stpSetDot(i, 'running');
     }
@@ -1701,12 +1703,15 @@ async function _onSetupFinished(data) {
   document.getElementById('setup-modal-subtitle').textContent = success
     ? 'Все критичные сервисы работают' : 'Один или несколько шагов не прошли';
 
-  // Финальный статус точки текущего шага
+  // Финальный статус: расставляем точки всех шагов
   const curStep = SETUP_STEP_MAP[data.setup_step] || 0;
-  if (curStep > 0) {
-    const dot = document.getElementById(`setup-dot-${curStep}`);
-    if (dot && dot.className.includes('stp-running')) {
-      _stpSetDot(curStep, success ? 'ok' : 'error');
+  for (let si = 1; si <= 5; si++) {
+    if (si < curStep) {
+      _stpSetDot(si, 'ok');
+      if (si <= 4) _stpSetConn(si, true);
+    } else if (si === curStep) {
+      _stpSetDot(si, success ? 'ok' : 'error');
+      if (si <= 4) _stpSetConn(si, success);
     }
   }
 
@@ -1719,8 +1724,20 @@ async function _onSetupFinished(data) {
   _stpShowBtn('setup-btn-retry', true);
   _stpShowBtn('setup-btn-done',  true);
 
-  // Обновляем список серверов
+  // Обновляем список серверов и перезагружаем свежие данные из API
   await loadServers();
+
+  // Принудительно перезагружаем актуальные данные сервера (ssh_user, port, sec_* флаги)
+  if (_setupServerId) {
+    try {
+      const freshRes = await api.request('GET', `/servers/${_setupServerId}`);
+      if (freshRes.ok && freshRes.data) {
+        const idx = serversData.findIndex(s => s.id === _setupServerId);
+        if (idx !== -1) serversData[idx] = freshRes.data;
+        else serversData.push(freshRes.data);
+      }
+    } catch (e) { console.warn('Fresh server reload failed:', e); }
+  }
 
   // Показываем блок итоговых параметров (SSH-доступ после харденинга)
   const resultBlock = document.getElementById('setup-result-block');

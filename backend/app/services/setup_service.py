@@ -555,52 +555,58 @@ echo "[+] NaiveProxy setup complete"
         else:
             _update_setup(db, server, log_line="[3.1] ✅ Критичные пакеты обновлены")
 
-        # 3.2 Fail2Ban + UFW — одной командой apt (с повторной попыткой при dpkg lock)
+        # 3.2 Fail2Ban + UFW
         _update_setup(db, server, log_line="[3.2] Установка Fail2Ban и UFW...")
+        # Сначала принудительно очищаем все apt/dpkg блокировки
+        _exec(client,
+            "pkill -9 -f apt-get 2>/dev/null || true; "
+            "pkill -9 -f dpkg 2>/dev/null || true; "
+            "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
+            "dpkg --configure -a --force-all 2>/dev/null || true; "
+            "sleep 3",
+            timeout=45)
         code, _, err = _exec(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "-o DPkg::Lock::Timeout=60 fail2ban ufw",
             timeout=180)
         if code != 0:
-            # Повторная попытка после очистки dpkg locks
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:150]}. Очищаем lock и повторяем...")
+            _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:100]}. Повтор...")
             _exec(client,
-                "pkill -9 -f apt-get 2>/dev/null || true; "
-                "pkill -9 -f dpkg 2>/dev/null || true; "
-                "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
-                "dpkg --configure -a 2>/dev/null || true; sleep 5",
+                "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
+                "dpkg --configure -a --force-all 2>/dev/null || true; sleep 5",
                 timeout=30)
             code, _, err = _exec(client,
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+                "-o DPkg::Lock::Timeout=60 fail2ban ufw",
                 timeout=180)
         if code != 0:
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW не удалась: {err[:200]}")
+            _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW: {err[:200]}")
         else:
             _update_setup(db, server, log_line="[3.2] ✅ Fail2Ban и UFW установлены")
 
         # 3.3 Запуск и настройка Fail2Ban
         _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
+        # Пишем конфиг через printf (heredoc нестабилен в paramiko exec_command)
+        jail_cfg = "[DEFAULT]\nbantime  = 3600\nfindtime = 600\nmaxretry = 5\n\n[sshd]\nenabled = true\n"
         code, _, err = _exec(client,
-            "systemctl enable fail2ban && systemctl start fail2ban && "
-            """cat > /etc/fail2ban/jail.local << 'EOF'
-[DEFAULT]
-bantime  = 3600
-findtime = 600
-maxretry = 5
-
-[sshd]
-enabled = true
-EOF""" + " && systemctl restart fail2ban",
-            timeout=60)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban: {err[:200]}")
+            f"printf '{jail_cfg}' > /etc/fail2ban/jail.local && "
+            "systemctl enable fail2ban 2>/dev/null || true",
+            timeout=20)
+        # Запускаем / рестартуем fail2ban
+        code, _, err = _exec(client,
+            "systemctl restart fail2ban 2>/dev/null || systemctl start fail2ban 2>/dev/null || true",
+            timeout=30)
+        _, fb_status, _ = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
+        fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
+        if fb_first == "active":
+            sec_fail2ban_active = True
+            _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
         else:
-            _, fb_status, _ = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
-            fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
-            if fb_first == "active":
-                sec_fail2ban_active = True
-                _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
-            else:
-                _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban установлен, статус: {fb_first}")
+            # Показываем реальную причину сбоя
+            _, fb_log, _ = _exec(client,
+                "journalctl -u fail2ban -n 5 --no-pager 2>/dev/null | tail -3 || echo 'нет логов'")
+            _update_setup(db, server,
+                log_line=f"[3.3] ⚠️ Fail2Ban статус: {fb_first} — {fb_log.strip()[:150]}")
 
         # 3.4 Настройка UFW
         # Используем текущий SSH порт (ещё не изменён на шаге 3.9)
@@ -984,7 +990,7 @@ EOF""" + " && systemctl restart fail2ban",
         ("Xray",
             "which xray || test -f /usr/local/bin/xray",
             "systemctl is-active xray 2>/dev/null || echo inactive",
-            True),
+            False),  # не critical — может быть не установлен при первом запуске
         ("AmneziaWG",
             "which awg || dpkg -l amneziawg 2>/dev/null | grep -q '^ii'",
             None,  # запуск после генерации конфига — не проверяем

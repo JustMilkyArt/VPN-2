@@ -39,8 +39,7 @@ def create_server(
     _: AdminUser = Depends(get_current_user)
 ):
     server = server_service.create_server(db, server_data)
-    # Запускаем хардение в фоне — не блокируем ответ
-    background_tasks.add_task(harden_server, server)
+    # harden_server убран — его задачи выполняет run_server_setup (шаг 3)
     return server
 
 
