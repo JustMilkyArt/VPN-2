@@ -625,7 +625,7 @@ echo "[+] NaiveProxy setup complete"
         )
         if not is_eu:
             ufw_cmds += " && ufw allow 2408/udp"
-        ufw_cmds += " && echo 'y' | ufw enable"
+        ufw_cmds += " && DEBIAN_FRONTEND=noninteractive ufw --force enable"
         code, _, err = _exec(client, ufw_cmds, timeout=60)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {err[:200]}")
@@ -733,25 +733,29 @@ echo "[+] NaiveProxy setup complete"
             f"echo 'Port {new_port}' >> /etc/ssh/sshd_config",
             timeout=15)
 
-        # Перезапускаем sshd через nohup с задержкой 6 секунд
-        # НЕ используем systemd-run со скобками — это неправильный bash-синтаксис в paramiko
+        # Перезапускаем SSH через nohup с задержкой 6 секунд
+        # Ubuntu 24.04 использует ssh.socket (socket-activation), а не sshd.service
+        # Порядок: сначала restart ssh.service (применяет конфиг), затем restart ssh.socket
         _exec(client,
             "nohup bash -c "
-            "'sleep 6 && systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null' "
+            "'sleep 5 && systemctl restart ssh.service 2>/dev/null; "
+            "sleep 2 && systemctl restart ssh.socket 2>/dev/null || "
+            "systemctl restart sshd 2>/dev/null || "
+            "systemctl restart ssh 2>/dev/null' "
             "> /tmp/sshd_restart.log 2>&1 &",
-            timeout=8)
+            timeout=10)
 
         # Ждём пока sshd поднимется на новом порту
         # sleep 4 + 3 попытки × 8 сек = максимум ~28 сек, лог на каждую попытку
         _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание перезапуска SSH на порту {new_port}...")
-        time.sleep(4)
+        time.sleep(10)  # Ubuntu 24.04 ssh.socket дольше поднимается
         port_ok = False
-        for attempt in range(3):
+        for attempt in range(4):
             _update_setup(db, server,
-                log_line=f"[3.9] ⏳ Проверка порта {new_port}, попытка {attempt+1}/3...")
+                log_line=f"[3.9] ⏳ Проверка порта {new_port}, попытка {attempt+1}/4...")
             try:
                 test_cli = _connect(cur_ip, new_port, cur_user,
-                                    private_key_pem=cur_key, timeout=8)
+                                    private_key_pem=cur_key, timeout=12)
                 _exec(test_cli, "ufw delete allow 22/tcp 2>/dev/null; true")
                 test_cli.close()
                 cur_port = new_port
@@ -759,10 +763,10 @@ echo "[+] NaiveProxy setup complete"
                 _update_setup(db, server, log_line=f"[3.9] ✅ SSH-порт изменён на {new_port}")
                 break
             except Exception as e:
-                if attempt < 2:
+                if attempt < 3:
                     _update_setup(db, server,
                         log_line=f"[3.9] ⏳ Порт {new_port} ещё не готов ({e.__class__.__name__}), ждём...")
-                    time.sleep(8)
+                    time.sleep(12)
                 else:
                     # Пробуем откатиться на 22
                     _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил — откат на порт 22...")
@@ -954,7 +958,7 @@ echo "[+] NaiveProxy setup complete"
         _update_setup(db, server, log_line=f"[4]    Timezone  : {server.server_timezone or '—'}")
         _update_setup(db, server, log_line=f"[4]    Xray      : {server.xray_version    or '—'}")
         _update_setup(db, server, log_line=f"[4]    AWG       : {server.awg_version     or '—'}")
-        _update_setup(db, server, log_line=f"[4]    Caddy     : {server.caddy_version   or '—'}")
+        _update_setup(db, server, log_line=f"[4]    NaiveProxy: {server.caddy_version   or '—'}")
         if not is_eu:
             _update_setup(db, server, log_line=f"[4]    WARP      : {server.warp_version or '—'}")
         _update_setup(db, server, log_line=
@@ -995,7 +999,7 @@ echo "[+] NaiveProxy setup complete"
             "which awg || dpkg -l amneziawg 2>/dev/null | grep -q '^ii'",
             None,  # запуск после генерации конфига — не проверяем
             False),
-        ("Caddy (NaiveProxy)",
+        ("NaiveProxy",
             "which caddy || test -f /usr/local/bin/caddy-naive || test -f /usr/local/bin/naive",
             None,  # запуск после генерации конфига — не проверяем
             False),
