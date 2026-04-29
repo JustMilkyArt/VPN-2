@@ -180,17 +180,32 @@ def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = 120) -> Tuple[int
     return -1, "".join(out_chunks), "".join(err_chunks)
 
 
-def _clear_apt_locks(client: paramiko.SSHClient, db, server) -> None:
+def _s(cmd: str, use_sudo: bool) -> str:
+    """Префиксует команду через sudo -n если пользователь не root."""
+    if not use_sudo:
+        return cmd
+    cmd = cmd.strip()
+    if cmd.startswith("sudo ") or cmd.startswith("nohup ") or cmd.startswith("echo "):
+        return cmd
+    return "sudo -n " + cmd
+
+
+def _se(client: paramiko.SSHClient, cmd: str, use_sudo: bool, timeout: int = 120) -> tuple:
+    """_exec + автоматический sudo."""
+    return _exec(client, _s(cmd, use_sudo), timeout=timeout)
+
+
+def _clear_apt_locks(client: paramiko.SSHClient, db, server, use_sudo: bool = False) -> None:
     """Одноразовая очистка dpkg/apt lock в начале шага 2.
     Останавливает unattended-upgrades, ждёт завершения apt/dpkg процессов,
     при необходимости принудительно снимает lock-файлы.
     """
     # Шаг 1: убиваем unattended-upgrades
-    _exec(client,
+    _se(client,
         "systemctl stop unattended-upgrades 2>/dev/null || true; "
         "pkill -9 -f unattended-upgrades 2>/dev/null || true; "
         "pkill -9 -f apt-get 2>/dev/null || true; "
-        "sleep 2",
+        "sleep 2", use_sudo,
         timeout=15)
 
     # Шаг 2: ждём пока lock-файлы освободятся (до 120 секунд)
@@ -206,11 +221,11 @@ def _clear_apt_locks(client: paramiko.SSHClient, db, server) -> None:
 
     # Шаг 3: принудительно снимаем lock-файлы если всё ещё заняты
     if "FREE" not in out:
-        _exec(client,
+        _se(client,
             "rm -f /var/lib/dpkg/lock-frontend "
             "/var/lib/dpkg/lock "
             "/var/cache/apt/archives/lock 2>/dev/null; "
-            "dpkg --configure -a 2>/dev/null || true",
+            "dpkg --configure -a 2>/dev/null || true", use_sudo,
             timeout=60)
         _update_setup(db, server,
                       log_line="[2.0] ⚠️ dpkg lock принудительно снят (unattended-upgrades завис)")
@@ -268,6 +283,7 @@ def _run(db: Session, server: Server):
     cur_pass = server.ssh_password
     cur_key  = server.ssh_key
     is_eu    = str(server.role).upper() in ("EU", "SERVERROLE.EU")
+    use_sudo = (cur_user != "root")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ШАГ 1 — Проверка подключения
@@ -306,9 +322,9 @@ def _run(db: Session, server: Server):
     try:
         # 2.0 Очистка lock-файлов (один раз!) + apt-get update
         _update_setup(db, server, log_line="[2.0] Подготовка APT (очистка блокировок)...")
-        _clear_apt_locks(client, db, server)
-        code, _, err = _exec(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq",
+        _clear_apt_locks(client, db, server, use_sudo)
+        code, _, err = _se(client,
+            "DEBIAN_FRONTEND=noninteractive apt-get update -qq", use_sudo,
             timeout=120)
         if code != 0:
             _update_setup(db, server, log_line=f"[2.0] ⚠️ apt-get update: {err[:200]}")
@@ -317,9 +333,9 @@ def _run(db: Session, server: Server):
 
         # 2.1 Базовые зависимости
         _update_setup(db, server, log_line="[2.1] Установка базовых пакетов...")
-        code, _, err = _exec(client,
+        code, _, err = _se(client,
             "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "curl wget unzip git ca-certificates gnupg lsb-release",
+            "curl wget unzip git ca-certificates gnupg lsb-release", use_sudo,
             timeout=180)
         if code != 0:
             _update_setup(db, server, log_line=f"[2.1] ⚠️ Базовые пакеты: {err[:200]}")
@@ -378,7 +394,8 @@ systemctl enable xray
 systemctl restart xray
 echo "[+] Xray installed"
 """
-        code, out, err = _exec(client, XRAY_SCRIPT, timeout=300)
+        _xray_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client, f"{_xray_cmd} << '__XRAY__'\n{XRAY_SCRIPT}\n__XRAY__", timeout=300)
         if code != 0:
             _update_setup(db, server, log_line=f"[2.2] ❌ Xray: {(err or out)[:300]}")
         else:
@@ -414,7 +431,8 @@ apt-get install -y -qq amneziawg amneziawg-tools
 modprobe amneziawg 2>/dev/null || true
 echo "[+] AmneziaWG installed"
 """
-        code, out, err = _exec(client, AWG_SCRIPT, timeout=300)
+        _awg_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client, f"{_awg_cmd} << '__AWG__'\n{AWG_SCRIPT}\n__AWG__", timeout=300)
         if code != 0:
             _update_setup(db, server, log_line=f"[2.3] ❌ AmneziaWG: {err[:300]}")
         else:
@@ -478,7 +496,8 @@ fi
 mkdir -p /etc/naiveproxy
 echo "[+] NaiveProxy setup complete"
 """
-        code, out, err = _exec(client, NAIVE_SCRIPT, timeout=300)
+        _naive_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client, f"{_naive_cmd} << '__NAIVE__'\n{NAIVE_SCRIPT}\n__NAIVE__", timeout=300)
         if code != 0:
             _update_setup(db, server, log_line=f"[2.4] ❌ NaiveProxy: {err[:300]}")
         else:
@@ -535,18 +554,18 @@ echo "[+] NaiveProxy setup complete"
         # 3.1 apt upgrade (только критичные пакеты — openssh-server, openssl)
         _update_setup(db, server, log_line="[3.1] Обновление критичных пакетов (SSH, OpenSSL)...")
         # Сначала убиваем unattended-upgrades чтобы не блокировал apt
-        _exec(client,
+        _se(client,
             "systemctl stop unattended-upgrades 2>/dev/null || true; "
             "pkill -9 -f unattended-upgrades 2>/dev/null || true; "
             "pkill -9 -f apt-get 2>/dev/null || true; "
             "pkill -9 -f dpkg 2>/dev/null || true; "
             "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
-            "dpkg --configure -a 2>/dev/null || true",
+            "dpkg --configure -a 2>/dev/null || true", use_sudo,
             timeout=30)
-        code, _, err = _exec(client,
+        code, _, err = _se(client,
             "DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -qq "
             "-o DPkg::Lock::Timeout=60 "
-            "openssh-server openssl 2>/dev/null || true",
+            "openssh-server openssl 2>/dev/null || true", use_sudo,
             timeout=120)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.1] ⚠️ Обновление пакетов: {err[:200]}")
@@ -555,20 +574,20 @@ echo "[+] NaiveProxy setup complete"
 
         # 3.2 Fail2Ban + UFW — одной командой apt (с повторной попыткой при dpkg lock)
         _update_setup(db, server, log_line="[3.2] Установка Fail2Ban и UFW...")
-        code, _, err = _exec(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
+        code, _, err = _se(client,
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw", use_sudo,
             timeout=180)
         if code != 0:
             # Повторная попытка после очистки dpkg locks
             _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:150]}. Очищаем lock и повторяем...")
-            _exec(client,
+            _se(client,
                 "pkill -9 -f apt-get 2>/dev/null || true; "
                 "pkill -9 -f dpkg 2>/dev/null || true; "
                 "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
-                "dpkg --configure -a 2>/dev/null || true; sleep 5",
+                "dpkg --configure -a 2>/dev/null || true; sleep 5", use_sudo,
                 timeout=30)
-            code, _, err = _exec(client,
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw",
+            code, _, err = _se(client,
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw", use_sudo,
                 timeout=180)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW не удалась: {err[:200]}")
@@ -577,7 +596,7 @@ echo "[+] NaiveProxy setup complete"
 
         # 3.3 Запуск и настройка Fail2Ban
         _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
-        code, _, err = _exec(client,
+        code, _, err = _se(client,
             "systemctl enable fail2ban && systemctl start fail2ban && "
             """cat > /etc/fail2ban/jail.local << 'EOF'
 [DEFAULT]
@@ -587,12 +606,12 @@ maxretry = 5
 
 [sshd]
 enabled = true
-EOF""" + " && systemctl restart fail2ban",
+EOF""" + " && systemctl restart fail2ban", use_sudo,
             timeout=60)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban: {err[:200]}")
         else:
-            _, fb_status, _ = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
+            _, fb_status, _ = _se(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive", use_sudo)
             fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
             if fb_first == "active":
                 sec_fail2ban_active = True
@@ -604,20 +623,21 @@ EOF""" + " && systemctl restart fail2ban",
         # Используем текущий SSH порт (ещё не изменён на шаге 3.9)
         _update_setup(db, server, log_line="[3.4] Настройка UFW...")
         _current_ssh_port_for_ufw = cur_port  # порт ДО смены — откроем его в UFW
+        _ufw = ("sudo -n ufw" if use_sudo else "ufw")
         ufw_cmds = (
-            "ufw --force reset && "
-            "ufw default deny incoming && "
-            "ufw default allow outgoing && "
-            f"ufw allow {_current_ssh_port_for_ufw}/tcp && "
-            "ufw allow 22/tcp && "
-            "ufw allow 80/tcp && "
-            "ufw allow 443/tcp && "
-            "ufw allow 51820/udp && "
-            "ufw allow 51821/udp"
+            f"{_ufw} --force reset && "
+            f"{_ufw} default deny incoming && "
+            f"{_ufw} default allow outgoing && "
+            f"{_ufw} allow {_current_ssh_port_for_ufw}/tcp && "
+            f"{_ufw} allow 22/tcp && "
+            f"{_ufw} allow 80/tcp && "
+            f"{_ufw} allow 443/tcp && "
+            f"{_ufw} allow 51820/udp && "
+            f"{_ufw} allow 51821/udp"
         )
         if not is_eu:
-            ufw_cmds += " && ufw allow 2408/udp"
-        ufw_cmds += " && DEBIAN_FRONTEND=noninteractive ufw --force enable"
+            ufw_cmds += f" && {_ufw} allow 2408/udp"
+        ufw_cmds += f" && DEBIAN_FRONTEND=noninteractive {_ufw} --force enable"
         code, _, err = _exec(client, ufw_cmds, timeout=60)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {err[:200]}")
@@ -633,11 +653,12 @@ EOF""" + " && systemctl restart fail2ban",
         # 3.5 Новый пользователь
         _update_setup(db, server, log_line="[3.5] Создание нового SSH-пользователя...")
         new_user = _gen_username()
+        _su = 'sudo -n ' if use_sudo else ''
         code, out, err = _exec(client,
-            f"id {new_user} &>/dev/null || useradd -m -s /bin/bash {new_user} && "
-            f"usermod -aG sudo {new_user} && "
-            f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{new_user} && "
-            f"chmod 440 /etc/sudoers.d/{new_user} && "
+            f"id {new_user} &>/dev/null || {_su}useradd -m -s /bin/bash {new_user} && "
+            f"{_su}usermod -aG sudo {new_user} && "
+            f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | {_su}tee /etc/sudoers.d/{new_user} > /dev/null && "
+            f"{_su}chmod 440 /etc/sudoers.d/{new_user} && "
             f"mkdir -p /home/{new_user}/.ssh && "
             f"chmod 700 /home/{new_user}/.ssh && "
             f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true && "
@@ -679,7 +700,7 @@ EOF""" + " && systemctl restart fail2ban",
         _update_setup(db, server, log_line="[3.7] Смена пароля пользователя...")
         new_password = _gen_password()
         code, _, err = _exec(client,
-            f"echo '{new_user}:{new_password}' | chpasswd", timeout=30)
+            (f"echo '{new_user}:{new_password}' | sudo -n chpasswd" if use_sudo else f"echo '{new_user}:{new_password}' | chpasswd"), timeout=30)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.7] ⚠️ Смена пароля: {err[:200]}")
         else:
@@ -693,17 +714,17 @@ EOF""" + " && systemctl restart fail2ban",
         # ВАЖНО: на Ubuntu cloud-init создаёт drop-in /etc/ssh/sshd_config.d/50-cloud-init.conf
         # который перекрывает основной конфиг — нужно патчить оба файла
         _update_setup(db, server, log_line="[3.8] Отключение парольной аутентификации...")
+        _sd = "sudo -n " if use_sudo else ""
         code, _, err = _exec(client,
             # Патчим основной конфиг
-            "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && "
-            "grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || "
-            "echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config && "
+            f"{_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && "
+            f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || {_sd}bash -c 'echo PasswordAuthentication no >> /etc/ssh/sshd_config' && "
             # Патчим все drop-in файлы (cloud-init, snap, etc.)
-            "for f in /etc/ssh/sshd_config.d/*.conf; do "
-            "  [ -f \"$f\" ] && sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' \"$f\"; "
+            f"for f in /etc/ssh/sshd_config.d/*.conf; do "
+            f"  [ -f \"$f\" ] && {_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' \"$f\"; "
             "done; "
             # Перезагружаем sshd
-            "systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true",
+            f"{_sd}systemctl reload sshd 2>/dev/null || {_sd}systemctl reload ssh 2>/dev/null || true",
             timeout=30)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.8] ⚠️ Отключение password auth: {err[:200]}")
@@ -721,35 +742,44 @@ EOF""" + " && systemctl restart fail2ban",
         new_port = _gen_ssh_port()
 
         # Шаг A: открываем новый порт в UFW (порт 22 пока оставляем открытым!)
-        _exec(client, f"ufw allow {new_port}/tcp 2>/dev/null || true", timeout=15)
+        _exec(client, (f"sudo -n ufw allow {new_port}/tcp 2>/dev/null || true" if use_sudo else f"ufw allow {new_port}/tcp 2>/dev/null || true"), timeout=15)
 
         # Шаг B: меняем Port в sshd_config
         _exec(client,
+            (f"sudo -n sed -i '/^#*Port /d' /etc/ssh/sshd_config && "
+            f"sudo -n bash -c 'echo Port {new_port} >> /etc/ssh/sshd_config'"
+            if use_sudo else
             f"sed -i '/^#*Port /d' /etc/ssh/sshd_config && "
-            f"echo 'Port {new_port}' >> /etc/ssh/sshd_config",
+            f"echo 'Port {new_port}' >> /etc/ssh/sshd_config"),
             timeout=15)
 
         # Шаг C: отключаем socket-activation (Ubuntu 24.04)
         # ssh.socket держит порт 22 жёстко; при его restart происходит
         # кратковременное закрытие порта → UFW блокирует → соединение рвётся.
         # Решение: выключаем сокет, переходим на классический sshd.service.
-        _exec(client,
+        _se(client,
             "systemctl disable ssh.socket 2>/dev/null || true && "
             "systemctl stop ssh.socket 2>/dev/null || true && "
             # Убираем старый override если есть
             "rm -f /etc/systemd/system/ssh.socket.d/port.conf && "
-            "systemctl daemon-reload",
+            "systemctl daemon-reload", use_sudo,
             timeout=15)
 
         # Шаг D: рестартуем ssh.service через nohup
         # Теперь sshd сам слушает порт из sshd_config (без сокета).
         # Порт 22 в UFW остаётся открытым до подтверждения нового порта.
         _exec(client,
+            ("nohup bash -c "
+            "'sleep 3 && "
+            "sudo -n systemctl restart ssh.service 2>/dev/null || "
+            "sudo -n systemctl restart sshd 2>/dev/null' "
+            "> /tmp/sshd_restart.log 2>&1 &"
+            if use_sudo else
             "nohup bash -c "
             "'sleep 3 && "
             "systemctl restart ssh.service 2>/dev/null || "
             "systemctl restart sshd 2>/dev/null' "
-            "> /tmp/sshd_restart.log 2>&1 &",
+            "> /tmp/sshd_restart.log 2>&1 &"),
             timeout=8)
 
         # Шаг E: ждём и проверяем новый порт
@@ -763,7 +793,7 @@ EOF""" + " && systemctl restart fail2ban",
                 test_cli = _connect(cur_ip, new_port, cur_user,
                                     private_key_pem=cur_key, timeout=10)
                 # Порт новый работает — теперь закрываем старый 22 в UFW
-                _exec(test_cli, "ufw delete allow 22/tcp 2>/dev/null || true", timeout=10)
+                _exec(test_cli, ("sudo -n ufw delete allow 22/tcp 2>/dev/null || true" if use_sudo else "ufw delete allow 22/tcp 2>/dev/null || true"), timeout=10)
                 test_cli.close()
                 cur_port = new_port
                 port_ok = True
