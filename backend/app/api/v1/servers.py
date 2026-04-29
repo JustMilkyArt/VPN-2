@@ -337,6 +337,28 @@ def get_ssh_key(
         raise HTTPException(status_code=404, detail="SSH key not found")
     return {"private_key": private_key}
 
+@router.get("/{server_id}/ssh-password", summary="Get decrypted SSH password")
+def get_ssh_password(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    password = None
+    if server.ssh_password_enc:
+        try:
+            password = decrypt_value(server.ssh_password_enc)
+        except Exception:
+            pass
+    if not password and server.ssh_password:
+        password = server.ssh_password
+    if not password:
+        raise HTTPException(status_code=404, detail="SSH password not found")
+    return {"password": password}
+
+
 @router.get("/{server_id}/security", summary="Get real security status from server")
 def get_security(
     server_id: int,
