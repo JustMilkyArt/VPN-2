@@ -1171,12 +1171,14 @@ async function loadServerInfoTab() {
     if (hint) { hint.textContent = `Ошибка: ${res.error}`; hint.classList.remove('hidden'); }
     return;
   }
-  // Бэкенд возвращает { system_info: { os, cpu_cores, memory, uptime } }
+  // Бэкенд возвращает { system_info: { os, cpu_cores, memory, disk, uptime } }
   const si = res.data.system_info || res.data;
-  document.getElementById('sov-os').textContent   = si.os        || si.os_info    || '—';
-  document.getElementById('sov-cpu').textContent  = si.cpu_cores || si.cpu_info   || '—';
-  document.getElementById('sov-ram').textContent  = si.memory    || si.ram_info   || '—';
-  document.getElementById('sov-disk').textContent = si.disk      || si.disk_info  || si.uptime || '—';
+  document.getElementById('sov-os').textContent     = si.os        || si.os_info    || '—';
+  document.getElementById('sov-cpu').textContent    = si.cpu_cores || si.cpu_info   || '—';
+  document.getElementById('sov-ram').textContent    = si.memory    || si.ram_info   || '—';
+  document.getElementById('sov-disk').textContent   = si.disk      || si.disk_info  || '—';
+  const uptimeEl = document.getElementById('sov-uptime');
+  if (uptimeEl) uptimeEl.textContent = si.uptime || '—';
   if (hint) hint.classList.add('hidden');
 }
 
@@ -1852,6 +1854,43 @@ function closeServerSetup() {
 }
 
 
+
+async function loadSshPassword() {
+  const serverId = parseInt(document.getElementById('settings-server-id').value);
+  if (!serverId) return;
+  const pwdInput = document.getElementById('settings-ssh-password');
+  const btn = document.getElementById('btn-show-ssh-password');
+  const icon = btn ? btn.querySelector('i') : null;
+
+  // Если уже загружен — просто переключаем видимость
+  if (pwdInput && pwdInput.dataset.loaded === '1') {
+    const isPass = pwdInput.type === 'password';
+    pwdInput.type = isPass ? 'text' : 'password';
+    if (icon) { icon.className = isPass ? 'fas fa-eye-slash text-xs' : 'fas fa-eye text-xs'; }
+    return;
+  }
+
+  // Загружаем расшифрованный пароль с сервера
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api.request('GET', `/servers/${serverId}/ssh-password`);
+    if (res.ok && res.data?.password) {
+      if (pwdInput) {
+        pwdInput.value = res.data.password;
+        pwdInput.type = 'text';
+        pwdInput.dataset.loaded = '1';
+        if (icon) icon.className = 'fas fa-eye-slash text-xs';
+      }
+    } else {
+      toast('Пароль не найден или не задан', 'warning');
+    }
+  } catch(e) {
+    toast('Ошибка загрузки пароля', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function copyPrivateSshKey() {
   const serverId = parseInt(document.getElementById('settings-server-id').value);
   if (!serverId) return;
@@ -1878,6 +1917,65 @@ async function copyPrivateSshKey() {
 }
 
 window.openServerSetupModal = openServerSetupModal;
+async function _refreshServerCard(serverId) {
+  if (!serverId) return;
+  // Перезагружаем свежие данные сервера из API
+  try {
+    const freshRes = await api.request('GET', `/servers/${serverId}`);
+    if (freshRes.ok && freshRes.data) {
+      const idx = serversData.findIndex(s => s.id === serverId);
+      if (idx !== -1) serversData[idx] = freshRes.data;
+      else serversData.push(freshRes.data);
+    }
+  } catch(e) { console.warn('_refreshServerCard reload failed:', e); }
+
+  const srv = serversData.find(s => s.id === serverId);
+  if (!srv) return;
+
+  // Обновляем Params tab
+  const userEl = document.getElementById('settings-ssh-user');
+  const portEl = document.getElementById('settings-ssh-port');
+  if (userEl) userEl.value = srv.ssh_user_actual || srv.ssh_user || 'root';
+  if (portEl) portEl.value = srv.ssh_port_actual || srv.ssh_port || 22;
+
+  // Пароль: если есть зашифрованный — показываем маску
+  const pwdInput = document.getElementById('settings-ssh-password');
+  if (pwdInput) {
+    pwdInput.value = '';
+    pwdInput.placeholder = srv.ssh_password_enc
+      ? '••••••••  (сохранён зашифровано)'
+      : 'Введите новый пароль для изменения';
+  }
+
+  // Ключ: обновляем placeholder кнопки
+  const keyInput = document.getElementById('settings-ssh-key');
+  if (keyInput) {
+    keyInput.value = '';
+    keyInput.placeholder = (srv.ssh_private_key_enc || srv.has_ssh_key)
+      ? '-----BEGIN OPENSSH PRIVATE KEY-----\n(ключ сохранён, нажмите «Скопировать ключ»)'
+      : 'Вставьте приватный ключ для изменения';
+  }
+
+  // Security tab: обновляем чекбоксы из sec_* полей
+  const secMap = {
+    'sec-fail2ban':       srv.sec_fail2ban,
+    'sec-ufw':            srv.sec_ufw,
+    'sec-password-login': srv.sec_password_login != null ? !srv.sec_password_login : null,
+    'sec-root-login':     null,
+  };
+  Object.entries(secMap).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (val !== null && val !== undefined) {
+      el.checked = !!val;
+      el.disabled = false;
+    }
+  });
+
+  // System info tab: перезагружаем через API
+  loadServerInfoTab();
+}
+
 window._refreshServerCard   = _refreshServerCard;
 window.toggleSetupStep      = toggleSetupStep;
 window.retryServerSetup     = retryServerSetup;

@@ -108,7 +108,8 @@ class ServerRead(ServerBase):
         pw_enc = getattr(data, 'ssh_password_enc', None)
         ssh_key_plain = getattr(data, 'ssh_key', None)   # plain key тоже считаем
         result['ssh_private_key_enc'] = bool(pk_enc or ssh_key_plain)
-        result['ssh_password_enc'] = bool(pw_enc)
+        ssh_pass_plain = getattr(data, 'ssh_password', None)
+        result['ssh_password_enc'] = bool(pw_enc or ssh_pass_plain)
 
         return result
 
