@@ -71,13 +71,17 @@ GENERATE_REALITY_KEYS_CMD = "xray x25519"
 WARP_INSTALL_SCRIPT = """#!/bin/bash
 set -e
 echo "[*] Installing Cloudflare WARP..."
-apt-get install -y -qq curl
+# Запускаем через sudo если не root
+_SUDO=""
+[ "$(id -u)" != "0" ] && _SUDO="sudo -n"
+
+$_SUDO apt-get install -y -qq curl
 
 # Add Cloudflare GPG key and repo
-curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/cloudflare-client.list
-apt-get update -qq
-apt-get install -y -qq cloudflare-warp
+curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | $_SUDO gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | $_SUDO tee /etc/apt/sources.list.d/cloudflare-client.list > /dev/null
+$_SUDO apt-get update -qq
+$_SUDO apt-get install -y -qq cloudflare-warp
 
 # Register and connect WARP
 warp-cli --accept-tos registration new || true
@@ -86,8 +90,8 @@ warp-cli --accept-tos proxy port 40000
 warp-cli --accept-tos connect
 
 echo "[+] WARP installed"
-systemctl enable warp-svc
-systemctl start warp-svc
+$_SUDO systemctl enable warp-svc
+$_SUDO systemctl start warp-svc
 """
 
 

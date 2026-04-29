@@ -598,15 +598,8 @@ echo "[+] NaiveProxy setup complete"
         _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
         code, _, err = _se(client,
             "systemctl enable fail2ban && systemctl start fail2ban && "
-            """cat > /etc/fail2ban/jail.local << 'EOF'
-[DEFAULT]
-bantime  = 3600
-findtime = 600
-maxretry = 5
-
-[sshd]
-enabled = true
-EOF""" + " && systemctl restart fail2ban", use_sudo,
+            "printf '[DEFAULT]\\nbantime=3600\\nfindtime=600\\nmaxretry=5\\n[sshd]\\nenabled=true\\n' > /etc/fail2ban/jail.local && "
+            "systemctl restart fail2ban", use_sudo,
             timeout=60)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban: {err[:200]}")
@@ -653,18 +646,19 @@ EOF""" + " && systemctl restart fail2ban", use_sudo,
         # 3.5 Новый пользователь
         _update_setup(db, server, log_line="[3.5] Создание нового SSH-пользователя...")
         new_user = _gen_username()
-        _su = 'sudo -n ' if use_sudo else ''
-        code, out, err = _exec(client,
-            f"id {new_user} &>/dev/null || {_su}useradd -m -s /bin/bash {new_user} && "
-            f"{_su}usermod -aG sudo {new_user} && "
-            f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | {_su}tee /etc/sudoers.d/{new_user} > /dev/null && "
-            f"{_su}chmod 440 /etc/sudoers.d/{new_user} && "
-            f"mkdir -p /home/{new_user}/.ssh && "
-            f"chmod 700 /home/{new_user}/.ssh && "
-            f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true && "
-            f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh && "
-            f"echo created",
-            timeout=60)
+        # 3.5 Создаём пользователя отдельными командами (каждая через sudo при необходимости)
+        code, out, err = _se(client, f"id {new_user} &>/dev/null || useradd -m -s /bin/bash {new_user}", use_sudo, timeout=15)
+        _ua_ok = (code == 0)
+        if _ua_ok:
+            _se(client, f"usermod -aG sudo {new_user}", use_sudo, timeout=10)
+            _se(client, f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | tee /etc/sudoers.d/{new_user} > /dev/null", use_sudo, timeout=10)
+            _se(client, f"chmod 440 /etc/sudoers.d/{new_user}", use_sudo, timeout=10)
+            _se(client, f"mkdir -p /home/{new_user}/.ssh && chmod 700 /home/{new_user}/.ssh", use_sudo, timeout=10)
+            _se(client, f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true", use_sudo, timeout=10)
+            _se(client, f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh", use_sudo, timeout=10)
+        code = 0 if _ua_ok else 1
+        out = 'created' if _ua_ok else ''
+        err = '' if _ua_ok else 'useradd failed'
         if code != 0:
             _update_setup(db, server, log_line=f"[3.5] ⚠️ Создание юзера: {err[:200]}")
             new_user = cur_user

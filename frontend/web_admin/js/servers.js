@@ -979,6 +979,8 @@ function showServerSettings(serverId) {
   // Sensitive fields — clear value AND show status in placeholder
   const pwdInput = document.getElementById('settings-ssh-password');
   pwdInput.value = '';
+  pwdInput.type = 'password';
+  delete pwdInput.dataset.loaded;  // сброс кэша при открытии другого сервера
   pwdInput.placeholder = server.ssh_password_enc
     ? '••••••••  (сохранён зашифровано)'
     : 'Введите новый пароль для изменения';

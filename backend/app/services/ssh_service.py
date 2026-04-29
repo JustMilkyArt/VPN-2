@@ -9,8 +9,25 @@ from typing import Optional, Tuple
 import paramiko
 from app.core.config import settings
 from app.models.server import Server
+try:
+    from app.services.setup_service import decrypt_value as _decrypt_value
+except Exception:
+    def _decrypt_value(v): return v  # fallback
 
 logger = logging.getLogger(__name__)
+
+def _load_private_key(pem: str) -> paramiko.PKey:
+    """Load private key from PEM string, trying Ed25519 → RSA → ECDSA."""
+    buf = io.StringIO(pem)
+    for cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            buf.seek(0)
+            return cls.from_private_key(buf)
+        except Exception:
+            continue
+    raise ValueError("Unsupported or invalid private key format")
+
+
 
 
 class SSHClient:
@@ -33,11 +50,26 @@ class SSHClient:
             "auth_timeout": 30,
         }
 
-        if self.server.ssh_key:
-            pkey = _load_private_key(self.server.ssh_key)
+        # Определяем ключ: сначала plain ssh_key, потом зашифрованный ssh_private_key_enc
+        _raw_key = self.server.ssh_key
+        if not _raw_key and getattr(self.server, "ssh_private_key_enc", None):
+            try:
+                _raw_key = _decrypt_value(self.server.ssh_private_key_enc)
+            except Exception:
+                _raw_key = None
+        # Определяем пароль: сначала plain, потом зашифрованный
+        _raw_pass = self.server.ssh_password
+        if not _raw_pass and getattr(self.server, "ssh_password_enc", None):
+            try:
+                _raw_pass = _decrypt_value(self.server.ssh_password_enc)
+            except Exception:
+                _raw_pass = None
+
+        if _raw_key:
+            pkey = _load_private_key(_raw_key)
             connect_kwargs["pkey"] = pkey
-        elif self.server.ssh_password:
-            connect_kwargs["password"] = self.server.ssh_password
+        elif _raw_pass:
+            connect_kwargs["password"] = _raw_pass
 
         logger.info(f"Connecting to {self.server.ip}:{self.server.ssh_port} as {self.server.ssh_user}")
         self.client.connect(**connect_kwargs)
