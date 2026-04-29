@@ -1078,8 +1078,8 @@ EOF""" + " && systemctl restart fail2ban",
                 (l.strip() for l in out_r.splitlines() if l.strip()), ""
             ).lower()
 
-            is_up   = first_line in ("active", "alive") or "connected" in first_line
-            is_down = first_line in ("inactive", "failed", "activating", "deactivating")
+            is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line
+            is_down = first_line in ("inactive", "failed", "activating", "deactivating") or "status: inactive" in first_line
             display = out_r.splitlines()[0].strip() if out_r.strip() else "(нет вывода)"
 
             if name == "SSH":
