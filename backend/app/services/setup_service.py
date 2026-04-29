@@ -594,23 +594,21 @@ echo "[+] NaiveProxy setup complete"
         else:
             _update_setup(db, server, log_line="[3.2] ✅ Fail2Ban и UFW установлены")
 
-        # 3.3 Запуск и настройка Fail2Ban
+        # 3.3 Запуск и настройка Fail2Ban — отдельными командами чтобы не тянуть мусор systemd в err
         _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
-        code, _, err = _se(client,
-            "systemctl enable fail2ban && systemctl start fail2ban && "
-            "printf '[DEFAULT]\\nbantime=3600\\nfindtime=600\\nmaxretry=5\\n[sshd]\\nenabled=true\\n' > /etc/fail2ban/jail.local && "
-            "systemctl restart fail2ban", use_sudo,
-            timeout=60)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban: {err[:200]}")
+        _se(client, "systemctl enable fail2ban 2>/dev/null || true", use_sudo, timeout=15)
+        _se(client, "systemctl start fail2ban 2>/dev/null || true", use_sudo, timeout=15)
+        _se(client,
+            "printf '[DEFAULT]\\nbantime=3600\\nfindtime=600\\nmaxretry=5\\n[sshd]\\nenabled=true\\n'"
+            " > /etc/fail2ban/jail.local", use_sudo, timeout=10)
+        _se(client, "systemctl restart fail2ban 2>/dev/null || true", use_sudo, timeout=20)
+        _, fb_status, _ = _se(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive", use_sudo)
+        fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
+        if fb_first == "active":
+            sec_fail2ban_active = True
+            _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
         else:
-            _, fb_status, _ = _se(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive", use_sudo)
-            fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
-            if fb_first == "active":
-                sec_fail2ban_active = True
-                _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
-            else:
-                _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban установлен, статус: {fb_first}")
+            _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban установлен, статус: {fb_first}")
 
         # 3.4 Настройка UFW
         # Используем текущий SSH порт (ещё не изменён на шаге 3.9)
@@ -1056,8 +1054,8 @@ echo "[+] NaiveProxy setup complete"
             "which awg || dpkg -l amneziawg 2>/dev/null | grep -q '^ii'",
             None,  # запуск после генерации конфига — не проверяем
             False),
-        ("Caddy (NaiveProxy)",
-            "which caddy || test -f /usr/local/bin/caddy-naive || test -f /usr/local/bin/naive",
+        ("NaiveProxy",
+            "test -f /usr/local/bin/naive || which caddy || test -f /usr/local/bin/caddy-naive",
             None,  # запуск после генерации конфига — не проверяем
             False),
         ("Fail2Ban",
@@ -1073,7 +1071,7 @@ echo "[+] NaiveProxy setup complete"
         checks.append((
             "WARP",
             "which warp-cli || dpkg -l cloudflare-warp 2>/dev/null | grep -q '^ii'",
-            "warp-cli status 2>/dev/null | head -1 || echo unknown",
+            "warp-cli status 2>/dev/null || warp-cli --accept-tos status 2>/dev/null || echo unknown",
             False,
         ))
 
@@ -1102,7 +1100,7 @@ echo "[+] NaiveProxy setup complete"
                 (l.strip() for l in out_r.splitlines() if l.strip()), ""
             ).lower()
 
-            is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line
+            is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line or "status update: connected" in first_line
             is_down = first_line in ("inactive", "failed", "activating", "deactivating") or "status: inactive" in first_line
             display = out_r.splitlines()[0].strip() if out_r.strip() else "(нет вывода)"
 
