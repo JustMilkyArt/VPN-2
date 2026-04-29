@@ -729,24 +729,25 @@ EOF""" + " && systemctl restart fail2ban",
             f"echo 'Port {new_port}' >> /etc/ssh/sshd_config",
             timeout=15)
 
-        # Шаг C: для Ubuntu 24.04 (ssh.socket) — создаём override с новым портом
-        # Это нужно чтобы socket перешёл на новый порт при restart
+        # Шаг C: отключаем socket-activation (Ubuntu 24.04)
+        # ssh.socket держит порт 22 жёстко; при его restart происходит
+        # кратковременное закрытие порта → UFW блокирует → соединение рвётся.
+        # Решение: выключаем сокет, переходим на классический sshd.service.
         _exec(client,
-            f"mkdir -p /etc/systemd/system/ssh.socket.d && "
-            f"printf '[Socket]\nListenStream=\nListenStream={new_port}\n'"
-            f" > /etc/systemd/system/ssh.socket.d/port.conf && "
-            f"systemctl daemon-reload",
+            "systemctl disable ssh.socket 2>/dev/null || true && "
+            "systemctl stop ssh.socket 2>/dev/null || true && "
+            # Убираем старый override если есть
+            "rm -f /etc/systemd/system/ssh.socket.d/port.conf && "
+            "systemctl daemon-reload",
             timeout=15)
 
-        # Шаг D: перезапускаем SSH через nohup с задержкой
-        # Порядок: сначала ssh.service (применяет sshd_config),
-        # потом ssh.socket (переключает сокет на новый порт)
+        # Шаг D: рестартуем ssh.service через nohup
+        # Теперь sshd сам слушает порт из sshd_config (без сокета).
+        # Порт 22 в UFW остаётся открытым до подтверждения нового порта.
         _exec(client,
             "nohup bash -c "
             "'sleep 3 && "
-            "systemctl restart ssh.service 2>/dev/null; "
-            "sleep 1 && "
-            "systemctl restart ssh.socket 2>/dev/null || "
+            "systemctl restart ssh.service 2>/dev/null || "
             "systemctl restart sshd 2>/dev/null' "
             "> /tmp/sshd_restart.log 2>&1 &",
             timeout=8)
@@ -783,12 +784,11 @@ EOF""" + " && systemctl restart fail2ban",
                             # Восстанавливаем конфиг
                             "sed -i '/^Port /d' /etc/ssh/sshd_config && "
                             "echo 'Port 22' >> /etc/ssh/sshd_config && "
-                            # Убираем override ssh.socket
-                            "rm -f /etc/systemd/system/ssh.socket.d/port.conf && "
+                            # Восстанавливаем socket-activation для порта 22
                             "systemctl daemon-reload && "
-                            # Перезапускаем
-                            "systemctl restart ssh.service 2>/dev/null; "
-                            "systemctl restart ssh.socket 2>/dev/null || "
+                            "systemctl enable ssh.socket 2>/dev/null || true && "
+                            # Рестарт через service (socket ещё не активен на этом порту)
+                            "systemctl restart ssh.service 2>/dev/null || "
                             "systemctl restart sshd 2>/dev/null || true",
                             timeout=20)
                         rb.close()
