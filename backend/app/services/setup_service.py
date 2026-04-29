@@ -641,27 +641,28 @@ echo "[+] NaiveProxy setup complete"
             else:
                 _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {ufw_first}")
 
-        # 3.5 Новый пользователь
-        _update_setup(db, server, log_line="[3.5] Создание нового SSH-пользователя...")
-        new_user = _gen_username()
-        # 3.5 Создаём пользователя отдельными командами (каждая через sudo при необходимости)
-        code, out, err = _se(client, f"id {new_user} &>/dev/null || useradd -m -s /bin/bash {new_user}", use_sudo, timeout=15)
-        _ua_ok = (code == 0)
-        if _ua_ok:
-            _se(client, f"usermod -aG sudo {new_user}", use_sudo, timeout=10)
-            _se(client, f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | tee /etc/sudoers.d/{new_user} > /dev/null", use_sudo, timeout=10)
-            _se(client, f"chmod 440 /etc/sudoers.d/{new_user}", use_sudo, timeout=10)
-            _se(client, f"mkdir -p /home/{new_user}/.ssh && chmod 700 /home/{new_user}/.ssh", use_sudo, timeout=10)
-            _se(client, f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true", use_sudo, timeout=10)
-            _se(client, f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh", use_sudo, timeout=10)
-        code = 0 if _ua_ok else 1
-        out = 'created' if _ua_ok else ''
-        err = '' if _ua_ok else 'useradd failed'
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.5] ⚠️ Создание юзера: {err[:200]}")
-            new_user = cur_user
+        # 3.5 Новый пользователь — только для EU серверов
+        # Для RU серверов (non-root) создание нового юзера пропускаем,
+        # работаем с текущим пользователем
+        new_user = cur_user
+        if is_eu:
+            _update_setup(db, server, log_line="[3.5] Создание нового SSH-пользователя...")
+            new_user = _gen_username()
+            code, out, err = _se(client, f"id {new_user} &>/dev/null || useradd -m -s /bin/bash {new_user}", use_sudo, timeout=15)
+            _ua_ok = (code == 0)
+            if _ua_ok:
+                _se(client, f"usermod -aG sudo {new_user}", use_sudo, timeout=10)
+                _se(client, f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | tee /etc/sudoers.d/{new_user} > /dev/null", use_sudo, timeout=10)
+                _se(client, f"chmod 440 /etc/sudoers.d/{new_user}", use_sudo, timeout=10)
+                _se(client, f"mkdir -p /home/{new_user}/.ssh && chmod 700 /home/{new_user}/.ssh", use_sudo, timeout=10)
+                _se(client, f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true", use_sudo, timeout=10)
+                _se(client, f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh", use_sudo, timeout=10)
+                _update_setup(db, server, log_line=f"[3.5] ✅ Пользователь {new_user} создан")
+            else:
+                _update_setup(db, server, log_line=f"[3.5] ⚠️ Создание юзера не удалось, используем текущего: {cur_user}")
+                new_user = cur_user
         else:
-            _update_setup(db, server, log_line=f"[3.5] ✅ Пользователь {new_user} создан")
+            _update_setup(db, server, log_line=f"[3.5] ℹ️ RU-сервер: используем текущего пользователя {cur_user}")
 
         # 3.6 SSH-ключ Ed25519
         _update_setup(db, server, log_line="[3.6] Генерация SSH-ключа Ed25519...")
@@ -1071,7 +1072,7 @@ echo "[+] NaiveProxy setup complete"
         checks.append((
             "WARP",
             "which warp-cli || dpkg -l cloudflare-warp 2>/dev/null | grep -q '^ii'",
-            "warp-cli status 2>/dev/null || warp-cli --accept-tos status 2>/dev/null || echo unknown",
+            "warp-cli status 2>/dev/null || echo 'warp-status-failed'",
             False,
         ))
 
@@ -1096,13 +1097,30 @@ echo "[+] NaiveProxy setup complete"
 
             # Проверка запуска
             code_r, out_r, _ = _exec(client, run_cmd, timeout=15)
+            out_lower = out_r.lower()
             first_line = next(
                 (l.strip() for l in out_r.splitlines() if l.strip()), ""
             ).lower()
-
-            is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line or "status update: connected" in first_line
-            is_down = first_line in ("inactive", "failed", "activating", "deactivating") or "status: inactive" in first_line
             display = out_r.splitlines()[0].strip() if out_r.strip() else "(нет вывода)"
+
+            # WARP: парсим весь вывод, а не только первую строку
+            if name == "WARP":
+                # Если warp-svc не запущен — warp-cli отвечает "Unable to connect to the WARP service"
+                # Пробуем запустить сервис и переспрашиваем статус
+                if "unable" in out_lower or "warp-status-failed" in out_lower or not out_r.strip():
+                    _exec(client, "sudo -n systemctl start warp-svc 2>/dev/null || systemctl start warp-svc 2>/dev/null || true", timeout=15)
+                    import time as _time; _time.sleep(3)
+                    _, out_r2, _ = _exec(client, "warp-cli status 2>/dev/null || echo 'warp-status-failed'", timeout=10)
+                    if out_r2.strip():
+                        out_r = out_r2
+                        out_lower = out_r.lower()
+                        display = out_r.splitlines()[0].strip()
+                is_up   = "connected" in out_lower or "status: connected" in out_lower
+                is_down = ("disconnected" in out_lower or "unable" in out_lower
+                           or "warp-status-failed" in out_lower or not out_r.strip())
+            else:
+                is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line
+                is_down = first_line in ("inactive", "failed", "activating", "deactivating") or "status: inactive" in first_line
 
             if name == "SSH":
                 # SSH: критичная проверка через echo ALIVE
