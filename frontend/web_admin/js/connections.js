@@ -378,46 +378,130 @@ async function wizSubmit() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DEPLOY LOG MODAL
+// DEPLOY LOG MODAL  — пошаговый UI со статус-иконками
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _pollInterval = null;
 
+// Карты меток
+const _PROTO_LABEL = { vless_reality: 'VLESS', amnezia_wg: 'AWG', naive_proxy: 'NaiveProxy', trojan: 'TRJ' };
+const _TYPE_LABEL  = { direct: 'DIRECT', cascade: 'CASCADE' };
+
+// Иконки и цвета для статусов шагов
+const _STEP_ICON = {
+  running: '<span class="inline-block w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin mr-2 flex-shrink-0"></span>',
+  ok:      '<span class="mr-2 flex-shrink-0 text-green-400">✅</span>',
+  error:   '<span class="mr-2 flex-shrink-0 text-red-400">❌</span>',
+  skip:    '<span class="mr-2 flex-shrink-0 text-gray-500">⏭</span>',
+  info:    '<span class="mr-2 flex-shrink-0 text-gray-500">·</span>',
+};
+const _STEP_TEXT_CLASS = {
+  running: 'text-blue-300',
+  ok:      'text-green-300',
+  error:   'text-red-300',
+  skip:    'text-gray-500',
+  info:    'text-gray-400',
+};
+
 function _openDeployLogModal() {
-  const logEl = document.getElementById('deploy-log-body');
-  logEl.innerHTML = '';
+  const body = document.getElementById('deploy-log-body');
+  body.innerHTML = '';
   document.getElementById('deploy-log-status').textContent = 'Инициализация...';
   document.getElementById('deploy-log-close').classList.add('hidden');
   document.getElementById('deploy-log-spinner').classList.remove('hidden');
   openModal('modal-deploy-log');
 }
 
-function _appendLog(line) {
-  const logEl = document.getElementById('deploy-log-body');
-  const div = document.createElement('div');
-  div.className = 'font-mono text-xs leading-5 ' +
-    (line.startsWith('✅') ? 'text-green-400' :
-     line.startsWith('❌') ? 'text-red-400'   :
-     line.startsWith('⏳') ? 'text-amber-400' :
-     line.startsWith('🔄') ? 'text-blue-400'  : 'text-gray-400');
-  div.textContent = line;
-  logEl.appendChild(div);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
 function _deployLogError(msg) {
   document.getElementById('deploy-log-status').textContent = 'Ошибка';
   document.getElementById('deploy-log-spinner').classList.add('hidden');
   document.getElementById('deploy-log-close').classList.remove('hidden');
-  _appendLog(`❌ ${msg}`);
+  const body = document.getElementById('deploy-log-body');
+  const div = document.createElement('div');
+  div.className = 'flex items-start py-1 text-red-400 text-xs font-mono';
+  div.innerHTML = `${_STEP_ICON.error}<span>${msg}</span>`;
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
 }
 
-let _seenLines = {};
+// Хранилище карточек подключений: { [connId]: { el, stepEls: {stepN: el} } }
+let _connCards = {};
+
+function _getOrCreateConnCard(c, body) {
+  if (_connCards[c.id]) return _connCards[c.id];
+
+  const protoLabel = _PROTO_LABEL[c.protocol] || c.protocol;
+  const typeLabel  = _TYPE_LABEL[c.connection_type] || c.connection_type || '';
+  const typeColor  = c.connection_type === 'direct' ? 'text-cyan-400' : 'text-purple-400';
+
+  const card = document.createElement('div');
+  card.className = 'mb-4 rounded-lg border border-gray-700 bg-gray-800/50 overflow-hidden';
+  card.innerHTML = `
+    <div class="flex items-center justify-between px-3 py-2 bg-gray-700/40 border-b border-gray-700">
+      <span class="font-semibold text-sm text-white">${protoLabel}
+        <span class="ml-1 text-xs font-normal ${typeColor}">${typeLabel}</span>
+      </span>
+      <span class="conn-card-badge text-xs px-2 py-0.5 rounded-full bg-gray-600 text-gray-300">ожидание...</span>
+    </div>
+    <div class="conn-card-steps px-3 py-2 space-y-1"></div>
+  `;
+  body.appendChild(card);
+
+  _connCards[c.id] = {
+    el:       card,
+    badge:    card.querySelector('.conn-card-badge'),
+    stepsEl:  card.querySelector('.conn-card-steps'),
+    stepEls:  {},
+  };
+  return _connCards[c.id];
+}
+
+function _renderSteps(c) {
+  const body = document.getElementById('deploy-log-body');
+  const cardData = _getOrCreateConnCard(c, body);
+  const steps = c.steps || [];
+
+  // Update badge based on setup_status
+  const badge = cardData.badge;
+  if (c.setup_status === 'done') {
+    badge.className = 'conn-card-badge text-xs px-2 py-0.5 rounded-full bg-green-900/60 text-green-400';
+    badge.textContent = 'готово ✅';
+  } else if (c.setup_status === 'failed') {
+    badge.className = 'conn-card-badge text-xs px-2 py-0.5 rounded-full bg-red-900/60 text-red-400';
+    badge.textContent = 'ошибка ❌';
+  } else {
+    badge.className = 'conn-card-badge text-xs px-2 py-0.5 rounded-full bg-blue-900/40 text-blue-300';
+    badge.textContent = 'выполняется...';
+  }
+
+  steps.forEach(step => {
+    const key = step.is_step ? `step_${step.n}` : `info_${step.msg.slice(0, 30)}`;
+    const st  = step.status || 'info';
+    const icon = _STEP_ICON[st] || _STEP_ICON.info;
+    const textCls = _STEP_TEXT_CLASS[st] || _STEP_TEXT_CLASS.info;
+
+    if (cardData.stepEls[key]) {
+      // Update existing row
+      const row = cardData.stepEls[key];
+      row.innerHTML = `${icon}<span class="${textCls} text-xs font-mono leading-5">${step.msg}</span>`;
+    } else {
+      // Create new row
+      const row = document.createElement('div');
+      row.className = 'flex items-start py-0.5';
+      row.innerHTML = `${icon}<span class="${textCls} text-xs font-mono leading-5">${step.msg}</span>`;
+      cardData.stepsEl.appendChild(row);
+      cardData.stepEls[key] = row;
+    }
+  });
+
+  document.getElementById('deploy-log-body').scrollTop =
+    document.getElementById('deploy-log-body').scrollHeight;
+}
 
 function _startDeployPolling(connIds) {
   if (_pollInterval) clearInterval(_pollInterval);
-  _seenLines = {};
-  connIds.forEach(id => { _seenLines[id] = 0; });
+  _connCards = {};
+  document.getElementById('deploy-log-body').innerHTML = '';
 
   const statusEl  = document.getElementById('deploy-log-status');
   const spinnerEl = document.getElementById('deploy-log-spinner');
@@ -429,34 +513,21 @@ function _startDeployPolling(connIds) {
 
     const { connections, all_done, any_failed } = res.data;
 
-    // Append new log lines per connection
-    connections.forEach(c => {
-      const lines = c.log_lines || [];
-      const seen  = _seenLines[c.id] || 0;
-      if (lines.length > seen) {
-        const protoLabel = { vless_reality: 'VLESS', amnezia_wg: 'AWG', naive_proxy: 'NP', trojan: 'TRJ' }[c.protocol] || c.protocol;
-        const typeLabel  = c.connection_type === 'direct' ? '→' : '⇒';
-        lines.slice(seen).forEach(line => {
-          _appendLog(`[${typeLabel} ${protoLabel}] ${line}`);
-        });
-        _seenLines[c.id] = lines.length;
-      }
-    });
+    connections.forEach(c => _renderSteps(c));
 
-    // Update header
-    const done    = connections.filter(c => c.setup_status === 'done').length;
-    const failed  = connections.filter(c => c.setup_status === 'failed').length;
-    const total   = connections.length;
+    const done   = connections.filter(c => c.setup_status === 'done').length;
+    const failed = connections.filter(c => c.setup_status === 'failed').length;
+    const total  = connections.length;
     statusEl.textContent = `${done}/${total} готово${failed ? `, ${failed} ошибок` : ''}`;
 
     if (all_done) {
       clearInterval(_pollInterval);
+      _pollInterval = null;
       spinnerEl.classList.add('hidden');
       closeBtn.classList.remove('hidden');
       statusEl.textContent = any_failed
         ? `Завершено с ошибками (${failed}/${total})`
-        : `Все подключения созданы (${total}/${total})`;
-      _appendLog(any_failed ? '⚠️ Завершено с ошибками' : '✅ Все подключения успешно настроены');
+        : `Все подключения настроены (${total}/${total}) ✅`;
       loadConnectionsGrouped();
     }
   }, 2000);
@@ -467,8 +538,6 @@ function closeDeployLog() {
   closeModal('modal-deploy-log');
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════
 // CONNECTION DETAIL MODAL
 // ═══════════════════════════════════════════════════════════════════════════
 
