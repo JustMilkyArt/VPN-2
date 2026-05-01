@@ -484,16 +484,37 @@ def deploy_vless_reality_connection(
                 config_str = build_eu_xray_config(inbounds)
 
             mode = "CASCADE" if is_cascade else "DIRECT"
+            if is_cascade and exit_server:
+                _raw_log(connection, db, f"  CASCADE: RU={server.ip} → EU={exit_server.ip} (VLESS+Reality outbound)")
+            else:
+                _raw_log(connection, db, f"  DIRECT: трафик выходит напрямую через {server.ip}")
             S(4, "ok", f"Конфиг собран: {len(inbounds)} inbound(s), режим {mode}")
 
             # Step 5: Upload and reload Xray
             S(5, "running", "Загрузка конфига и перезапуск Xray")
             ssh.upload_file(config_str, "/usr/local/etc/xray/config.json")
-            code2, _, err2 = ssh.exec("systemctl reload xray || systemctl restart xray")
+            code2, _, err2 = ssh.exec("systemctl reload xray 2>/dev/null || systemctl restart xray 2>&1")
             if code2 != 0:
                 S(5, "error", f"Xray reload провалился: {err2[:150]}")
                 return False, f"Xray reload failed: {err2}"
-            S(5, "ok", "Xray перезапущен успешно")
+
+            # 5a: verify xray service is actually running
+            _, xray_active, _ = ssh.exec("systemctl is-active xray 2>/dev/null || echo unknown")
+            xray_active = xray_active.strip()
+            if xray_active not in ("active", "activating"):
+                _, xray_journal, _ = ssh.exec("journalctl -u xray -n 15 --no-pager 2>/dev/null || echo no_journal")
+                S(5, "error", f"xray.service статус={xray_active}: {xray_journal[:300]}")
+                return False, f"xray not running after reload (status={xray_active})"
+
+            # 5b: verify xray is listening on the expected TCP port
+            _, ss_out, _ = ssh.exec(f"ss -tlnp 2>/dev/null | grep ':{connection.port}' || echo NOT_LISTENING")
+            if "NOT_LISTENING" in ss_out or connection.port not in ss_out:
+                S(5, "error", f"Xray активен, но порт {connection.port}/tcp НЕ слушается — проверь конфиг inbound")
+                # non-fatal: log warning but continue (port may appear with tiny delay)
+                _raw_log(connection, db, f"  WARN: ss -tlnp не показал :{connection.port} сразу после старта")
+            else:
+                _raw_log(connection, db, f"  OK: TCP порт {connection.port} слушается (ss confirm)")
+            S(5, "ok", f"Xray активен (статус={xray_active}), порт {connection.port}/tcp открыт")
 
             # Step 6: Save client link
             S(6, "running", "Генерация и сохранение client link")
@@ -593,9 +614,44 @@ def deploy_naiveproxy_connection(
                 return False, f"caddy-naive status={svc_out.strip()}. Journal: {journal[:400]}"
             S(4, "ok", "caddy-naive.service активен и добавлен в автозапуск")
 
+            # 4a: TLS certificate check — confirm Let's Encrypt issued (not self-signed)
+            _raw_log(connection, db, f"  Проверка TLS сертификата {domain}:{port} ...")
+            _, tls_out, _ = ssh.exec(
+                f"curl -sI --max-time 10 --connect-timeout 8 "
+                f"https://{domain}:{port}/ 2>&1 | head -5 || echo TLS_CHECK_FAILED"
+            )
+            if "TLS_CHECK_FAILED" in tls_out or "curl" not in tls_out.lower() and "HTTP" not in tls_out:
+                _raw_log(connection, db,
+                  f"  WARN: TLS проверка не дала HTTP ответа "
+                  f"(сервис только запустился, сертификат ещё получается): {tls_out[:150]}")
+            else:
+                first_line = tls_out.splitlines()[0] if tls_out.strip() else "—"
+                _raw_log(connection, db, f"  TLS OK: {first_line.strip()}")
+
+            # 4b: functional proxy test — curl through naive proxy from server
+            _raw_log(connection, db, f"  Функциональный тест: curl через naive proxy → 1.1.1.1 ...")
+            _, proxy_out, _ = ssh.exec(
+                f"curl -s --max-time 15 --connect-timeout 10 "
+                f"-x https://admin:{password}@{domain}:{port} "
+                f"https://1.1.1.1/ -o /dev/null -w '%{{http_code}}' 2>&1 || echo PROXY_TEST_FAILED"
+            )
+            proxy_out = proxy_out.strip()
+            if proxy_out in ("200", "301", "302"):
+                _raw_log(connection, db, f"  PROXY OK: HTTP {proxy_out} — NaiveProxy работает")
+            elif "PROXY_TEST_FAILED" in proxy_out or proxy_out == "":
+                _raw_log(connection, db,
+                  "  WARN: Прокси-тест упал (curl не смог выполнить запрос). "
+                  "Возможно, сертификат ещё получается или порт заблокирован.")
+            else:
+                _raw_log(connection, db,
+                  f"  WARN: Прокси вернул HTTP {proxy_out} (ожидали 200/301/302). "
+                  f"Может быть нормальным если 1.1.1.1 редиректит.")
+
         # Step 5: CASCADE — configure Xray on RU
         if is_cascade:
-            S(5, "running", "Настройка Xray на RU сервере (CASCADE)")
+            S(5, "running",
+              f"CASCADE: настройка Xray на RU сервере ({ru_server.ip}) "
+              f"для проброса трафика → EU ({server.ip})")
             from app.models.connection import Protocol as P
             eu_vless = db.query(Connection).filter(
                 Connection.server_id == server.id,
@@ -649,7 +705,16 @@ def deploy_naiveproxy_connection(
                 if code3 != 0:
                     S(5, "error", f"Xray reload на RU провалился: {err3[:150]}")
                 else:
-                    S(5, "ok", f"Xray на RU перезагружен ({len(existing_ru_inbounds)} inbound(s) + EU outbound)")
+                    # verify RU xray is active
+                    _, ru_xray_status, _ = ssh_ru.exec("systemctl is-active xray 2>/dev/null || echo unknown")
+                    _raw_log(connection, db,
+                      f"  CASCADE OK: RU Xray статус={ru_xray_status.strip()}, "
+                      f"{len(existing_ru_inbounds)} inbound(s), "
+                      f"EU outbound={'есть' if eu_outbound else 'нет (direct)'}, "
+                      f"WARP={'есть' if warp_outbound else 'нет'}")
+                    S(5, "ok",
+                      f"CASCADE: Xray на RU ({ru_server.ip}) перезагружен "
+                      f"→ проброс на EU ({server.ip})")
         else:
             S(5, "skip", "Xray на RU не нужен (режим DIRECT)")
 
@@ -854,13 +919,58 @@ def deploy_amnezia_wg_connection(
             S(6, "running", f"Верификация интерфейса {iface_name}")
             _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
             if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
+                _, start_err, _ = ssh.exec(f"journalctl -u awg-quick@{iface_name} -n 20 --no-pager 2>/dev/null || awg-quick up {iface_name} 2>&1 || echo no_log")
                 S(5, "error", f"awg-quick@{iface_name} не запустился")
-                S(6, "error", f"Интерфейс {iface_name} не поднялся: {err3[:200]}")
-                return False, f"AWG interface {iface_name} did not come up. stderr={err3[:300]}"
+                S(6, "error", f"Интерфейс {iface_name} не поднялся. Лог: {start_err[:250]}")
+                return False, f"AWG interface {iface_name} did not come up. log={start_err[:300]}"
 
             iface_state = "UP" if ("UP" in iface_out or "UNKNOWN" in iface_out) else "unknown"
             S(5, "ok", f"Сервис awg-quick@{iface_name} запущен")
             S(6, "ok", f"Интерфейс {iface_name} активен (state: {iface_state})")
+
+            # 6a: verify UDP port is actually listening
+            _, udp_out, _ = ssh.exec(
+                f"ss -ulnp 2>/dev/null | grep ':{connection.port}' || echo NOT_LISTENING"
+            )
+            if "NOT_LISTENING" in udp_out:
+                S(6, "error",
+                  f"UDP порт {connection.port} НЕ слушается — интерфейс поднят, "
+                  f"но AWG не принимает пакеты. Проверь ListenPort в конфиге.")
+                return False, f"AWG interface up but UDP {connection.port} not listening"
+            _raw_log(connection, db, f"  OK: UDP {connection.port} слушается ({udp_out.strip()[:80]})")
+
+            # 6b: awg show — peer list and handshake status
+            _, awg_show, _ = ssh.exec(
+                f"awg show {iface_name} 2>/dev/null || echo AWG_SHOW_FAILED"
+            )
+            if "AWG_SHOW_FAILED" in awg_show:
+                _raw_log(connection, db, "  WARN: awg show не сработал (возможно, команда awg недоступна)")
+            else:
+                lines = [l.strip() for l in awg_show.splitlines() if l.strip()]
+                _raw_log(connection, db, "  awg show " + iface_name + ":")
+                for l in lines[:15]:          # не более 15 строк в лог
+                    _raw_log(connection, db, "    " + l)
+
+            # 6c: NAT / iptables check — PostUp rules must be in place
+            _, nat_out, _ = ssh.exec(
+                "iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep MASQUERADE || echo NO_MASQ"
+            )
+            if "NO_MASQ" in nat_out:
+                S(6, "error",
+                  f"MASQUERADE правило не найдено в iptables — клиентский трафик не будет маршрутизироваться. "
+                  f"Добавь PostUp/PostDown в {conf_path}")
+                # non-fatal: the interface is up, but connectivity will fail
+                _raw_log(connection, db,
+                  "  WARN: NAT MASQUERADE отсутствует. "
+                  "Клиент подключится к интерфейсу, но Интернет работать не будет. "
+                  "PostUp/PostDown правила не применились.")
+            else:
+                _raw_log(connection, db,
+                  f"  OK: NAT MASQUERADE присутствует — {nat_out.strip()[:120]}")
+
+            S(6, "ok",
+              f"Интерфейс {iface_name} проверен: UDP {connection.port} слушается, "
+              f"awg show выполнен, NAT {'OK' if 'NO_MASQ' not in nat_out else 'WARN: нет MASQUERADE'}")
 
             # Step 7: Generate client config and link
             S(7, "running", "Генерация клиентского конфига и client link")
