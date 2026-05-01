@@ -478,8 +478,17 @@ def deploy_vless_reality_connection(
                         eu_server_name=eu_conns.reality_server_name or "www.microsoft.com"
                     )
 
+            # WARP: check if warp-svc is active on this server and add outbound
+            warp_outbound = None
+            _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
+            if warp_status.strip() == "active":
+                warp_outbound = gen_xray_warp_outbound()
+                _raw_log(connection, db, "  WARP fallback: активен — добавлен warp outbound")
+            else:
+                _raw_log(connection, db, "  WARP fallback: не активен (warp-svc не запущен)")
+
             if server.role == ServerRole.RU:
-                config_str = build_ru_xray_config(inbounds, eu_outbound=eu_outbound)
+                config_str = build_ru_xray_config(inbounds, eu_outbound=eu_outbound, warp_outbound=warp_outbound)
             else:
                 config_str = build_eu_xray_config(inbounds)
 
@@ -507,17 +516,18 @@ def deploy_vless_reality_connection(
                 return False, f"xray not running after reload (status={xray_active})"
 
             # 5b: verify xray is listening on the expected TCP port
-            _, ss_out, _ = ssh.exec(f"ss -tlnp 2>/dev/null | grep ':{connection.port}' || echo NOT_LISTENING")
-            if "NOT_LISTENING" in ss_out or connection.port not in ss_out:
-                S(5, "error", f"Xray активен, но порт {connection.port}/tcp НЕ слушается — проверь конфиг inbound")
+            port_str = str(connection.port)
+            _, ss_out, _ = ssh.exec(f"ss -tlnp 2>/dev/null | grep ':{port_str}' || echo NOT_LISTENING")
+            if "NOT_LISTENING" in ss_out or port_str not in ss_out:
                 # non-fatal: log warning but continue (port may appear with tiny delay)
-                _raw_log(connection, db, f"  WARN: ss -tlnp не показал :{connection.port} сразу после старта")
+                _raw_log(connection, db, f"  WARN: ss -tlnp не показал :{port_str} сразу после старта")
             else:
-                _raw_log(connection, db, f"  OK: TCP порт {connection.port} слушается (ss confirm)")
-            S(5, "ok", f"Xray активен (статус={xray_active}), порт {connection.port}/tcp открыт")
+                _raw_log(connection, db, f"  OK: TCP порт {port_str} слушается (ss confirm)")
+            S(5, "ok", f"Xray активен (статус={xray_active}), порт {port_str}/tcp открыт")
 
             # Step 6: Save client link
             S(6, "running", "Генерация и сохранение client link")
+            _ctype_str = connection.connection_type if isinstance(connection.connection_type, str) else (connection.connection_type.value if connection.connection_type else "direct")
             connection.client_link = gen_vless_reality_client_link(
                 server_ip=server.ip,
                 port=connection.port,
@@ -527,7 +537,7 @@ def deploy_vless_reality_connection(
                 server_name=connection.reality_server_name or "www.microsoft.com",
                 server_flag=getattr(server, 'flag_emoji', '') or '',
                 server_display_name=getattr(server, 'display_name', '') or server.name or '',
-                connection_type="cascade" if is_cascade else "direct",
+                connection_type=_ctype_str,
             )
             connection.config_json = config_str
             db.commit()
@@ -738,7 +748,8 @@ def deploy_naiveproxy_connection(
         connection.config_text = client_cfg
         connection.np_domain   = domain
         _srv_name = server.display_name or server.name or server.ip
-        _ctype    = connection.connection_type.value if connection.connection_type else "direct"
+        _ctype    = connection.connection_type if isinstance(connection.connection_type, str) \
+            else (connection.connection_type.value if connection.connection_type else "direct")
         connection.client_link = f"https://admin:{password}@{domain}:{port}#{_srv_name} | NaiveProxy ({_ctype})"
         db.commit()
         S(7, "ok", f"NaiveProxy {'CASCADE' if is_cascade else 'DIRECT'} задеплоен успешно ✅")
@@ -894,14 +905,22 @@ def deploy_amnezia_wg_connection(
                 junk_packet_max_size=connection.awg_junk_packet_max_size,
             )
 
-            existing_awg_count = db.query(Connection).filter(
-                Connection.server_id == server.id,
-                Connection.protocol == Protocol.AMNEZIA_WG,
-                Connection.id != connection.id,
-                Connection.is_active == True,
-            ).count()
-            iface_name = f"wg{existing_awg_count}"
+            # Determine iface name from actual .conf files on server to avoid conflicts
+            _, existing_ifaces_out, _ = ssh.exec(
+                "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | "
+                "grep -oP 'wg\\d+' | sort -V || echo NONE"
+            )
+            used_nums = set()
+            for part in existing_ifaces_out.split():
+                part = part.strip()
+                if part.startswith('wg') and part[2:].isdigit():
+                    used_nums.add(int(part[2:]))
+            iface_num = 0
+            while iface_num in used_nums:
+                iface_num += 1
+            iface_name = f"wg{iface_num}"
             conf_path  = f"/etc/amnezia/amneziawg/{iface_name}.conf"
+            _raw_log(connection, db, f"  Интерфейс: {iface_name} (занятые: {sorted(used_nums)})")
 
             ssh.exec("mkdir -p /etc/amnezia/amneziawg")
             ssh.upload_file(server_conf, conf_path)
@@ -975,7 +994,8 @@ def deploy_amnezia_wg_connection(
             # Step 7: Generate client config and link
             S(7, "running", "Генерация клиентского конфига и client link")
             _srv_name = server.display_name or server.name or server.ip
-            _ctype    = connection.connection_type.value if connection.connection_type else "direct"
+            _ctype    = connection.connection_type if isinstance(connection.connection_type, str) \
+                else (connection.connection_type.value if connection.connection_type else "direct")
             _awg_tag  = f"{_srv_name} | AWG ({_ctype})"
             client_conf = gen_awg_client_config(
                 client_private_key=client_priv,

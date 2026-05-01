@@ -75,6 +75,9 @@ class Connection(Base):
     # сплит-тоннелинг
     split_tunnel_enabled = Column(Boolean, nullable=False, default=True)
 
+    # WARP fallback
+    warp_enabled = Column(Boolean, nullable=False, default=False)
+
     # статус и флаги
     status    = Column(String(20), nullable=False, default=ConnectionStatus.INACTIVE)
     is_active = Column(Boolean,   nullable=False, default=True)

@@ -403,19 +403,41 @@ const _STEP_TEXT_CLASS = {
   info:    'text-gray-400',
 };
 
+function _setDeployDot(state) {
+  const dot = document.getElementById('deploy-log-dot');
+  if (!dot) return;
+  if (state === 'running') {
+    dot.style.background   = '#7c3aed';
+    dot.style.boxShadow    = '0 0 0 3px rgba(124,58,237,.25)';
+  } else if (state === 'done') {
+    dot.style.background   = '#16a34a';
+    dot.style.boxShadow    = '0 0 0 3px rgba(22,163,74,.25)';
+  } else if (state === 'error') {
+    dot.style.background   = '#dc2626';
+    dot.style.boxShadow    = '0 0 0 3px rgba(220,38,38,.25)';
+  }
+}
+
 function _openDeployLogModal() {
   const body = document.getElementById('deploy-log-body');
   body.innerHTML = '';
   document.getElementById('deploy-log-status').textContent = 'Инициализация...';
-  document.getElementById('deploy-log-close').classList.add('hidden');
-  document.getElementById('deploy-log-spinner').classList.remove('hidden');
-  openModal('modal-deploy-log');
+  document.getElementById('deploy-log-close').style.display = 'none';
+  document.getElementById('deploy-log-spinner').style.display = '';
+  const prog = document.getElementById('deploy-log-progress');
+  if (prog) prog.style.width = '0%';
+  _setDeployDot('running');
+  // Show modal (wizard-style — not using openModal to avoid overlay conflict)
+  const m = document.getElementById('modal-deploy-log');
+  if (m) m.classList.remove('hidden');
 }
 
 function _deployLogError(msg) {
   document.getElementById('deploy-log-status').textContent = 'Ошибка';
-  document.getElementById('deploy-log-spinner').classList.add('hidden');
-  document.getElementById('deploy-log-close').classList.remove('hidden');
+  document.getElementById('deploy-log-spinner').style.display = 'none';
+  const closeBtn = document.getElementById('deploy-log-close');
+  closeBtn.style.display = '';
+  _setDeployDot('error');
   const body = document.getElementById('deploy-log-body');
   const div = document.createElement('div');
   div.className = 'flex items-start py-1 text-red-400 text-xs font-mono';
@@ -503,16 +525,14 @@ function _startDeployPolling(connIds) {
   _connCards = {};
   document.getElementById('deploy-log-body').innerHTML = '';
 
-  const statusEl  = document.getElementById('deploy-log-status');
-  const spinnerEl = document.getElementById('deploy-log-spinner');
-  const closeBtn  = document.getElementById('deploy-log-close');
+  const statusEl = document.getElementById('deploy-log-status');
+  const progEl   = document.getElementById('deploy-log-progress');
 
   _pollInterval = setInterval(async () => {
     const res = await api.get(`/connections/batch-status?ids=${connIds.join(',')}`);
     if (!res.ok) return;
 
     const { connections, all_done, any_failed } = res.data;
-
     connections.forEach(c => _renderSteps(c));
 
     const done   = connections.filter(c => c.setup_status === 'done').length;
@@ -520,11 +540,23 @@ function _startDeployPolling(connIds) {
     const total  = connections.length;
     statusEl.textContent = `${done}/${total} готово${failed ? `, ${failed} ошибок` : ''}`;
 
+    // Update progress bar
+    if (progEl) {
+      const pct = total ? Math.round((done + failed) / total * 100) : 0;
+      progEl.style.width = pct + '%';
+      progEl.style.background = any_failed
+        ? 'linear-gradient(90deg,#7f1d1d,#dc2626)'
+        : 'linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)';
+    }
+
     if (all_done) {
       clearInterval(_pollInterval);
       _pollInterval = null;
-      spinnerEl.classList.add('hidden');
-      closeBtn.classList.remove('hidden');
+      document.getElementById('deploy-log-spinner').style.display = 'none';
+      const closeBtn = document.getElementById('deploy-log-close');
+      closeBtn.style.display = '';
+      if (progEl) progEl.style.width = '100%';
+      _setDeployDot(any_failed ? 'error' : 'done');
       statusEl.textContent = any_failed
         ? `Завершено с ошибками (${failed}/${total})`
         : `Все подключения настроены (${total}/${total}) ✅`;
@@ -535,7 +567,8 @@ function _startDeployPolling(connIds) {
 
 function closeDeployLog() {
   if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
-  closeModal('modal-deploy-log');
+  const m = document.getElementById('modal-deploy-log');
+  if (m) m.classList.add('hidden');
 }
 
 // CONNECTION DETAIL MODAL
@@ -1047,6 +1080,17 @@ function _renderInfoTab(conn) {
     <span class="text-xs text-gray-500">Split-tunnel</span>
     <span class="text-xs ${conn.split_tunnel_enabled ? 'text-green-400' : 'text-gray-500'}">${conn.split_tunnel_enabled ? 'Включён' : 'Выключен'}</span>
   </div>
+  <div class="flex items-center justify-between py-2 border-b border-gray-800">
+    <div>
+      <span class="text-xs text-gray-500">WARP fallback</span>
+      <p class="text-[10px] text-gray-600 mt-0.5">Cloudflare WARP как запасной outbound в Xray</p>
+    </div>
+    <label class="toggle-switch flex-shrink-0" title="Включить/выключить WARP fallback">
+      <input type="checkbox" id="warp-toggle-${conn.id}" ${conn.warp_enabled ? 'checked' : ''}
+        onchange="toggleWarp(${conn.id}, this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
   <div class="flex justify-between py-2">
     <span class="text-xs text-gray-500">Создан</span>
     <span class="text-xs text-gray-400">${created}</span>
@@ -1070,10 +1114,21 @@ async function checkConnLive(connId) {
   if (res.ok) {
     const { alive, message } = res.data;
     toast(alive ? `✅ ${message}` : `⚠️ ${message}`, alive ? 'success' : 'warning', 3000);
-    // Refresh detail
     showConnDetail(connId);
   } else {
     toast(`Ошибка: ${res.error}`, 'error');
+  }
+}
+
+async function toggleWarp(connId, enabled) {
+  const res = await api.patch(`/connections/${connId}/param`, { field: 'warp_enabled', value: enabled });
+  if (res.ok) {
+    toast(enabled ? '✅ WARP fallback включён' : 'WARP fallback выключен', 'success', 2500);
+  } else {
+    toast(`Ошибка: ${res.error || res.data?.message}`, 'error');
+    // revert checkbox
+    const cb = document.getElementById(`warp-toggle-${connId}`);
+    if (cb) cb.checked = !enabled;
   }
 }
 
@@ -1157,6 +1212,7 @@ window.showConnDetail           = showConnDetail;
 window.switchDetailTab          = switchDetailTab;
 window.applyParam               = applyParam;
 window.checkConnLive            = checkConnLive;
+window.toggleWarp               = toggleWarp;
 window.confirmDeleteConnection  = confirmDeleteConnection;
 window._renderWizardStep1       = _renderWizardStep1;
 window.downloadConfig           = downloadConfig;

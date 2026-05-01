@@ -145,6 +145,7 @@ def _conn_row(db: Session, c: Connection) -> dict:
         "config_text":     c.config_text,
         "config_qr":       c.config_qr,
         "split_tunnel_enabled": c.split_tunnel_enabled,
+        "warp_enabled": getattr(c, "warp_enabled", False),
         "setup_status":    c.setup_status,
         "setup_step":      c.setup_step,
         "setup_error":     c.setup_error,
@@ -360,7 +361,7 @@ def patch_connection_param(db: Session, conn: Connection, field: str, value) -> 
         "reality_server_name", "reality_fingerprint", "port",
         "awg_junk_packet_count", "awg_junk_packet_min_size", "awg_junk_packet_max_size",
         "awg_s1", "awg_s2", "awg_h1", "awg_h2", "awg_h3", "awg_h4",
-        "np_domain", "np_user", "split_tunnel_enabled",
+        "np_domain", "np_user", "split_tunnel_enabled", "warp_enabled",
     }
     if field not in allowed:
         return False, f"Поле '{field}' недоступно для изменения"
