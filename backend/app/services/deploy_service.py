@@ -175,6 +175,72 @@ def install_xray(server: Server) -> Tuple[bool, str]:
         return False, str(e)
 
 
+# ─── DPKG lock helper (used before every apt-get) ────────────────────────────
+_WAIT_DPKG = """
+# Wait for dpkg lock to be released (unattended-upgrades / cloud-init etc.)
+_wait_dpkg() {
+    local i=0
+    while flock -n /var/lib/dpkg/lock-frontend true 2>/dev/null; [ $? -ne 0 ] ||           flock -n /var/lib/dpkg/lock true 2>/dev/null; [ $? -ne 0 ]; do
+        true  # lock is free, break
+        break
+    done
+    while ! flock -n /var/lib/dpkg/lock-frontend true 2>/dev/null ||           ! flock -n /var/lib/dpkg/lock true 2>/dev/null; do
+        i=$((i+1))
+        [ $i -gt 60 ] && { echo "[!] dpkg lock timeout after 5 min"; return 1; }
+        echo "[*] Waiting for dpkg lock ($i/60)..."
+        sleep 5
+    done
+    return 0
+}
+"""
+
+AWG_INSTALL_SCRIPT = """#!/bin/bash
+set -e
+echo "[*] Installing AmneziaWG..."
+
+# Wait for dpkg lock
+_wait_dpkg() {
+    local i=0
+    while ! flock -n /var/lib/dpkg/lock-frontend /bin/true 2>/dev/null ||           ! flock -n /var/lib/dpkg/lock /bin/true 2>/dev/null; do
+        i=$((i+1))
+        [ $i -gt 60 ] && { echo "[!] dpkg lock timeout"; exit 1; }
+        echo "[*] Waiting for dpkg lock ($i/60)..."
+        sleep 5
+    done
+}
+_wait_dpkg
+
+# Kill any stuck apt/dpkg processes that hold the lock
+kill $(lsof /var/lib/dpkg/lock-frontend 2>/dev/null | awk 'NR>1{print $2}') 2>/dev/null || true
+kill $(lsof /var/lib/dpkg/lock 2>/dev/null | awk 'NR>1{print $2}') 2>/dev/null || true
+rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+dpkg --configure -a 2>/dev/null || true
+
+DEBIAN_FRONTEND=noninteractive apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq software-properties-common
+
+# Add AmneziaWG PPA (Ubuntu) or fall back to WireGuard
+if DEBIAN_FRONTEND=noninteractive add-apt-repository -y ppa:amnezia/ppa 2>/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq amneziawg amneziawg-tools
+else
+    # Fallback: standard WireGuard (awg-quick compatible in most configs)
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard wireguard-tools
+    # Symlink wg as awg if awg not present
+    [ -f /usr/bin/awg ] || ln -sf /usr/bin/wg /usr/bin/awg 2>/dev/null || true
+    [ -f /usr/sbin/awg-quick ] || ln -sf /usr/sbin/wg-quick /usr/sbin/awg-quick 2>/dev/null || true
+    [ -f /usr/local/sbin/awg-quick ] || ln -sf $(which wg-quick 2>/dev/null || echo /usr/sbin/wg-quick) /usr/local/sbin/awg-quick 2>/dev/null || true
+fi
+
+# Enable IP forwarding
+grep -q 'net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+grep -q 'net.ipv6.conf.all.forwarding=1' /etc/sysctl.conf || echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.conf
+sysctl -p 2>/dev/null || true
+
+echo "[+] AmneziaWG installed"
+"""
+
+
 def install_warp(server: Server) -> Tuple[bool, str]:
     """Install Cloudflare WARP on server."""
     try:
@@ -241,7 +307,23 @@ echo "[+] SSL cert installed"
 _CADDY_INSTALL_SCRIPT = r"""#!/bin/bash
 set -e
 
-apt-get install -y -qq curl tar
+# Wait for dpkg lock (unattended-upgrades, cloud-init, etc.)
+_wait_dpkg() {
+    local i=0
+    while ! flock -n /var/lib/dpkg/lock-frontend /bin/true 2>/dev/null ||           ! flock -n /var/lib/dpkg/lock /bin/true 2>/dev/null; do
+        i=$((i+1))
+        [ $i -gt 60 ] && { echo "[!] dpkg lock timeout"; exit 1; }
+        echo "[*] Waiting for dpkg lock ($i/60)..."
+        sleep 5
+    done
+}
+_wait_dpkg
+kill $(lsof /var/lib/dpkg/lock-frontend 2>/dev/null | awk 'NR>1{print $2}') 2>/dev/null || true
+kill $(lsof /var/lib/dpkg/lock 2>/dev/null | awk 'NR>1{print $2}') 2>/dev/null || true
+rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+dpkg --configure -a 2>/dev/null || true
+
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl tar
 
 # Detect architecture
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
@@ -929,19 +1011,63 @@ def deploy_amnezia_wg_connection(
             # Step 5: Start awg-quick service
             S(5, "running", f"Запуск сервиса awg-quick@{iface_name}")
             svc = f"awg-quick@{iface_name}"
-            ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
-            ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || true")
+
+            # Validate config before starting
+            _, cat_conf, _ = ssh.exec(f"cat {conf_path} 2>/dev/null | head -30 || echo CONF_MISSING")
+            if "CONF_MISSING" in cat_conf or "[Interface]" not in cat_conf:
+                S(5, "error", f"Конфиг {conf_path} не найден или пуст")
+                return False, f"AWG config missing at {conf_path}"
+            _raw_log(connection, db, f"  Config preview: {cat_conf[:200].strip()}")
+
+            # Ensure amneziawg kernel module is loaded
+            ssh.exec("modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true")
+
+            # Bring down any existing interface first
+            ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || wg-quick down {iface_name} 2>/dev/null || true")
             ssh.exec(f"ip link delete {iface_name} 2>/dev/null || true")
-            code3, _, err3 = ssh.exec(f"systemctl start {svc} 2>&1 || awg-quick up {iface_name} 2>&1")
+            ssh.exec(f"systemctl stop {svc} 2>/dev/null || true")
+
+            # Enable + start via systemd (preferred), fall back to awg-quick up
+            ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
+            ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
+            code3, out3, err3 = ssh.exec(
+                f"systemctl start {svc} 2>&1; "
+                f"sleep 1; "
+                f"systemctl is-active {svc} 2>/dev/null || echo svc_failed"
+            )
+            svc_active = "svc_failed" not in (out3 or "") and "active" in (out3 or "")
+
+            if not svc_active:
+                # Fallback: direct awg-quick up
+                _raw_log(connection, db, f"  systemd start failed ({err3[:100]}), trying awg-quick up directly...")
+                code3b, out3b, err3b = ssh.exec(
+                    f"awg-quick up {conf_path} 2>&1 || wg-quick up {conf_path} 2>&1 || echo AWG_UP_FAILED"
+                )
+                if "AWG_UP_FAILED" in (out3b or ""):
+                    _raw_log(connection, db, f"  awg-quick up also failed: {err3b[:200]}")
+                else:
+                    _raw_log(connection, db, f"  awg-quick up result: {out3b[:200]}")
 
             # Step 6: Verify interface
             S(6, "running", f"Верификация интерфейса {iface_name}")
             _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
             if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
-                _, start_err, _ = ssh.exec(f"journalctl -u awg-quick@{iface_name} -n 20 --no-pager 2>/dev/null || awg-quick up {iface_name} 2>&1 || echo no_log")
-                S(5, "error", f"awg-quick@{iface_name} не запустился")
-                S(6, "error", f"Интерфейс {iface_name} не поднялся. Лог: {start_err[:250]}")
-                return False, f"AWG interface {iface_name} did not come up. log={start_err[:300]}"
+                # Last attempt: try with full path
+                ssh.exec(f"awg-quick up /etc/amnezia/amneziawg/{iface_name}.conf 2>/dev/null || true")
+                import time; time.sleep(2)
+                _, iface_out2, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
+                if "NO_INTERFACE" in iface_out2 or iface_name not in iface_out2:
+                    _, start_err, _ = ssh.exec(
+                        f"journalctl -u awg-quick@{iface_name} -n 30 --no-pager 2>/dev/null; "
+                        f"echo '---'; "
+                        f"cat {conf_path} 2>/dev/null | head -20; "
+                        f"echo '---'; "
+                        f"ls /etc/amnezia/amneziawg/ 2>/dev/null || echo no_dir"
+                    )
+                    S(5, "error", f"awg-quick@{iface_name} не запустился")
+                    S(6, "error", f"Интерфейс {iface_name} не поднялся. Лог: {start_err[:300]}")
+                    return False, f"AWG interface {iface_name} did not come up. log={start_err[:400]}"
+                iface_out = iface_out2
 
             iface_state = "UP" if ("UP" in iface_out or "UNKNOWN" in iface_out) else "unknown"
             S(5, "ok", f"Сервис awg-quick@{iface_name} запущен")
