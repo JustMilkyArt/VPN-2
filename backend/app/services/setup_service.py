@@ -449,70 +449,85 @@ echo "[+] AmneziaWG installed"
             _update_setup(db, server,
                 log_line="[2.3] ✅ AmneziaWG установлен, запуск после генерации конфига")
 
-        # 2.4 NaiveProxy — устанавливаем бинарник напрямую с GitHub (без Caddy)
-        _update_setup(db, server, log_line="[2.4] Установка NaiveProxy (бинарник)...")
-        NAIVE_SCRIPT = r"""export DEBIAN_FRONTEND=noninteractive
+        # 2.4 Caddy + forwardproxy (NaiveProxy server) — prebuilt binary from klzgrad
+        _update_setup(db, server, log_line="[2.4] Установка Caddy + forwardproxy (NaiveProxy)...")
+        CADDY_SCRIPT = r"""export DEBIAN_FRONTEND=noninteractive
 set -e
-echo "[*] Installing NaiveProxy binary from GitHub releases..."
+echo "[*] Installing Caddy with forwardproxy plugin (prebuilt by klzgrad/forwardproxy)..."
 
 # Архитектура
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
 case "$ARCH" in
-  amd64|x86_64) ARCH_TAG="linux-x64" ;;
-  arm64|aarch64) ARCH_TAG="linux-arm64" ;;
-  *) ARCH_TAG="linux-x64" ;;
+  amd64|x86_64) IS_AMD64=1 ;;
+  *) IS_AMD64=0 ;;
 esac
 
-# Последняя версия
-NAIVE_VERSION=$(curl -sf https://api.github.com/repos/klzgrad/naiveproxy/releases/latest   | grep '"tag_name"' | cut -d'"' -f4 | head -1)
-if [ -z "$NAIVE_VERSION" ]; then
-  echo "[!] Could not fetch version, trying fallback tag"
-  NAIVE_VERSION=$(curl -sf https://github.com/klzgrad/naiveproxy/releases     | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-fi
-echo "[*] NaiveProxy version: ${NAIVE_VERSION}"
-
-NAIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download/${NAIVE_VERSION}/naiveproxy-${NAIVE_VERSION}-${ARCH_TAG}.tar.xz"
-echo "[*] Downloading: $NAIVE_URL"
-
 cd /tmp
-rm -f naive.tar.xz
-curl -fsSL -o naive.tar.xz "$NAIVE_URL"
-tar -xf naive.tar.xz 2>/dev/null || unxz naive.tar.xz && tar -xf naive.tar 2>/dev/null || true
+rm -f caddy-naive.tar.xz
 
-# Ищем бинарник
-NAIVE_BIN=$(find /tmp -name "naive" -type f 2>/dev/null | head -1)
-if [ -n "$NAIVE_BIN" ]; then
-  cp "$NAIVE_BIN" /usr/local/bin/naive
-  chmod +x /usr/local/bin/naive
-  NAIVE_VER=$(/usr/local/bin/naive --version 2>/dev/null || echo "installed")
-  echo "[+] NaiveProxy installed: $NAIVE_VER"
+if [ "$IS_AMD64" = "1" ]; then
+  # Prebuilt amd64 binary from klzgrad/forwardproxy releases
+  # Single universal archive: caddy-forwardproxy-naive.tar.xz
+  FP_VER=$(curl -sf "https://api.github.com/repos/klzgrad/forwardproxy/releases/latest" \
+    | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+  if [ -z "$FP_VER" ]; then
+    FP_VER="v2.10.0-naive"
+  fi
+  echo "[*] forwardproxy version: ${FP_VER}"
+  CADDY_URL="https://github.com/klzgrad/forwardproxy/releases/download/${FP_VER}/caddy-forwardproxy-naive.tar.xz"
+  echo "[*] Downloading: $CADDY_URL"
+  if ! curl -fsSL --retry 3 --retry-delay 2 -o caddy-naive.tar.xz "$CADDY_URL"; then
+    echo "[!] Download failed: $CADDY_URL"
+    exit 1
+  fi
+  tar -xJf caddy-naive.tar.xz 2>/dev/null || tar -xf caddy-naive.tar.xz 2>/dev/null || true
+  CADDY_BIN=$(find /tmp/caddy-forwardproxy-naive -name "caddy" -type f 2>/dev/null | head -1)
+  if [ -z "$CADDY_BIN" ]; then
+    CADDY_BIN=$(find /tmp -maxdepth 3 -name "caddy" -type f ! -name "*.tar*" 2>/dev/null | head -1)
+  fi
+  if [ -z "$CADDY_BIN" ]; then
+    echo "[!] Caddy binary not found in archive. Contents:"
+    ls -la /tmp/caddy-forwardproxy-naive/ 2>/dev/null || true
+    exit 1
+  fi
 else
-  echo "[!] naive binary not found in archive"
-  ls /tmp/naiveproxy-* 2>/dev/null || true
-  exit 1
+  # arm64: build with xcaddy (fallback, slower but reliable)
+  echo "[*] arm64 detected — building caddy via xcaddy..."
+  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' > /etc/apt/sources.list.d/caddy-xcaddy.list
+  apt-get update -qq && apt-get install -y -qq xcaddy golang-go
+  xcaddy build --with github.com/klzgrad/forwardproxy@latest --output /tmp/caddy
+  CADDY_BIN="/tmp/caddy"
 fi
 
-# Директория конфигов
-mkdir -p /etc/naiveproxy
-echo "[+] NaiveProxy setup complete"
+cp "$CADDY_BIN" /usr/local/bin/caddy-naive
+chmod +x /usr/local/bin/caddy-naive
+
+# Проверяем что это правильный Caddy с forwardproxy
+CADDY_VER=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo "installed")
+echo "[+] Caddy installed: $CADDY_VER"
+/usr/local/bin/caddy-naive list-modules 2>/dev/null | grep -q "forward_proxy"   && echo "[+] forwardproxy module: OK"   || echo "[!] Warning: forwardproxy module not listed (may still work)"
+
+# Директории
+mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
+
+echo "[+] Caddy + forwardproxy setup complete"
 """
-        _naive_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
-        code, out, err = _exec(client, f"{_naive_cmd} << '__NAIVE__'\n{NAIVE_SCRIPT}\n__NAIVE__", timeout=300)
+        _caddy_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client, f"{_caddy_cmd} << '__CADDY__'\n{CADDY_SCRIPT}\n__CADDY__", timeout=300)
         if code != 0:
-            _update_setup(db, server, log_line=f"[2.4] ❌ NaiveProxy: {err[:300]}")
+            _update_setup(db, server, log_line=f"[2.4] ❌ Caddy: {err[:300]}")
         else:
             server.naiveproxy_installed = True
-            # Версия
             _, ver_out, _ = _exec(client,
-                "/usr/local/bin/naive --version 2>/dev/null || echo ''", timeout=10)
+                "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo ''", timeout=10)
             ver = ver_out.strip().splitlines()[0] if ver_out.strip() else None
             if ver:
-                server.caddy_version = ver  # reuse caddy_version field for naive version
+                server.caddy_version = ver
             db.add(server); db.commit()
             _update_setup(db, server,
-                log_line=f"[2.4] ✅ NaiveProxy установлен{(' (' + ver + ')') if ver else ''}")
-            # Привязка поддомена делается позже в рамках настройки подключения
-            pass
+                log_line=f"[2.4] ✅ Caddy + forwardproxy установлен{(' (' + ver + ')') if ver else ''}")
 
         # 2.5 WARP (только RU)
         if not is_eu:
@@ -926,7 +941,7 @@ echo "[+] NaiveProxy setup complete"
         _, xray_v,   _ = _exec(client, "xray version 2>/dev/null | head -1 || echo ''")
         _, caddy_v,  _ = _exec(client,
             "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || "
-            "caddy version 2>/dev/null | head -1 || echo ''")
+            "/usr/local/bin/caddy version 2>/dev/null | head -1 || echo ''")
         _, awg_v,    _ = _exec(client, "awg --version 2>/dev/null | head -1 || echo ''")
 
         server.server_timezone = tz_out.strip() or None
@@ -1007,7 +1022,7 @@ echo "[+] NaiveProxy setup complete"
         _update_setup(db, server, log_line=f"[4]    Timezone  : {server.server_timezone or '—'}")
         _update_setup(db, server, log_line=f"[4]    Xray      : {server.xray_version    or '—'}")
         _update_setup(db, server, log_line=f"[4]    AWG       : {server.awg_version     or '—'}")
-        _update_setup(db, server, log_line=f"[4]    Caddy     : {server.caddy_version   or '—'}")
+        _update_setup(db, server, log_line=f"[4]    Caddy NP  : {server.caddy_version   or '—'}")
         if not is_eu:
             _update_setup(db, server, log_line=f"[4]    WARP      : {server.warp_version or '—'}")
         _update_setup(db, server, log_line=
@@ -1056,7 +1071,7 @@ echo "[+] NaiveProxy setup complete"
             None,  # запуск после генерации конфига — не проверяем
             False),
         ("NaiveProxy",
-            "test -f /usr/local/bin/naive || which caddy || test -f /usr/local/bin/caddy-naive",
+            "test -f /usr/local/bin/caddy-naive || which caddy-naive",
             None,  # запуск после генерации конфига — не проверяем
             False),
         ("Fail2Ban",

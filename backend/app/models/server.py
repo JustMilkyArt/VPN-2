@@ -45,6 +45,10 @@ class Server(Base):
     domain = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
 
+    # ── Display info (для названий в клиентах) ─────────────────────
+    flag_emoji    = Column(String(10),  nullable=True)   # напр. 🇫🇮
+    display_name  = Column(String(100), nullable=True)   # напр. "FIN 1"
+
     # ── Setup flow ──────────────────────────────────────────────────
     setup_status = Column(String(20), nullable=True)   # pending|in_progress|done|failed
     setup_step   = Column(String(50), nullable=True)   # step1..step5

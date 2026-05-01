@@ -1,5 +1,5 @@
 """
-Configuration generator for Xray-core, NaiveProxy, and Trojan.
+Configuration generator for Xray-core, NaiveProxy, and AmneziaWG.
 Generates JSON/config files based on protocol and connection parameters.
 """
 import json
@@ -65,34 +65,6 @@ def gen_xray_vless_reality_inbound(port: int, uuid_str: str, public_key: str, pr
         }
     }
 
-
-def gen_xray_trojan_inbound(port: int, password: str, cert_file: str = "/etc/ssl/xray/cert.pem", key_file: str = "/etc/ssl/xray/key.pem") -> Dict:
-    """Generate Xray Trojan inbound config."""
-    return {
-        "tag": f"trojan-in-{port}",
-        "listen": "0.0.0.0",
-        "port": port,
-        "protocol": "trojan",
-        "settings": {
-            "clients": [{"password": password}]
-        },
-        "streamSettings": {
-            "network": "tcp",
-            "security": "tls",
-            "tlsSettings": {
-                "certificates": [
-                    {
-                        "certificateFile": cert_file,
-                        "keyFile": key_file
-                    }
-                ]
-            }
-        },
-        "sniffing": {
-            "enabled": True,
-            "destOverride": ["http", "tls"]
-        }
-    }
 
 
 def gen_xray_outbound_to_eu(eu_ip: str, eu_port: int, eu_uuid: str, eu_public_key: str, eu_short_id: str, eu_server_name: str = "www.microsoft.com") -> Dict:
@@ -208,7 +180,8 @@ def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, war
         "outbounds": outbounds,
         "routing": gen_xray_routing(inbound_tags, eu_available=eu_outbound is not None),
         "dns": {
-            "servers": ["8.8.8.8", "1.1.1.1", "localhost"]
+            "servers": ["1.1.1.1", "8.8.8.8", "8.8.4.4"],
+            "queryStrategy": "UseIPv4"
         },
         "policy": {
             "levels": {
@@ -235,12 +208,21 @@ def build_eu_xray_config(inbounds: list) -> str:
         },
         "inbounds": inbounds,
         "outbounds": [gen_xray_freedom_outbound()],
+        "dns": {
+            "servers": ["1.1.1.1", "8.8.8.8", "8.8.4.4"],
+            "queryStrategy": "UseIPv4"
+        },
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {
                     "type": "field",
                     "ip": ["geoip:private"],
+                    "outboundTag": "direct"
+                },
+                {
+                    "type": "field",
+                    "network": "tcp,udp",
                     "outboundTag": "direct"
                 }
             ]
@@ -261,9 +243,15 @@ def gen_vless_reality_client_link(
     public_key: str,
     short_id: str,
     server_name: str,
-    tag: str = "VLESS-Reality"
+    server_flag: str = "",
+    server_display_name: str = "",
+    connection_type: str = "direct",
 ) -> str:
-    """Generate vless:// connection URI for clients."""
+    """Generate vless:// connection URI for clients.
+
+    Tag format: "{flag} {display_name} ({connection_type})"
+    Example: "\U0001f1eb\U0001f1ee FIN 1 (direct)"
+    """
     import urllib.parse
     params = {
         "encryption": "none",
@@ -277,15 +265,12 @@ def gen_vless_reality_client_link(
         "headerType": "none",
     }
     query = urllib.parse.urlencode(params)
-    tag_encoded = urllib.parse.quote(tag)
-    return f"vless://{uuid_str}@{server_ip}:{port}?{query}#{tag_encoded}"
-
-
-def gen_trojan_client_link(server_ip: str, port: int, password: str, sni: str, tag: str = "Trojan") -> str:
-    """Generate trojan:// connection URI for clients."""
-    import urllib.parse
-    tag_encoded = urllib.parse.quote(tag)
-    return f"trojan://{password}@{server_ip}:{port}?sni={sni}&security=tls#{tag_encoded}"
+    # Build human-readable tag (no emoji — many clients don't render them in URI tags)
+    # Format: "FIN 1 | VLESS (direct)"
+    name_part = server_display_name if server_display_name else server_ip
+    tag = f"{name_part} | VLESS ({connection_type})"
+    # Do NOT url-encode the tag — clients (V2Ray, sing-box) expect raw UTF-8 after #
+    return f"vless://{uuid_str}@{server_ip}:{port}?{query}#{tag}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,20 +278,24 @@ def gen_trojan_client_link(server_ip: str, port: int, password: str, sni: str, t
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_naiveproxy_caddy_config(domain: str, password: str, port: int = 8443) -> str:
-    """Generate Caddyfile for NaiveProxy."""
-    return f"""{{
-  servers {{
-    protocol {{
-      experimental_http3
-    }}
-  }}
-}}
+    """Generate Caddyfile for NaiveProxy (caddy-naive / forwardproxy build).
 
-:{port}, {domain}:{port} {{
-  tls {{
-    on_demand
-  }}
-  route {{
+    - If domain is provided: uses it with automatic ACME TLS (Let's Encrypt).
+    - If domain is absent / is an IP: uses self-signed internal TLS (tls internal).
+    """
+    # Determine site address and TLS mode
+    if domain and not _is_ip(domain):
+        # Real domain → automatic ACME (Let's Encrypt).
+        # caddy-naive fetches the cert on first request; port 80 must be reachable for HTTP-01.
+        site_addr = f"{domain}:{port}"
+        tls_block = ""          # Caddy auto-ACME when a hostname is given — no tls block needed
+    else:
+        # IP-only or no domain → self-signed internal cert
+        site_addr = f":{port}"
+        tls_block = "  tls internal\n"
+
+    return f"""{site_addr} {{
+{tls_block}  route {{
     forward_proxy {{
       basic_auth admin {password}
       hide_ip
@@ -317,6 +306,12 @@ def build_naiveproxy_caddy_config(domain: str, password: str, port: int = 8443) 
   }}
 }}
 """
+
+
+def _is_ip(s: str) -> bool:
+    """Return True if s looks like an IPv4/IPv6 address."""
+    import re
+    return bool(re.match(r'^[\d\.]+$', s) or re.match(r'^[0-9a-fA-F:]+$', s))
 
 
 def build_naiveproxy_client_config(server: str, port: int, password: str) -> str:
@@ -357,12 +352,17 @@ def gen_awg_server_config(
     server_private_key: str,
     server_ip: str = "10.8.0.1/24",
     listen_port: int = 51820,
+    net_interface: str = "eth0",
     clients: list = None,  # list of {pub_key, preshared_key, client_ip}
     junk_packet_count: int = 4,
     junk_packet_min_size: int = 40,
     junk_packet_max_size: int = 70,
 ) -> str:
-    """Generate AmneziaWG server wg0.conf"""
+    """Generate AmneziaWG server wg0.conf.
+
+    net_interface — реальное имя сетевого интерфейса сервера (eth0, ens3, enp0s3 и т.п.).
+    Определяется автоматически через `ip route | grep default` перед генерацией.
+    """
     clients = clients or []
     peers = ""
     for c in clients:
@@ -376,7 +376,6 @@ AllowedIPs = {c['client_ip']}/32
 PrivateKey = {server_private_key}
 Address = {server_ip}
 ListenPort = {listen_port}
-DNS = 1.1.1.1, 8.8.8.8
 
 # AmneziaWG obfuscation
 Jc = {junk_packet_count}
@@ -389,8 +388,8 @@ H2 = 2
 H3 = 3
 H4 = 4
 
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o {net_interface} -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o {net_interface} -j MASQUERADE
 {peers}"""
 
 
@@ -405,14 +404,14 @@ def gen_awg_client_config(
     junk_packet_count: int = 4,
     junk_packet_min_size: int = 40,
     junk_packet_max_size: int = 70,
+    name: str = "",
 ) -> str:
     """Generate AmneziaWG client config (.conf file)"""
+    name_line = f"Name = {name}\n" if name else ""
     return f"""[Interface]
-PrivateKey = {client_private_key}
+{name_line}PrivateKey = {client_private_key}
 Address = {client_ip}/32
 DNS = {dns}
-
-# AmneziaWG obfuscation (must match server)
 Jc = {junk_packet_count}
 Jmin = {junk_packet_min_size}
 Jmax = {junk_packet_max_size}

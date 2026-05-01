@@ -442,6 +442,29 @@
                  placeholder="Название сервера" class="form-input" required>
         </div>
 
+        <!-- Флаг и отображаемое имя (для клиентов) -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="form-label">Флаг <span class="text-gray-600 font-normal">(эмодзи)</span></label>
+            <input name="flag_emoji" id="add-server-flag-emoji" type="text"
+                   placeholder="🇫🇮" maxlength="8"
+                   class="form-input text-xl"
+                   title="Флаг страны в формате эмодзи, например 🇫🇮 🇷🇺 🇩🇪">
+            <p class="text-xs text-gray-600 mt-1">Отображается в VPN-клиенте</p>
+          </div>
+          <div>
+            <label class="form-label">Имя в клиенте</label>
+            <input name="display_name" id="add-server-display-name" type="text"
+                   placeholder="FIN 1" maxlength="50"
+                   class="form-input">
+            <p class="text-xs text-gray-600 mt-1">Например: FIN 1, RU 1, DE 2</p>
+          </div>
+        </div>
+        <!-- Превью названия подключения -->
+        <div id="conn-name-preview" class="hidden text-xs text-gray-500 -mt-1 px-1">
+          Пример: <span id="conn-name-preview-text" class="text-gray-300 font-mono"></span>
+        </div>
+
         <!-- IP -->
         <div>
           <label class="form-label">IP-адрес</label>
@@ -601,114 +624,57 @@
   </div>
 </div>
 
-<!-- ADD CONNECTION -->
-<!-- ADD CONNECTION -->
-<div id="modal-add-connection" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-network-wired text-brand-400"></i>Создать подключение
+
+<!-- ═══ WIZARD: CREATE CONNECTIONS ═══════════════════════════════════════ -->
+<div id="modal-wizard-conn" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style="max-height:90vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-network-wired text-brand-400"></i>Создать подключения
       </h3>
-      <button onclick="closeModal('modal-add-connection')" class="text-gray-500 hover:text-white transition p-1">
+      <button onclick="closeModal('modal-wizard-conn')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
       </button>
     </div>
-    <form id="add-connection-form" class="p-6 space-y-4">
-      <!-- Name -->
-      <div>
-        <label class="form-label">Название</label>
-        <input name="name" type="text" id="conn-name-input" placeholder="VLESS-DE-01" class="form-input" required>
-      </div>
+    <div id="wizard-body" class="p-6 flex-1 overflow-y-auto"></div>
+    <div id="wizard-footer" class="px-6 py-4 border-t border-gray-800 flex-shrink-0"></div>
+  </div>
+</div>
 
-      <!-- Server -->
-      <div>
-        <label class="form-label">Сервер</label>
-        <div class="custom-select-wrap">
-          <select name="server_id" id="conn-server-select" class="form-input custom-select" required>
-            <option value="">— Выберите сервер —</option>
-          </select>
+<!-- ═══ DEPLOY LOG MODAL ══════════════════════════════════════════════════ -->
+<div id="modal-deploy-log" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl flex flex-col" style="max-height:90vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="deploy-log-spinner"><i class="fas fa-spinner fa-spin text-brand-400"></i></span>
+        <div class="min-w-0">
+          <h3 class="text-base font-bold text-white">Настройка подключений</h3>
+          <p id="deploy-log-status" class="text-xs text-gray-500 mt-0.5">Инициализация...</p>
         </div>
       </div>
+      <button id="deploy-log-close" onclick="closeDeployLog()"
+        class="hidden px-3 py-1.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-xs font-semibold text-white transition">
+        Готово
+      </button>
+    </div>
+    <div id="deploy-log-body" class="flex-1 overflow-y-auto p-4 bg-gray-950 font-mono text-xs space-y-0.5 min-h-48 max-h-96"></div>
+  </div>
+</div>
 
-      <!-- Protocol -->
-      <div>
-        <label class="form-label">Протокол</label>
-        <div class="custom-select-wrap">
-          <select name="protocol" id="conn-protocol-select" class="form-input custom-select" required>
-            <option value="">— Выберите протокол —</option>
-            <option value="vless_reality" selected>🔒 VLESS + Reality (рекомендуется)</option>
-            <option value="amnezia_wg">🛡️ AmneziaWG</option>
-            <option value="trojan">⚡ Trojan</option>
-            <option value="naive_proxy">🌐 NaiveProxy</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- SNI block (VLESS+Reality only) -->
-      <div id="conn-sni-block" class="hidden">
-        <label class="form-label flex items-center gap-2">
-          Reality SNI
-          <span class="text-xs text-gray-500 font-normal">— домен для маскировки</span>
-        </label>
-        <div class="custom-select-wrap">
-          <select name="reality_server_name" id="conn-sni-select" class="form-input custom-select">
-          </select>
-        </div>
-        <p class="text-gray-500 text-xs mt-1.5">
-          <i class="fas fa-star text-yellow-400 mr-1"></i>Рекомендуемый выбран автоматически
-        </p>
-      </div>
-
-      <!-- Exit server block (for cascade RU→EU, optional) -->
-      <div id="conn-exit-server-block" class="hidden">
-        <label class="form-label flex items-center gap-2">
-          EU Exit-сервер
-          <span class="text-xs text-gray-500 font-normal">— для каскада RU → EU</span>
-        </label>
-        <div class="custom-select-wrap">
-          <select name="exit_server_id" id="conn-exit-select" class="form-input custom-select">
-            <option value="">— Прямой выход (без каскада) —</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Info hint -->
-      <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-xs text-gray-400 space-y-1">
-        <div><i class="fas fa-info-circle text-brand-400 mr-1"></i>Ключи, порт и конфиг деплоятся автоматически через SSH</div>
-        <div id="conn-proto-hint" class="text-gray-500"></div>
-      </div>
-
-      <div id="add-connection-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
-      <div id="add-connection-progress" class="hidden p-3 bg-brand-900/50 border border-brand-700 rounded-lg text-brand-300 text-sm flex items-center gap-2">
-        <i class="fas fa-spinner fa-spin"></i><span>Деплой подключения на сервер...</span>
-      </div>
-      <div class="flex gap-3 pt-2">
-        <button type="button" onclick="closeModal('modal-add-connection')"
-          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
-        <button type="submit" id="conn-submit-btn"
-          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
-          <i class="fas fa-rocket text-xs"></i>Создать и задеплоить
-        </button>
-      </div>
-    </form>
+<!-- ═══ CONNECTION DETAIL MODAL ══════════════════════════════════════════ -->
+<div id="modal-conn-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl flex flex-col" style="max-height:90vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <div id="conn-detail-header" class="flex items-center gap-3 min-w-0"></div>
+      <button onclick="closeModal('modal-conn-detail')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-3">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="conn-detail-content" class="flex-1 overflow-y-auto p-6"></div>
   </div>
 </div>
 
 <!-- CLIENT CONFIG -->
-<div id="modal-client-config" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between p-6 border-b border-gray-800">
-      <h3 class="text-lg font-bold text-white flex items-center gap-2">
-        <i class="fas fa-key text-brand-400"></i>Конфигурация клиента
-      </h3>
-      <button onclick="closeModal('modal-client-config')" class="text-gray-500 hover:text-white transition p-1">
-        <i class="fas fa-xmark text-lg"></i>
-      </button>
-    </div>
-    <div id="client-config-content" class="p-6"></div>
-  </div>
-</div>
-
 <!-- INSTALL STACK -->
 <div id="modal-install-stack" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">

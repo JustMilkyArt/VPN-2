@@ -558,3 +558,81 @@ button.role-card.role-card-active {
 /* пульсирующая точка для ⏳ */
 @keyframes stp-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
 .stp-spin-dot { animation: stp-pulse 1.2s ease-in-out infinite; }
+
+/* ─── Connections v3 ──────────────────────────────────────────────────────── */
+
+/* Compact form input for params tab */
+.form-input-sm {
+  background-color: #111827;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 11px;
+  padding: 4px 8px;
+  height: 28px;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.form-input-sm:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+select.form-input-sm {
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 14px;
+  padding-right: 24px;
+  appearance: none;
+}
+
+/* Detail modal tabs */
+.detail-tab-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+.detail-tab-btn:hover {
+  color: #d1d5db;
+}
+
+/* Wizard type buttons */
+.wiz-type-btn {
+  text-align: center;
+  min-height: 100px;
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.wiz-type-btn:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Connection rows in grouped list */
+.conn-row {
+  cursor: default;
+}
+.conn-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+/* Deploy log body — dark terminal */
+#deploy-log-body {
+  background: #050a0f;
+  scroll-behavior: smooth;
+}
+#deploy-log-body:empty::after {
+  content: 'Ожидание...';
+  color: #374151;
+  font-size: 11px;
+  display: block;
+  padding: 8px 0;
+}
+

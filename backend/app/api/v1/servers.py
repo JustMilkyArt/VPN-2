@@ -169,7 +169,7 @@ def install_stack(
             server.xray_installed = True
 
     if install_req.install_naiveproxy:
-        ok, msg = deploy_service.install_naiveproxy(server)
+        ok, msg = deploy_service.install_caddy_naive_binary(server)
         results["naiveproxy"] = {"success": ok, "message": msg}
         if ok:
             server.naiveproxy_installed = True
@@ -201,6 +201,31 @@ def restart_services(
         raise HTTPException(status_code=404, detail="Server not found")
 
     ok, msg = deploy_service.restart_services(server)
+    return {"success": ok, "message": msg}
+
+
+class RestartServiceRequest(BaseModel):
+    service: str  # e.g. "xray", "caddy-naive", "awg", "warp-svc"
+
+
+@router.post("/{server_id}/restart-service", summary="Restart a specific VPN service on server")
+def restart_single_service(
+    server_id: int,
+    body: RestartServiceRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    # Whitelist allowed service names for security
+    ALLOWED = {"xray", "caddy-naive", "awg", "amneziawg", "warp-svc", "warp", "fail2ban", "nginx"}
+    svc = body.service.strip()
+    if svc not in ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Service '{svc}' not allowed. Allowed: {sorted(ALLOWED)}")
+
+    ok, msg = deploy_service.restart_single_service(server, svc)
     return {"success": ok, "message": msg}
 
 

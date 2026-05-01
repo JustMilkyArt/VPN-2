@@ -432,8 +432,34 @@ function showAddServerModal() {
   document.querySelector('#add-server-form [name=role][value=EU]').checked = false;
   document.querySelector('#add-server-form [name=role][value=RU]').checked = false;
 
+  // Сбрасываем превью имени
+  document.getElementById('conn-name-preview')?.classList.add('hidden');
+
   openModal('modal-add-server');
 }
+
+// Превью названия подключения в клиенте
+function _updateConnNamePreview() {
+  const flag = document.getElementById('add-server-flag-emoji')?.value.trim() || '';
+  const name = document.getElementById('add-server-display-name')?.value.trim() || '';
+  const previewEl = document.getElementById('conn-name-preview');
+  const textEl    = document.getElementById('conn-name-preview-text');
+  if (!previewEl || !textEl) return;
+  if (flag || name) {
+    const label = [flag, name].filter(Boolean).join(' ');
+    textEl.textContent = `${label} (direct) / ${label} (cascade)`;
+    previewEl.classList.remove('hidden');
+  } else {
+    previewEl.classList.add('hidden');
+  }
+}
+// Вешаем обработчики после загрузки DOM
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('add-server-flag-emoji')
+    ?.addEventListener('input', _updateConnNamePreview);
+  document.getElementById('add-server-display-name')
+    ?.addEventListener('input', _updateConnNamePreview);
+});
 
 // ───────────────── SSH KEY FILE HANDLERS ─────────────────
 function handleSshKeyFile(input) {
@@ -564,11 +590,13 @@ document.getElementById('add-server-form')?.addEventListener('submit', async (e)
 
   // Собираем данные в зависимости от роли
   const data = {
-    name:     form.querySelector('[name=name]').value.trim(),
-    ip:       form.querySelector('[name=ip]').value.trim(),
-    country:  document.getElementById('add-server-country').value || '??',
+    name:         form.querySelector('[name=name]').value.trim(),
+    ip:           form.querySelector('[name=ip]').value.trim(),
+    country:      document.getElementById('add-server-country').value || '??',
     role,
-    ssh_port: 22,
+    ssh_port:     22,
+    flag_emoji:   (form.querySelector('[name=flag_emoji]')?.value || '').trim(),
+    display_name: (form.querySelector('[name=display_name]')?.value || '').trim(),
   };
 
   if (role === 'EU') {
@@ -1122,14 +1150,16 @@ function _updateStackTab(server) {
   if (warpRow) warpRow.style.display = isEU ? 'none' : '';
 
   const services = [
-    { key: 'xray',  label: 'Xray-core',   installed: server.xray_installed },
-    { key: 'awg',   label: 'AmneziaWG',   installed: server.awg_installed },
-    ...(!isEU ? [{ key: 'warp', label: 'WARP', installed: server.warp_installed }] : []),
-    { key: 'naive', label: 'NaiveProxy',  installed: server.naiveproxy_installed },
+    { key: 'xray',  label: 'Xray-core',               installed: server.xray_installed,         version: server.xray_version   },
+    { key: 'awg',   label: 'AmneziaWG',               installed: server.awg_installed,          version: server.awg_version    },
+    ...(!isEU ? [{ key: 'warp', label: 'WARP',        installed: server.warp_installed,         version: server.warp_version   }] : []),
+    { key: 'naive', label: 'NaiveProxy (caddy-naive)', installed: server.naiveproxy_installed,  version: server.caddy_version  },
   ];
-  const svcMap = { xray: 'xray', awg: 'awg', warp: 'warp', naive: 'naiveproxy' };
+  // svcMap: key -> API service name (for install/uninstall), restartMap: key -> systemd unit
+  const svcMap    = { xray: 'xray', awg: 'awg', warp: 'warp', naive: 'naiveproxy' };
+  const restartMap = { xray: 'xray', awg: 'awg', warp: 'warp', naive: 'caddy-naive' };
 
-  services.forEach(({ key, label, installed }) => {
+  services.forEach(({ key, label, installed, version }) => {
     const dot    = document.getElementById(`stack-icon-${key}`);
     const status = document.getElementById(`stack-status-${key}`);
     const btns   = document.getElementById(`stack-btns-${key}`);
@@ -1139,12 +1169,15 @@ function _updateStackTab(server) {
       dot.className = `w-2 h-2 rounded-full flex-shrink-0 ${installed ? 'bg-green-500' : 'bg-gray-600'}`;
     }
     if (status) {
-      status.textContent = installed ? 'Установлен' : 'Не установлен';
+      const verShort = version ? version.split(' ')[0] : null;
+      status.textContent = installed
+        ? (verShort ? `Установлен (${verShort})` : 'Установлен')
+        : 'Не установлен';
     }
     if (btns) {
       if (installed) {
         btns.innerHTML = `
-          <button onclick="stackRestartService('${svcMap[key]}', ${serverId})"
+          <button onclick="stackRestartService('${restartMap[key]}', ${serverId})"
             class="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-800 rounded-lg text-xs text-yellow-300 transition" title="Рестарт">
             <i class="fas fa-rotate-right"></i>
           </button>
@@ -1333,10 +1366,17 @@ async function stackUninstallService(svc, label, serverId) {
 }
 
 async function stackRestartService(svc, serverId) {
-  toast('Перезапуск сервиса...', 'info', 3000);
-  const res = await api.restartServices(serverId);
-  if (res.ok) toast(`✓ ${res.data.message}`, 'success', 4000);
-  else toast(`Ошибка: ${res.error}`, 'error');
+  toast(`Перезапуск ${svc}...`, 'info', 3000);
+  // Use specific service restart via SSH if available, fallback to restartServices
+  const res = await api.post(`/api/v1/servers/${serverId}/restart-service`, { service: svc });
+  if (res.ok) {
+    toast(`✓ ${svc} перезапущен`, 'success', 4000);
+  } else {
+    // Fallback: restart all services
+    const res2 = await api.restartServices(serverId);
+    if (res2.ok) toast(`✓ Сервисы перезапущены`, 'success', 4000);
+    else toast(`Ошибка: ${res2.error}`, 'error');
+  }
 }
 
 async function destroyAllStack() {

@@ -12,11 +12,11 @@ from app.models.connection import Connection, Protocol
 from app.services.ssh_service import SSHClient, test_connection
 from app.services.config_generator import (
     generate_uuid, generate_password, generate_short_id,
-    gen_xray_vless_reality_inbound, gen_xray_trojan_inbound,
+    gen_xray_vless_reality_inbound,
     gen_xray_outbound_to_eu, gen_xray_warp_outbound, gen_xray_freedom_outbound,
     build_ru_xray_config, build_eu_xray_config,
     build_naiveproxy_caddy_config, build_naiveproxy_client_config,
-    gen_vless_reality_client_link, gen_trojan_client_link,
+    gen_vless_reality_client_link,
     gen_awg_server_config, gen_awg_client_config,
 )
 
@@ -29,6 +29,50 @@ def _read_script(name: str) -> str:
     path = os.path.join(SCRIPTS_DIR, name)
     with open(path, "r") as f:
         return f.read()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER PREPARATION HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ensure_server_ready(ssh, port: int, proto: str = "tcp") -> None:
+    """
+    Выполняется перед каждым деплоем подключения на сервер.
+    Настраивает:
+      1. IP-forwarding (сохраняется в sysctl.conf)
+      2. /etc/resolv.conf — реальные DNS вместо systemd-resolved stub
+      3. UFW — открывает порт подключения
+    Все операции идемпотентны (повторный запуск безопасен).
+    """
+    # 1. IP forwarding
+    ssh.exec(
+        "grep -q 'net.ipv4.ip_forward=1' /etc/sysctl.conf || "
+        "echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf; "
+        "grep -q 'net.ipv6.conf.all.forwarding=1' /etc/sysctl.conf || "
+        "echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.conf; "
+        "sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1; "
+        "sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1"
+    )
+
+    # 2. Исправляем /etc/resolv.conf — убираем stub-resolver если он там
+    ssh.exec(
+        "if grep -q '127.0.0.53' /etc/resolv.conf 2>/dev/null || "
+        "[ -L /etc/resolv.conf ]; then "
+        "  rm -f /etc/resolv.conf; "
+        "  printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\nnameserver 8.8.4.4\\n' "
+        "    > /etc/resolv.conf; "
+        "  systemctl disable systemd-resolved 2>/dev/null || true; "
+        "  systemctl stop systemd-resolved 2>/dev/null || true; "
+        "fi"
+    )
+
+    # 3. UFW — открываем порт (если UFW активен)
+    ufw_proto = "udp" if proto == "udp" else "tcp"
+    ssh.exec(
+        f"if command -v ufw > /dev/null 2>&1 && ufw status | grep -q 'Status: active'; then "
+        f"  ufw allow {port}/{ufw_proto} > /dev/null 2>&1 || true; "
+        f"fi"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,46 +214,66 @@ echo "[+] SSL cert installed"
         return False, str(e)
 
 
-def install_naiveproxy(server: Server, domain: str, password: str, port: int) -> Tuple[bool, str]:
-    """Install and configure NaiveProxy (via Caddy) on server."""
-    script = f"""#!/bin/bash
+# ─── Bash script to install caddy-naive binary (shared) ────────────────────
+_CADDY_INSTALL_SCRIPT = r"""#!/bin/bash
 set -e
 
-# Install Caddy with forward-proxy plugin (using xcaddy)
-apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' > /etc/apt/sources.list.d/caddy-xcaddy.list
-apt-get update -qq
-apt-get install -y -qq xcaddy golang-go
+apt-get install -y -qq curl tar
 
-# Build Caddy with forward_proxy
-xcaddy build --with github.com/klzgrad/forwardproxy@latest --output /usr/local/bin/caddy
-chmod +x /usr/local/bin/caddy
+# Detect architecture
+ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
+case "$ARCH" in
+  amd64|x86_64) IS_AMD64=1 ;;
+  *) IS_AMD64=0 ;;
+esac
+
+if [ -f /usr/local/bin/caddy-naive ]; then
+    echo "[+] caddy-naive already installed: $(/usr/local/bin/caddy-naive version 2>/dev/null || echo unknown)"
+else
+  cd /tmp
+  rm -f caddy-naive.tar.xz
+
+  if [ "$IS_AMD64" = "1" ]; then
+      FP_VER=$(curl -sf "https://api.github.com/repos/klzgrad/forwardproxy/releases/latest"           | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+      [ -z "$FP_VER" ] && FP_VER="v2.10.0-naive"
+      echo "[+] forwardproxy version: $FP_VER"
+      CADDY_URL="https://github.com/klzgrad/forwardproxy/releases/download/${FP_VER}/caddy-forwardproxy-naive.tar.xz"
+      echo "[+] Downloading: $CADDY_URL"
+      curl -fsSL --retry 3 --retry-delay 2 -o caddy-naive.tar.xz "$CADDY_URL"
+      tar -xJf caddy-naive.tar.xz 2>/dev/null || tar -xf caddy-naive.tar.xz 2>/dev/null || true
+      CADDY_BIN=$(find /tmp/caddy-forwardproxy-naive -name "caddy" -type f 2>/dev/null | head -1)
+      [ -z "$CADDY_BIN" ] && CADDY_BIN=$(find /tmp -maxdepth 3 -name "caddy" -type f 2>/dev/null | head -1)
+      if [ -z "$CADDY_BIN" ]; then
+          echo "ERROR: caddy binary not found in archive"; exit 1
+      fi
+  else
+      # arm64 fallback: build with xcaddy
+      apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
+      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg
+      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' > /etc/apt/sources.list.d/caddy-xcaddy.list
+      apt-get update -qq && apt-get install -y -qq xcaddy golang-go
+      xcaddy build --with github.com/klzgrad/forwardproxy@latest --output /tmp/caddy
+      CADDY_BIN="/tmp/caddy"
+  fi
+
+  cp "$CADDY_BIN" /usr/local/bin/caddy-naive
+  chmod +x /usr/local/bin/caddy-naive
+  echo "[+] caddy-naive installed: $(/usr/local/bin/caddy-naive version 2>/dev/null || echo unknown)"
+fi
 
 mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
+echo "[+] Done"
 """
 
-    caddy_config = build_naiveproxy_caddy_config(domain, password, port)
-
-    try:
-        with SSHClient(server) as ssh:
-            code, out, err = ssh.exec(script, timeout=600)
-            if code != 0:
-                return False, f"NaiveProxy install failed: {err}"
-            
-            # Upload Caddyfile
-            ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
-            
-            # Create systemd service
-            service_content = """[Unit]
+_CADDY_SERVICE = """[Unit]
 Description=Caddy NaiveProxy
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
+ExecStart=/usr/local/bin/caddy-naive run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy-naive reload --config /etc/caddy/Caddyfile
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
@@ -219,20 +283,51 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target
 """
-            ssh.upload_file(service_content, "/etc/systemd/system/caddy-naive.service")
-            code2, _, err2 = ssh.exec("systemctl daemon-reload && systemctl enable caddy-naive && systemctl restart caddy-naive")
-            if code2 != 0:
-                return False, f"Caddy service failed: {err2}"
-            
-            return True, "NaiveProxy installed"
+
+
+def install_caddy_naive_binary(server: Server) -> Tuple[bool, str]:
+    """Install only the caddy-naive binary (without Caddyfile/service).
+    Called from install_stack when user installs NaiveProxy stack component."""
+    try:
+        with SSHClient(server) as ssh:
+            code, out, err = ssh.exec(_CADDY_INSTALL_SCRIPT, timeout=300)
+            if code != 0:
+                return False, f"caddy-naive install failed: {err or out}"
+            # Record version
+            code2, ver_out, _ = ssh.exec(
+                "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo ''"
+            )
+            ver = (ver_out or "").strip().splitlines()[0] if ver_out else "installed"
+            return True, f"caddy-naive installed ({ver})"
     except Exception as e:
         return False, str(e)
 
 
-def install_trojan(server: Server, password: str, port: int, domain: str) -> Tuple[bool, str]:
-    """Install Trojan (via Xray) on server."""
-    # Trojan runs through Xray inbound - just update config
-    return True, "Trojan configured via Xray (see deploy_connection)"
+def install_naiveproxy(server: Server, domain: str, password: str, port: int) -> Tuple[bool, str]:
+    """Install caddy-naive binary AND deploy Caddyfile + systemd service for a specific connection.
+    Called from deploy_naiveproxy_connection."""
+    try:
+        with SSHClient(server) as ssh:
+            # 1. Install binary
+            code, out, err = ssh.exec(_CADDY_INSTALL_SCRIPT, timeout=300)
+            if code != 0:
+                return False, f"caddy-naive install failed: {err or out}"
+
+            # 2. Upload Caddyfile
+            caddy_config = build_naiveproxy_caddy_config(domain, password, port)
+            ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
+
+            # 3. Install systemd service
+            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy-naive.service")
+            code2, _, err2 = ssh.exec(
+                "systemctl daemon-reload && systemctl enable caddy-naive && systemctl restart caddy-naive"
+            )
+            if code2 != 0:
+                return False, f"Caddy service failed: {err2}"
+
+            return True, "NaiveProxy deployed"
+    except Exception as e:
+        return False, str(e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,11 +338,15 @@ def deploy_vless_reality_connection(
     db: Session,
     connection: Connection,
     server: Server,
-    exit_server: Optional[Server] = None
+    exit_server: Optional[Server] = None,
+    is_cascade: bool = False,
 ) -> Tuple[bool, str]:
     """Deploy VLESS+Reality connection on server."""
     try:
         with SSHClient(server) as ssh:
+            # Prepare server: ip_forward, DNS, UFW port
+            _ensure_server_ready(ssh, connection.port, proto="tcp")
+
             # Generate Reality keypair on the server
             code, key_out, key_err = ssh.exec("xray x25519", timeout=30)
             if code != 0:
@@ -258,15 +357,21 @@ def deploy_vless_reality_connection(
 
             private_key = public_key = None
             for line in key_out.splitlines():
-                if "Private key:" in line:
+                line = line.strip()
+                # xray версии 1.x: "Private key: ..." / "Public key: ..."
+                # xray версии 24.x+: "PrivateKey: ..." / "Password (PublicKey): ..."
+                if line.startswith("Private key:"):
                     private_key = line.split(":", 1)[1].strip()
-                elif "Public key:" in line:
+                elif line.startswith("Public key:"):
+                    public_key = line.split(":", 1)[1].strip()
+                elif line.startswith("PrivateKey:"):
+                    private_key = line.split(":", 1)[1].strip()
+                elif line.startswith("Password (PublicKey):"):
                     public_key = line.split(":", 1)[1].strip()
 
             if not private_key or not public_key:
-                # Generate placeholder keys for now
-                private_key = "auto-generated-run-xray-x25519"
-                public_key = "auto-generated-run-xray-x25519"
+                logger.error(f"xray x25519 output was: {key_out!r}")
+                return False, "Не удалось сгенерировать Reality keypair (xray x25519 вернул неожиданный формат)"
 
             short_id = generate_short_id(16)
             connection.reality_private_key = private_key
@@ -293,16 +398,20 @@ def deploy_vless_reality_connection(
                     )
                     inbounds.append(ib)
 
-            # Also include current connection
-            current_ib = gen_xray_vless_reality_inbound(
-                port=connection.port,
-                uuid_str=connection.uuid,
-                public_key=public_key,
-                private_key=private_key,
-                short_id=short_id,
-                server_name=connection.reality_server_name or "www.microsoft.com"
-            )
-            inbounds.append(current_ib)
+            # NOTE: current connection is already included in all_connections above
+            # (keys were saved to DB before the query), so no extra append needed.
+            # If for some reason it's missing (e.g. new unsaved connection), add it.
+            current_ids = {conn.id for conn in all_connections}
+            if connection.id not in current_ids:
+                current_ib = gen_xray_vless_reality_inbound(
+                    port=connection.port,
+                    uuid_str=connection.uuid,
+                    public_key=public_key,
+                    private_key=private_key,
+                    short_id=short_id,
+                    server_name=connection.reality_server_name or "www.microsoft.com"
+                )
+                inbounds.append(current_ib)
 
             # Build EU outbound if exit server specified
             eu_outbound = None
@@ -333,7 +442,7 @@ def deploy_vless_reality_connection(
             if code2 != 0:
                 return False, f"Xray reload failed: {err2}"
 
-            # Generate client link
+            # Generate client link with server flag and display name
             connection.client_link = gen_vless_reality_client_link(
                 server_ip=server.ip,
                 port=connection.port,
@@ -341,9 +450,12 @@ def deploy_vless_reality_connection(
                 public_key=public_key,
                 short_id=short_id,
                 server_name=connection.reality_server_name or "www.microsoft.com",
-                tag=connection.name
+                server_flag=getattr(server, 'flag_emoji', '') or '',
+                server_display_name=getattr(server, 'display_name', '') or server.name or '',
+                connection_type="cascade" if is_cascade else "direct",
             )
             connection.config_json = config_str
+            db.commit()
 
             return True, "VLESS+Reality deployed"
     except Exception as e:
@@ -351,88 +463,189 @@ def deploy_vless_reality_connection(
         return False, str(e)
 
 
-def deploy_trojan_connection(
-    db: Session,
-    connection: Connection,
-    server: Server,
-) -> Tuple[bool, str]:
-    """Deploy Trojan connection on server via Xray."""
-    try:
-        with SSHClient(server) as ssh:
-            domain = server.domain or server.ip
-            cert_file = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-            key_file = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-
-            # Check if cert exists, use self-signed fallback
-            code, out, _ = ssh.exec(f"test -f {cert_file} && echo 'exists'")
-            if "exists" not in out:
-                cert_file = "/etc/ssl/xray/cert.pem"
-                key_file = "/etc/ssl/xray/key.pem"
-                # Create self-signed cert
-                ssh.exec(f"""
-mkdir -p /etc/ssl/xray
-openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\
-    -keyout {key_file} -out {cert_file} \\
-    -subj '/CN={domain}' 2>/dev/null || true
-""")
-
-            # Get all trojan inbounds for this server
-            all_conns = db.query(Connection).filter(
-                Connection.server_id == server.id,
-                Connection.is_active == True,
-                Connection.protocol == Protocol.TROJAN
-            ).all()
-
-            inbounds = []
-            for conn in all_conns:
-                if conn.password:
-                    inbounds.append(gen_xray_trojan_inbound(conn.port, conn.password, cert_file, key_file))
-
-            inbounds.append(gen_xray_trojan_inbound(connection.port, connection.password, cert_file, key_file))
-
-            config_str = build_eu_xray_config(inbounds)
-            ssh.upload_file(config_str, "/usr/local/etc/xray/config.json")
-            code2, _, err2 = ssh.exec("systemctl reload xray || systemctl restart xray")
-            if code2 != 0:
-                return False, f"Xray reload failed: {err2}"
-
-            connection.client_link = gen_trojan_client_link(
-                server_ip=server.ip,
-                port=connection.port,
-                password=connection.password,
-                sni=domain,
-                tag=connection.name
-            )
-            connection.config_json = config_str
-            return True, "Trojan deployed"
-    except Exception as e:
-        logger.error(f"Trojan deploy error: {e}")
-        return False, str(e)
-
-
 def deploy_naiveproxy_connection(
     db: Session,
     connection: Connection,
     server: Server,
+    ru_server: Optional[Server] = None,
+    is_cascade: bool = False,
 ) -> Tuple[bool, str]:
-    """Deploy NaiveProxy connection on server."""
+    """
+    Deploy NaiveProxy connection.
+
+    DIRECT  (is_cascade=False):
+        Клиент ──[NaiveProxy/HTTPS]──► EU сервер (caddy-naive) ──► интернет
+        Caddy-naive ставится на EU сервере (server).
+        Домен: server.domain (eu.milkyims.com).
+
+    CASCADE (is_cascade=True):
+        Клиент ──[NaiveProxy/HTTPS]──► RU сервер (caddy-naive)
+                                            ├──[VLESS]──► EU сервер ──► зарубежный интернет
+                                            ├──[direct]─────────────► российский интернет
+                                            └──[WARP fallback]───────► Cloudflare
+        Caddy-naive ставится на RU сервере (ru_server).
+        Xray на RU получает VLESS inbound + outbound на EU + WARP fallback.
+        Домен: ru_server.domain (ru.milkyims.com).
+    """
+    def _log(msg: str):
+        """Append message to connection setup_log."""
+        cur = connection.setup_log or ""
+        connection.setup_log = cur + f"[NaiveProxy] {msg}\n"
+        db.commit()
+
     try:
-        domain = server.domain or server.ip
         password = connection.password
-        port = connection.port
+        port     = connection.port
 
-        ok, msg = install_naiveproxy(server, domain, password, port)
-        if not ok:
-            return False, msg
+        # ── Определяем целевой сервер и домен ────────────────────────────────
+        if is_cascade:
+            if not ru_server:
+                return False, "CASCADE: ru_server не передан"
+            target_server = ru_server
+            domain = ru_server.domain or ru_server.ip
+            _log(f"Режим: CASCADE. Caddy-naive → RU сервер ({domain})")
+        else:
+            target_server = server
+            domain = server.domain or server.ip
+            _log(f"Режим: DIRECT. Caddy-naive → EU сервер ({domain})")
 
-        # Build client config
+        # ── Шаг 1: Установка caddy-naive на целевой сервер ───────────────────
+        _log(f"Шаг 1: Установка caddy-naive на {target_server.name} ({target_server.ip})")
+        with SSHClient(target_server) as ssh:
+            # Prepare server: ip_forward, DNS, UFW port
+            _ensure_server_ready(ssh, connection.port, proto="tcp")
+
+            code, out, err = ssh.exec(_CADDY_INSTALL_SCRIPT, timeout=300)
+            if code != 0:
+                return False, f"caddy-naive install failed: {err or out}"
+            version_line = [l for l in out.splitlines() if "caddy-naive installed" in l or "already installed" in l]
+            _log(f"  caddy-naive: {version_line[-1] if version_line else 'установлен'}")
+
+            # ── Шаг 2: Генерация и загрузка Caddyfile ────────────────────────
+            _log(f"Шаг 2: Генерация Caddyfile (домен={domain}, порт={port})")
+            caddy_config = build_naiveproxy_caddy_config(domain, password, port)
+            ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
+            _log(f"  Caddyfile загружен: /etc/caddy/Caddyfile")
+
+            # ── Шаг 3: Systemd-сервис caddy-naive ────────────────────────────
+            _log("Шаг 3: Настройка systemd-сервиса caddy-naive")
+            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy-naive.service")
+            code2, _, err2 = ssh.exec(
+                "systemctl daemon-reload && systemctl enable caddy-naive && systemctl restart caddy-naive"
+            )
+            if code2 != 0:
+                return False, f"Caddy service failed to start: {err2}"
+
+            # Verify caddy-naive really started — do NOT trust exit code alone
+            _, svc_out, _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null || echo inactive")
+            if svc_out.strip() not in ("active", "activating"):
+                _, journal, _ = ssh.exec("journalctl -u caddy-naive -n 20 --no-pager 2>/dev/null || echo no_journal")
+                return False, f"caddy-naive started but status={svc_out.strip()}. Journal: {journal[:400]}"
+            _log("  caddy-naive.service запущен и включён в автозапуск")
+
+        # ── Шаг 4 (CASCADE only): Xray на RU — VLESS inbound + outbound на EU ──
+        if is_cascade:
+            _log(f"Шаг 4: Настройка Xray на RU сервере для CASCADE")
+
+            # Находим VLESS+Reality подключение на EU сервере (используем первое активное)
+            from app.models.connection import Protocol as P
+            eu_vless = db.query(Connection).filter(
+                Connection.server_id == server.id,
+                Connection.protocol == P.VLESS_REALITY,
+                Connection.is_active == True,
+                Connection.reality_public_key.isnot(None),
+            ).first()
+
+            eu_outbound = None
+            if eu_vless and eu_vless.reality_public_key and eu_vless.reality_public_key != "auto-generated-run-xray-x25519":
+                eu_outbound = gen_xray_outbound_to_eu(
+                    eu_ip=server.ip,
+                    eu_port=eu_vless.port,
+                    eu_uuid=eu_vless.uuid,
+                    eu_public_key=eu_vless.reality_public_key,
+                    eu_short_id=eu_vless.reality_short_id or "",
+                    eu_server_name=eu_vless.reality_server_name or "www.microsoft.com",
+                )
+                _log(f"  EU outbound: {server.ip}:{eu_vless.port} (VLESS+Reality)")
+            else:
+                _log(f"  ⚠ Нет активного VLESS+Reality на EU — outbound не настроен, трафик через direct")
+
+            # Собираем все существующие inbound'ы RU сервера (AWG, VLESS на RU если есть)
+            existing_ru_inbounds = []
+            ru_vless_conns = db.query(Connection).filter(
+                Connection.server_id == ru_server.id,
+                Connection.protocol == P.VLESS_REALITY,
+                Connection.is_active == True,
+                Connection.uuid.isnot(None),
+                Connection.reality_private_key.isnot(None),
+            ).all()
+            for c in ru_vless_conns:
+                if c.reality_public_key and c.reality_public_key != "auto-generated-run-xray-x25519":
+                    existing_ru_inbounds.append(
+                        gen_xray_vless_reality_inbound(
+                            port=c.port,
+                            uuid_str=c.uuid,
+                            public_key=c.reality_public_key,
+                            private_key=c.reality_private_key,
+                            short_id=c.reality_short_id or "",
+                            server_name=c.reality_server_name or "www.microsoft.com",
+                        )
+                    )
+
+            # WARP fallback — проверяем активен ли warp-svc на RU
+            warp_outbound = None
+            with SSHClient(ru_server) as ssh_ru:
+                code_w, out_w, _ = ssh_ru.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
+                if out_w.strip() == "active":
+                    warp_outbound = gen_xray_warp_outbound()
+                    _log("  WARP fallback: активен ✅")
+                else:
+                    _log("  WARP fallback: не активен (warp-svc не запущен)")
+
+                # Строим и загружаем Xray конфиг на RU
+                ru_config = build_ru_xray_config(
+                    inbounds=existing_ru_inbounds,
+                    eu_outbound=eu_outbound,
+                    warp_outbound=warp_outbound,
+                )
+                ssh_ru.upload_file(ru_config, "/usr/local/etc/xray/config.json")
+                code3, _, err3 = ssh_ru.exec("systemctl reload xray 2>/dev/null || systemctl restart xray")
+                if code3 != 0:
+                    _log(f"  ⚠ Xray reload вернул ошибку: {err3[:200]}")
+                else:
+                    _log(f"  Xray на RU перезагружен с {len(existing_ru_inbounds)} inbound(s) + EU outbound")
+
+        # ── Шаг 5: Обновление поддомена в БД ────────────────────────────────
+        _log("Шаг 5: Обновление статуса поддомена в БД")
+        subdomain_type = "naiveproxy_ru" if is_cascade else "naiveproxy_eu"
+        from app.models.domain import Subdomain
+        sub = db.query(Subdomain).filter(Subdomain.subdomain_type == subdomain_type).first()
+        if sub:
+            sub.status = "active"
+            sub.status_message = f"NaiveProxy {'cascade' if is_cascade else 'direct'} — порт {port}"
+            db.commit()
+            _log(f"  Поддомен {sub.full_name} → active")
+        else:
+            _log(f"  Поддомен типа '{subdomain_type}' не найден в БД")
+
+        # ── Шаг 6: Сохранение client_link и config_text ─────────────────────
         client_cfg = build_naiveproxy_client_config(domain, port, password)
-        connection.config_json = client_cfg
-        connection.client_link = f"https://admin:{password}@{domain}:{port}"
+        connection.config_json  = client_cfg
+        connection.config_text  = client_cfg
+        connection.np_domain    = domain
+        # Tag format: "FIN 1 | NaiveProxy (direct)" — same style as VLESS
+        _srv_name_np = server.display_name or server.name or server.ip
+        _ctype_np = connection.connection_type.value if connection.connection_type else "direct"
+        _np_tag = f"{_srv_name_np} | NaiveProxy ({_ctype_np})"
+        connection.client_link  = f"https://admin:{password}@{domain}:{port}#{_np_tag}"
+        db.commit()
 
-        return True, "NaiveProxy deployed"
+        _log(f"✅ NaiveProxy {'CASCADE' if is_cascade else 'DIRECT'} задеплоен. client_link={connection.client_link}")
+        return True, f"NaiveProxy {'cascade' if is_cascade else 'direct'} deployed → {domain}:{port}"
+
     except Exception as e:
         logger.error(f"NaiveProxy deploy error: {e}")
+        _log(f"❌ Исключение: {e}")
         return False, str(e)
 
 
@@ -502,10 +715,15 @@ def deploy_amnezia_wg_connection(
     db: Session,
     connection: Connection,
     server: Server,
+    ru_server: Optional[Server] = None,
+    is_cascade: bool = False,
 ) -> Tuple[bool, str]:
     """Install AmneziaWG and deploy a WireGuard peer on server."""
     try:
         with SSHClient(server) as ssh:
+            # Prepare server: ip_forward, DNS, UFW port (AWG uses UDP)
+            _ensure_server_ready(ssh, connection.port, proto="udp")
+
             # Install AWG if not present
             code, _, _ = ssh.exec("which awg 2>/dev/null || which wg 2>/dev/null || echo NOT_FOUND")
             # We check the output
@@ -547,50 +765,79 @@ def deploy_amnezia_wg_connection(
             connection.awg_junk_packet_min_size = connection.awg_junk_packet_min_size or 40
             connection.awg_junk_packet_max_size = connection.awg_junk_packet_max_size or 70
 
-            # Get all peers for this server
-            all_awg = db.query(Connection).filter(
+            # Build peer list: current connection first, then all OTHER active AWG connections.
+            # Current connection is excluded from the DB query to avoid duplicate peers
+            # (its keys were just generated and not yet committed).
+            clients_list = [{
+                "pub_key": client_pub,
+                "preshared_key": psk,
+                "client_ip": client_ip,
+            }]
+
+            other_awg = db.query(Connection).filter(
                 Connection.server_id == server.id,
+                Connection.id != connection.id,
                 Connection.protocol == Protocol.AMNEZIA_WG,
                 Connection.is_active == True,
                 Connection.wg_client_public_key.isnot(None),
             ).all()
 
-            clients_list = []
-            for c in all_awg:
+            for c in other_awg:
                 if c.wg_client_public_key and c.wg_client_ip:
                     clients_list.append({
                         "pub_key": c.wg_client_public_key,
                         "preshared_key": c.wg_preshared_key or "",
                         "client_ip": c.wg_client_ip,
                     })
-            # Add current
-            clients_list.append({
-                "pub_key": client_pub,
-                "preshared_key": psk,
-                "client_ip": client_ip,
-            })
 
-            # Generate and upload server config
+            # Определяем реальное имя сетевого интерфейса (eth0, ens3, enp0s3 и т.п.)
+            _, net_iface_out, _ = ssh.exec(
+                "ip route | grep '^default' | awk '{print $5}' | head -1"
+            )
+            net_iface = net_iface_out.strip() or "eth0"
+
+            # Generate server config
             server_conf = gen_awg_server_config(
                 server_private_key=server_priv,
                 listen_port=connection.port,
+                net_interface=net_iface,
                 clients=clients_list,
                 junk_packet_count=connection.awg_junk_packet_count,
                 junk_packet_min_size=connection.awg_junk_packet_min_size,
                 junk_packet_max_size=connection.awg_junk_packet_max_size,
             )
-            ssh.upload_file(server_conf, "/etc/amnezia/amneziawg/wg0.conf")
-            ssh.exec("mkdir -p /etc/amnezia/amneziawg || mkdir -p /etc/wireguard")
 
-            # Try AWG first, fallback to WireGuard
-            ssh.upload_file(server_conf, "/etc/amnezia/amneziawg/wg0.conf")
-            code3, _, _ = ssh.exec(
-                "systemctl enable awg-quick@wg0 2>/dev/null && awg-quick down wg0 2>/dev/null; awg-quick up wg0 2>/dev/null"
-                " || (cp /etc/amnezia/amneziawg/wg0.conf /etc/wireguard/wg0.conf && "
-                "systemctl enable wg-quick@wg0 && wg-quick down wg0 2>/dev/null; wg-quick up wg0)"
-            )
+            # Определяем имя интерфейса по номеру подключения (direct=wg0, cascade=wg1, etc.)
+            existing_awg_count = db.query(Connection).filter(
+                Connection.server_id == server.id,
+                Connection.protocol == Protocol.AMNEZIA_WG,
+                Connection.id != connection.id,
+                Connection.is_active == True,
+            ).count()
+            iface_name = f"wg{existing_awg_count}"
+
+            conf_path = f"/etc/amnezia/amneziawg/{iface_name}.conf"
+
+            # mkdir BEFORE upload
+            ssh.exec(f"mkdir -p /etc/amnezia/amneziawg")
+            ssh.upload_file(server_conf, conf_path)
+
+            # Запускаем через systemd (если интерфейс уже существует — сначала down)
+            svc = f"awg-quick@{iface_name}"
+            ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
+            ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || true")
+            ssh.exec(f"ip link delete {iface_name} 2>/dev/null || true")
+            code3, out3, err3 = ssh.exec(f"systemctl start {svc} 2>&1 || awg-quick up {iface_name} 2>&1")
+
+            # Verify interface actually came up
+            _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
+            if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
+                return False, f"AWG interface {iface_name} did not come up. stderr={err3[:300]}"
 
             # Generate client config
+            _srv_name = server.display_name or server.name or server.ip
+            _ctype = connection.connection_type.value if connection.connection_type else "direct"
+            _awg_tag = f"{_srv_name} | AWG ({_ctype})"
             client_conf = gen_awg_client_config(
                 client_private_key=client_priv,
                 client_ip=client_ip,
@@ -600,9 +847,13 @@ def deploy_amnezia_wg_connection(
                 junk_packet_count=connection.awg_junk_packet_count,
                 junk_packet_min_size=connection.awg_junk_packet_min_size,
                 junk_packet_max_size=connection.awg_junk_packet_max_size,
+                name=_awg_tag,
             )
             connection.config_json = client_conf
-            connection.client_link = f"awg://peer?pub={server_pub}&endpoint={server.ip}:{connection.port}"
+            connection.config_text = client_conf
+            # Tag format: "FIN 1 | AWG (direct)" — same style as VLESS
+            connection.client_link = f"awg://peer?pub={server_pub}&endpoint={server.ip}:{connection.port}#{_awg_tag}"
+            db.commit()
 
             return True, "AmneziaWG deployed"
     except Exception as e:
@@ -648,6 +899,24 @@ def restart_services(server: Server) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def restart_single_service(server: Server, service: str) -> Tuple[bool, str]:
+    """Restart a single systemd service on a server."""
+    try:
+        with SSHClient(server) as ssh:
+            code, out, err = ssh.exec(f"systemctl restart {service} 2>&1 || echo 'not found'", timeout=30)
+            if code != 0:
+                return False, f"Failed to restart {service}: {err or out}"
+            # Check active status
+            code2, status_out, _ = ssh.exec(f"systemctl is-active {service} 2>/dev/null || echo inactive")
+            status = status_out.strip()
+            if status in ("active", "activating"):
+                return True, f"{service} restarted successfully (status: {status})"
+            else:
+                return False, f"{service} restart issued but status is: {status}"
+    except Exception as e:
+        return False, str(e)
+
+
 def delete_connection_from_server(db: Session, connection: Connection, server: Server) -> Tuple[bool, str]:
     """Remove a connection from the server config."""
     try:
@@ -668,8 +937,6 @@ def delete_connection_from_server(db: Session, connection: Connection, server: S
                     short_id=conn.reality_short_id or "",
                     server_name=conn.reality_server_name or "www.microsoft.com"
                 ))
-            elif conn.protocol == Protocol.TROJAN and conn.password:
-                inbounds.append(gen_xray_trojan_inbound(conn.port, conn.password))
 
         config_str = build_eu_xray_config(inbounds)
 

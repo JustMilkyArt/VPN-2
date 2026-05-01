@@ -58,3 +58,5 @@ node_modules/
 *.backup
 *.tar.gz
 *.zip
+*.bak*
+*.bak

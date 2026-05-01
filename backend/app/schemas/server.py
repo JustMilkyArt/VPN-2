@@ -13,6 +13,8 @@ class ServerBase(BaseModel):
     ssh_port: int = Field(default=22, ge=1, le=65535)
     domain: Optional[str] = None
     notes: Optional[str] = None
+    flag_emoji: Optional[str] = Field(None, max_length=10, description="Country flag emoji, e.g. 🇫🇮")
+    display_name: Optional[str] = Field(None, max_length=100, description="Short name shown in VPN clients, e.g. FIN 1")
 
 
 class ServerCreate(ServerBase):
@@ -31,6 +33,8 @@ class ServerUpdate(BaseModel):
     domain: Optional[str] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+    flag_emoji: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 class ServerRead(ServerBase):
@@ -72,6 +76,10 @@ class ServerRead(ServerBase):
     sec_password_login: Optional[bool] = None
     sec_ssh_key:        Optional[bool] = None
 
+    # ── Display info (для клиентов) ──────────────────────────────────────────
+    flag_emoji:    Optional[str] = None
+    display_name:  Optional[str] = None
+
     class Config:
         from_attributes = True
 
@@ -96,6 +104,7 @@ class ServerRead(ServerBase):
             'warp_version', 'xray_public_key', 'awg_server_public_key',
             'ssh_user_actual', 'ssh_port_actual',
             'sec_fail2ban', 'sec_ufw', 'sec_password_login', 'sec_ssh_key',
+            'flag_emoji', 'display_name',
         ]
         result = {}
         for f in fields:

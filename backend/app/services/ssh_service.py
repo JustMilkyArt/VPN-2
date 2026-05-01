@@ -36,6 +36,7 @@ class SSHClient:
     def __init__(self, server: Server):
         self.server = server
         self.client: Optional[paramiko.SSHClient] = None
+        self._use_sudo: bool = False  # set to True if connected as non-root
 
     def __enter__(self) -> "SSHClient":
         self.client = paramiko.SSHClient()
@@ -73,6 +74,19 @@ class SSHClient:
 
         logger.info(f"Connecting to {self.server.ip}:{self.server.ssh_port} as {self.server.ssh_user}")
         self.client.connect(**connect_kwargs)
+
+        # Detect if we need sudo (non-root user with passwordless sudo)
+        try:
+            _, whoami_out, _ = self._raw_exec("id -u")
+            if whoami_out.strip() != "0":
+                # Not root — check if passwordless sudo is available
+                code_sudo, _, _ = self._raw_exec("sudo -n true 2>/dev/null")
+                self._use_sudo = (code_sudo == 0)
+                if self._use_sudo:
+                    logger.info(f"Non-root user {self.server.ssh_user}, auto-sudo enabled")
+        except Exception:
+            pass
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -80,32 +94,68 @@ class SSHClient:
             self.client.close()
         return False
 
-    def exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
-        """Execute command and return (exit_code, stdout, stderr)."""
+    def _raw_exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
+        """Execute command without sudo wrapping."""
         if not self.client:
             raise RuntimeError("SSH client not connected")
-        
         timeout = timeout or settings.SSH_COMMAND_TIMEOUT
-        logger.debug(f"Executing: {command[:100]}")
-        
         stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
-        
+        return exit_code, out, err
+
+    def exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
+        """Execute command and return (exit_code, stdout, stderr).
+        Automatically wraps with 'sudo bash -c' if connected as non-root with passwordless sudo.
+        """
+        if not self.client:
+            raise RuntimeError("SSH client not connected")
+
+        timeout = timeout or settings.SSH_COMMAND_TIMEOUT
+
+        # Auto-wrap with sudo bash -c if needed (non-root user with passwordless sudo)
+        if self._use_sudo and not command.strip().startswith("sudo"):
+            import shlex
+            actual_command = f"sudo bash -c {shlex.quote(command)}"
+        else:
+            actual_command = command
+
+        logger.debug(f"Executing: {actual_command[:120]}")
+
+        stdin, stdout, stderr = self.client.exec_command(actual_command, timeout=timeout)
+        exit_code = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+
         if exit_code != 0:
             logger.warning(f"Command exited with {exit_code}: {err[:200]}")
-        
+
         return exit_code, out, err
 
     def upload_file(self, local_content: str, remote_path: str) -> None:
-        """Upload string content as a file to remote server."""
-        sftp = self.client.open_sftp()
-        try:
-            with sftp.open(remote_path, "w") as f:
-                f.write(local_content)
-        finally:
-            sftp.close()
+        """Upload string content as a file to remote server.
+        If non-root with sudo: uploads to /tmp first, then moves via sudo cp.
+        """
+        if self._use_sudo:
+            import posixpath, hashlib
+            tmp_name = "/tmp/_upload_" + hashlib.md5(remote_path.encode()).hexdigest()[:8]
+            sftp = self.client.open_sftp()
+            try:
+                with sftp.open(tmp_name, "w") as f:
+                    f.write(local_content)
+            finally:
+                sftp.close()
+            # Ensure parent directory exists and move file
+            parent = posixpath.dirname(remote_path)
+            self.exec(f"mkdir -p {parent} && cp {tmp_name} {remote_path} && rm -f {tmp_name}")
+        else:
+            sftp = self.client.open_sftp()
+            try:
+                with sftp.open(remote_path, "w") as f:
+                    f.write(local_content)
+            finally:
+                sftp.close()
 
     def upload_script(self, script_content: str, remote_path: str) -> None:
         """Upload script and make it executable."""
