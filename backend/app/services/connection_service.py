@@ -556,3 +556,44 @@ def check_all_connections(db: Session) -> Dict[int, dict]:
                 logger.error("check_all_connections worker error: %s", e)
 
     return results
+
+
+# ─── redeploy ────────────────────────────────────────────────────────────────
+
+def redeploy_connection(db: Session, conn: Connection) -> Tuple[bool, str]:
+    """Повторно деплоит одно подключение (поднимает интерфейс/сервис заново).
+
+    Используется кнопкой «Поднять подключение» в карточке.
+    Сбрасывает setup_log перед запуском, чтобы в UI был свежий лог.
+    """
+    eu_server = db.query(Server).filter(Server.id == conn.server_id).first()
+    if not eu_server:
+        return False, "EU сервер не найден"
+
+    ru_server = None
+    if conn.ru_server_id:
+        ru_server = db.query(Server).filter(Server.id == conn.ru_server_id).first()
+
+    # Сбрасываем лог и статус перед повторным деплоем
+    conn.setup_log = ""
+    conn.setup_status = "in_progress"
+    conn.setup_step = "redeploy"
+    conn.status = ConnectionStatus.INACTIVE
+    db.commit()
+
+    def _run():
+        from app.database import SessionLocal
+        thread_db = SessionLocal()
+        try:
+            thread_conn = thread_db.query(Connection).filter(Connection.id == conn.id).first()
+            thread_eu   = thread_db.query(Server).filter(Server.id == eu_server.id).first()
+            thread_ru   = thread_db.query(Server).filter(Server.id == ru_server.id).first() if ru_server else None
+            _deploy_one(thread_db, thread_conn, thread_eu, thread_ru)
+        except Exception as e:
+            logger.error("redeploy_connection error for conn %s: %s", conn.id, e)
+        finally:
+            thread_db.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return True, "Redeploy запущен"

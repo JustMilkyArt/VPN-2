@@ -256,6 +256,19 @@ def check_connection(
     return {"alive": alive, "message": msg, "status": conn.status}
 
 
+@router.post("/{connection_id}/redeploy", summary="Повторно задеплоить подключение")
+def redeploy_connection(
+    connection_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    conn = connection_service.get_connection(db, connection_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Подключение не найдено")
+    ok, msg = connection_service.redeploy_connection(db, conn)
+    return {"ok": ok, "message": msg, "connection_id": connection_id}
+
+
 @router.post("/{connection_id}/toggle", summary="Включить/выключить подключение")
 def toggle_connection(
     connection_id: int,

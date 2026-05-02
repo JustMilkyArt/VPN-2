@@ -219,17 +219,55 @@ dpkg --configure -a 2>/dev/null || true
 DEBIAN_FRONTEND=noninteractive apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq software-properties-common
 
-# Add AmneziaWG PPA (Ubuntu) or fall back to WireGuard
+# Add AmneziaWG PPA (Ubuntu) or fall back to real binaries from GitHub
+AWG_VIA_PPA=0
 if DEBIAN_FRONTEND=noninteractive add-apt-repository -y ppa:amnezia/ppa 2>/dev/null; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq amneziawg amneziawg-tools
-else
-    # Fallback: standard WireGuard (awg-quick compatible in most configs)
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard wireguard-tools
-    # Symlink wg as awg if awg not present
-    [ -f /usr/bin/awg ] || ln -sf /usr/bin/wg /usr/bin/awg 2>/dev/null || true
-    [ -f /usr/sbin/awg-quick ] || ln -sf /usr/sbin/wg-quick /usr/sbin/awg-quick 2>/dev/null || true
-    [ -f /usr/local/sbin/awg-quick ] || ln -sf $(which wg-quick 2>/dev/null || echo /usr/sbin/wg-quick) /usr/local/sbin/awg-quick 2>/dev/null || true
+    if DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
+       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq amneziawg amneziawg-tools; then
+        AWG_VIA_PPA=1
+    fi
+fi
+
+if [ "$AWG_VIA_PPA" = "0" ]; then
+    echo "[!] PPA failed — downloading real awg/awg-quick binaries from GitHub..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard wireguard-tools unzip curl 2>/dev/null || true
+
+    # Download real amneziawg-tools binaries (contains actual awg and awg-quick)
+    AWG_TOOLS_URL="https://github.com/amnezia-vpn/amneziawg-tools/releases/latest/download/ubuntu-22.04-amneziawg-tools.zip"
+    mkdir -p /tmp/awg_tools
+    if curl -fsSL "$AWG_TOOLS_URL" -o /tmp/awg_tools/awg-tools.zip 2>/dev/null; then
+        unzip -o /tmp/awg_tools/awg-tools.zip -d /tmp/awg_tools/ 2>/dev/null || true
+        AWG_BIN=$(find /tmp/awg_tools -name "awg" -type f | head -1)
+        AWG_QUICK_BIN=$(find /tmp/awg_tools -name "awg-quick" -type f | head -1)
+        if [ -n "$AWG_BIN" ]; then
+            cp "$AWG_BIN" /usr/local/bin/awg
+            chmod +x /usr/local/bin/awg
+            echo "[+] awg binary installed from zip"
+        fi
+        if [ -n "$AWG_QUICK_BIN" ]; then
+            cp "$AWG_QUICK_BIN" /usr/local/bin/awg-quick
+            chmod +x /usr/local/bin/awg-quick
+            echo "[+] awg-quick binary installed from zip"
+        else
+            # awg-quick is a shell script — download separately
+            AWG_QUICK_URL="https://raw.githubusercontent.com/amnezia-vpn/amneziawg-tools/master/src/awg-quick/linux.bash"
+            curl -fsSL "$AWG_QUICK_URL" -o /usr/local/bin/awg-quick 2>/dev/null && \
+                chmod +x /usr/local/bin/awg-quick && echo "[+] awg-quick script installed from source"
+        fi
+        rm -rf /tmp/awg_tools
+    fi
+
+    # Download DKMS kernel module for amneziawg
+    AWG_DKMS_VER=$(curl -fsSL https://api.github.com/repos/amnezia-vpn/amneziawg-linux-kernel-module/releases/latest 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    if [ -n "$AWG_DKMS_VER" ]; then
+        DKMS_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/releases/download/${AWG_DKMS_VER}/amneziawg-dkms_${AWG_DKMS_VER#v}-1_all.deb"
+        if curl -fsSL "$DKMS_URL" -o /tmp/awg-dkms.deb 2>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/awg-dkms.deb 2>/dev/null || true
+            rm -f /tmp/awg-dkms.deb
+            echo "[+] amneziawg DKMS module installed"
+        fi
+    fi
+    modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true
 fi
 
 # Enable IP forwarding

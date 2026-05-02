@@ -1137,6 +1137,11 @@ function _renderInfoTab(conn) {
     class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-xs font-medium transition flex items-center justify-center gap-2">
     <i class="fas fa-stethoscope"></i> Проверить
   </button>
+  <button onclick="redeployConnection(${conn.id})"
+    id="redeploy-btn-${conn.id}"
+    class="flex-1 py-2 bg-brand-900/30 hover:bg-brand-900/60 border border-brand-700/50 rounded-lg text-xs text-brand-300 font-medium transition flex items-center justify-center gap-2">
+    <i class="fas fa-rotate-right"></i> Поднять
+  </button>
   <button onclick="confirmDeleteConnection(${conn.id})"
     class="py-2 px-3 bg-red-900/30 hover:bg-red-900/50 border border-red-800/50 rounded-lg text-xs text-red-400 transition flex items-center gap-1.5">
     <i class="fas fa-trash text-[10px]"></i> Удалить
@@ -1155,6 +1160,60 @@ async function checkConnLive(connId) {
   } else {
     toast(`Ошибка: ${res.error}`, 'error');
   }
+}
+
+async function redeployConnection(connId) {
+  const btn = document.getElementById(`redeploy-btn-${connId}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Запуск...';
+  }
+  const res = await api.post(`/connections/${connId}/redeploy`, {});
+  if (res.ok) {
+    toast('🔄 Redeploy запущен — следите за логом в карточке', 'info', 4000);
+    // Запускаем поллинг статуса чтобы лог обновился
+    _pollRedeployStatus(connId);
+  } else {
+    toast(`Ошибка запуска: ${res.error}`, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
+    }
+  }
+}
+
+function _pollRedeployStatus(connId) {
+  let attempts = 0;
+  const maxAttempts = 60; // до 5 минут (5 сек * 60)
+  const interval = setInterval(async () => {
+    attempts++;
+    const res = await api.get(`/connections/${connId}`);
+    if (!res.ok || attempts >= maxAttempts) {
+      clearInterval(interval);
+      const btn = document.getElementById(`redeploy-btn-${connId}`);
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
+      }
+      return;
+    }
+    const conn = res.data;
+    _applyConnStatusInRow(connId, conn.status);
+    if (conn.setup_status === 'done' || conn.setup_status === 'failed') {
+      clearInterval(interval);
+      const btn = document.getElementById(`redeploy-btn-${connId}`);
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
+      }
+      const ok = conn.setup_status === 'done';
+      toast(ok ? `✅ Подключение поднято` : `❌ Redeploy не удался — смотри лог`, ok ? 'success' : 'error', 4000);
+      // Если панель детали открыта для этого подключения — обновить
+      if (typeof _detailConnId !== 'undefined' && _detailConnId === connId) {
+        showConnDetail(connId);
+      }
+    }
+  }, 5000);
 }
 
 // ─── CHECK ALL / CHECK GROUP ─────────────────────────────────────────────────
