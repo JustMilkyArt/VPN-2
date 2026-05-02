@@ -1231,19 +1231,44 @@ window.toggleWarp               = toggleWarp;
 window.confirmDeleteConnection  = confirmDeleteConnection;
 window._renderWizardStep1       = _renderWizardStep1;
 window.downloadConfig           = downloadConfig;
-window.openConnSetupModal       = openConnSetupModal;
-window.closeConnSetup           = closeConnSetup;
-window.retryConnSetup           = retryConnSetup;
-window.toggleConnSetupStep      = toggleConnSetupStep;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONNECTION AUTO-SETUP MODAL  (аналог modal-server-setup для серверов)
+
+// CONNECTION AUTO-SETUP MODAL — server-setup style (step timeline + per-step logs)
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _connSetupIds  = [];   // ids of connections being deployed
 let _connSetupPoll = null; // interval handle
 
-// ── Dot + progress helpers (mirrored from servers.js for conn modal) ────────
+// ── Step labels per protocol ──────────────────────────────────────────────
+const _CS_STEP_LABELS = {
+  vless_reality: {
+    1: 'Порт',    2: 'Xray',    3: 'Keypair',
+    4: 'Конфиг',  5: 'Загрузка', 6: 'Ссылка',  7: '',
+  },
+  amnezia_wg: {
+    1: 'Порт',    2: 'AWG',     3: 'Keypair',
+    4: 'IP',      5: 'Конфиг',  6: 'Запуск',   7: 'Ссылка',
+  },
+  naive_proxy: {
+    1: 'Режим',   2: 'Caddy',   3: 'Caddyfile',
+    4: 'Сервис',  5: 'TLS',     6: 'Поддомен', 7: 'Ссылка',
+  },
+};
+
+const _CS_STEPS_COUNT = {
+  vless_reality: 6,
+  amnezia_wg:    7,
+  naive_proxy:   7,
+};
+
+const _CS_PROTO_LABEL = {
+  vless_reality: 'VLESS+Reality',
+  amnezia_wg:    'AmneziaWG',
+  naive_proxy:   'NaiveProxy',
+};
+
+// ── Small CSS helpers (mirrored from servers.js pattern) ──────────────────
 
 function _cdSetDot(state) {
   const d = document.getElementById('conn-setup-status-dot');
@@ -1268,43 +1293,154 @@ function _cdShowBtn(id, visible) {
   if (el) el.style.display = visible ? 'flex' : 'none';
 }
 
-// ── Step icon helpers for per-protocol timeline ─────────────────────────────
-
-const _CD_PROTOS = ['vless_reality', 'amnezia_wg', 'naive_proxy'];
-const _CD_PROTO_LABEL = {
-  vless_reality: 'VLESS+Reality',
-  amnezia_wg:    'AmneziaWG',
-  naive_proxy:   'NaiveProxy',
-};
-const _CD_TYPE_LABEL = { direct: 'DIRECT', cascade: 'CASCADE' };
-
-function _cdProtoIconState(el, state) {
-  if (!el) return;
-  const cfg = {
-    pending: { cls:'bg-gray-700 border-gray-600 text-gray-500',  icon:'fa-minus' },
-    running: { cls:'bg-blue-900/60 border-blue-500 text-blue-400',  icon:'fa-circle-notch fa-spin' },
-    ok:      { cls:'bg-green-900/60 border-green-500 text-green-400', icon:'fa-check' },
-    error:   { cls:'bg-red-900/60 border-red-500 text-red-400',    icon:'fa-xmark' },
-    skip:    { cls:'bg-gray-800 border-gray-700 text-gray-600',   icon:'fa-minus' },
-  };
-  const c = cfg[state] || cfg.pending;
-  el.className = `cd-proto-dot w-8 h-8 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${c.cls}`;
-  el.querySelector('i').className = `fas ${c.icon} text-xs`;
+function _csEsc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Open modal ──────────────────────────────────────────────────────────────
+// ── Step dot state for a per-connection card ──────────────────────────────
+
+function _csDotId(connId, n)  { return `cs-dot-${connId}-${n}`; }
+function _csConnId(connId, n) { return `cs-con-${connId}-${n}`; }
+function _csLogId(connId, n)  { return `cs-log-${connId}-${n}`; }
+
+function _csSetDot(connId, n, state) {
+  const el = document.getElementById(_csDotId(connId, n));
+  if (!el) return;
+  const styles = {
+    pending: { bg:'#374151', border:'#4b5563', color:'#9ca3af',  icon:'fa-minus' },
+    running: { bg:'#1e3a5f', border:'#3b82f6', color:'#93c5fd',  icon:'fa-circle-notch fa-spin' },
+    ok:      { bg:'#14532d', border:'#22c55e', color:'#86efac',  icon:'fa-check' },
+    error:   { bg:'#450a0a', border:'#ef4444', color:'#fca5a5',  icon:'fa-xmark' },
+    warn:    { bg:'#451a03', border:'#f59e0b', color:'#fcd34d',  icon:'fa-triangle-exclamation' },
+    skip:    { bg:'#1f2937', border:'#374151', color:'#6b7280',  icon:'fa-forward' },
+  };
+  const s = styles[state] || styles.pending;
+  el.style.cssText = `
+    width:22px;height:22px;border-radius:50%;border:2px solid ${s.border};
+    background:${s.bg};display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;transition:all .3s;`;
+  el.innerHTML = `<i class="fas ${s.icon}" style="font-size:9px;color:${s.color};"></i>`;
+}
+
+function _csSetConn(connId, n, done) {
+  const el = document.getElementById(_csConnId(connId, n));
+  if (el) {
+    el.style.background = done
+      ? 'linear-gradient(90deg,#22c55e,#16a34a)'
+      : '#374151';
+  }
+}
+
+function _csLogLineClass(line) {
+  if (/❌|✖|\berror\b|\bfail\b/i.test(line)) return 'color:#fca5a5;';
+  if (/⚠|\bwarn/i.test(line))                   return 'color:#fcd34d;';
+  if (/✅|\bok\b|success|done|installed|активен|запущен|задеплоен|сгенерир|готов|открыт/i.test(line)) return 'color:#86efac;';
+  if (/⏳|ожидани|попытк|проверка/i.test(line))   return 'color:#93c5fd;';
+  if (/^    /.test(line))                         return 'color:#6b7280;';
+  return 'color:#9ca3af;';
+}
+
+function _csShowStepLog(connId, n, lines, autoOpen) {
+  const el = document.getElementById(_csLogId(connId, n));
+  if (!el) return;
+  el.innerHTML = lines.map(l => {
+    const txt = _csEsc(l).replace(/❌/g,'✖');
+    return `<div style="padding:1px 0;font-size:11px;font-family:monospace;line-height:1.5;${_csLogLineClass(l)}">${txt}</div>`;
+  }).join('');
+  if (autoOpen && lines.length) el.classList.remove('hidden');
+}
+
+// ── Build card HTML for one connection ───────────────────────────────────
+
+function _csBuildCard(ct) {
+  const protocol = ct.protocol || 'vless_reality';
+  const totalSteps = _CS_STEPS_COUNT[protocol] || 6;
+  const labels = _CS_STEP_LABELS[protocol] || {};
+  const protoLabel = _CS_PROTO_LABEL[protocol] || protocol;
+  const typeLabel  = ct.connection_type === 'cascade' ? 'CASCADE' : 'DIRECT';
+  const typeColor  = ct.connection_type === 'cascade' ? '#c084fc' : '#67e8f9';
+
+  // Build step timeline
+  let timeline = '<div style="display:flex;align-items:center;padding:10px 0 6px;">';
+  for (let i = 1; i <= totalSteps; i++) {
+    const lbl = labels[i] || `${i}`;
+    timeline += `
+      <div style="display:flex;flex-direction:column;align-items:center;">
+        <div id="${_csDotId(ct.id, i)}" style="
+          width:22px;height:22px;border-radius:50%;border:2px solid #4b5563;
+          background:#374151;display:flex;align-items:center;justify-content:center;
+          flex-shrink:0;">
+          <i class="fas fa-minus" style="font-size:9px;color:#9ca3af;"></i>
+        </div>
+        <span style="font-size:9px;color:#6b7280;margin-top:4px;white-space:nowrap;">${lbl}</span>
+      </div>`;
+    if (i < totalSteps) {
+      timeline += `
+      <div id="${_csConnId(ct.id, i)}"
+           style="flex:1;height:2px;background:#374151;margin:0 2px;margin-bottom:16px;transition:background .4s;"></div>`;
+    }
+  }
+  timeline += '</div>';
+
+  // Build step log blocks
+  let logBlocks = '';
+  for (let i = 1; i <= totalSteps; i++) {
+    logBlocks += `<div id="${_csLogId(ct.id, i)}"
+      class="hidden"
+      style="border-left:2px solid #374151;margin-left:8px;padding-left:8px;margin-bottom:2px;max-height:120px;overflow-y:auto;">
+    </div>`;
+  }
+  // Info lines block (step 0 / plain logs)
+  logBlocks += `<div id="${_csLogId(ct.id, 0)}"
+    class="hidden"
+    style="border-left:2px solid #374151;margin-left:8px;padding-left:8px;margin-bottom:2px;max-height:80px;overflow-y:auto;">
+  </div>`;
+
+  return `
+<div id="cs-card-${ct.id}" style="background:#111827;border:1px solid #1f2937;border-radius:12px;overflow:hidden;margin-bottom:8px;">
+  <!-- Card header: protocol + type + badge -->
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px 0;cursor:pointer;"
+       onclick="_csToggleLogs(${ct.id})">
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:13px;font-weight:600;color:#f9fafb;">${protoLabel}</span>
+        <span style="font-size:10px;font-weight:700;color:${typeColor};">${typeLabel}</span>
+      </div>
+      <div id="cs-badge-${ct.id}" style="font-size:10px;color:#6b7280;margin-top:1px;">ожидание...</div>
+    </div>
+    <i class="fas fa-chevron-down" id="cs-chev-${ct.id}" style="font-size:10px;color:#4b5563;transition:transform .2s;flex-shrink:0;"></i>
+  </div>
+
+  <!-- Step timeline -->
+  <div style="padding:0 14px;">
+    ${timeline}
+  </div>
+
+  <!-- Per-step log blocks (hidden by default, toggle via chevron) -->
+  <div id="cs-logs-${ct.id}" class="hidden" style="padding:0 14px 10px;">
+    ${logBlocks}
+  </div>
+</div>`;
+}
+
+function _csToggleLogs(connId) {
+  const el = document.getElementById(`cs-logs-${connId}`);
+  if (!el) return;
+  el.classList.toggle('hidden');
+  const chev = document.getElementById(`cs-chev-${connId}`);
+  if (chev) chev.style.transform = el.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+
+// ── Open modal ───────────────────────────────────────────────────────────
 
 function openConnSetupModal(connIds, euServerName, connectionTypes) {
-  // connIds: array of ids, connectionTypes: array of {id, protocol, connection_type}
   _connSetupIds = connIds;
 
   const modal = document.getElementById('modal-conn-setup');
-  if (!modal) {
-    console.error('[ConnSetup] modal-conn-setup not found!');
-    return;
-  }
+  if (!modal) { console.error('[ConnSetup] modal-conn-setup not found!'); return; }
 
-  // Header title & subtitle
+  // Header
   const titleEl = document.getElementById('conn-setup-title');
   const subtEl  = document.getElementById('conn-setup-subtitle');
   const srvEl   = document.getElementById('conn-setup-server-name');
@@ -1312,128 +1448,128 @@ function openConnSetupModal(connIds, euServerName, connectionTypes) {
   if (subtEl)  subtEl.textContent  = 'Деплой выполняется...';
   if (srvEl)   srvEl.textContent   = euServerName || '';
 
-  // Reset progress
   _cdSetDot('running');
   _cdSetProgress(0);
 
-  // Reset proto rows
-  const tbody = document.getElementById('conn-setup-proto-list');
-  if (tbody) {
-    tbody.innerHTML = '';
-    (connectionTypes || []).forEach(ct => {
-      const pLabel = _CD_PROTO_LABEL[ct.protocol] || ct.protocol;
-      const tLabel = _CD_TYPE_LABEL[ct.connection_type] || ct.connection_type;
-      const tColor = ct.connection_type === 'direct' ? 'text-cyan-400' : 'text-purple-400';
-      const row = document.createElement('div');
-      row.id = `cd-row-${ct.id}`;
-      row.className = 'bg-gray-800/60 rounded-xl border border-gray-700 overflow-hidden mb-2';
-      row.innerHTML = `
-        <div class="flex items-center gap-3 px-3 py-2.5 cursor-pointer select-none"
-             onclick="toggleConnSetupStep(${ct.id})">
-          <div class="cd-proto-dot w-8 h-8 rounded-full border-2 border-gray-600 bg-gray-700 flex items-center justify-center flex-shrink-0">
-            <i class="fas fa-minus text-xs text-gray-500"></i>
-          </div>
-          <div class="min-w-0 flex-1">
-            <div class="text-sm font-semibold text-white">${pLabel}
-              <span class="ml-1 text-xs font-normal ${tColor}">${tLabel}</span>
-            </div>
-            <div id="cd-badge-${ct.id}" class="text-[10px] text-gray-500 mt-0.5">ожидание...</div>
-          </div>
-          <i class="fas fa-chevron-down text-gray-600 text-xs flex-shrink-0 cd-chevron-${ct.id}"></i>
-        </div>
-        <div id="cd-steps-${ct.id}" class="hidden border-t border-gray-700/60 px-3 py-2 space-y-0.5 max-h-48 overflow-y-auto scrollbar-thin"></div>
-      `;
-      tbody.appendChild(row);
-    });
+  // Build per-connection cards
+  const cardsEl = document.getElementById('conn-setup-cards');
+  if (cardsEl) {
+    cardsEl.innerHTML = (connectionTypes || []).map(_csBuildCard).join('');
   }
 
-  // Hide buttons
+  // Buttons
   const errBlock = document.getElementById('conn-setup-error-block');
   if (errBlock) errBlock.classList.add('hidden');
-  _cdShowBtn('conn-setup-btn-retry', false);
-  _cdShowBtn('conn-setup-btn-done', false);
+  _cdShowBtn('conn-setup-btn-retry',  false);
+  _cdShowBtn('conn-setup-btn-done',   false);
   _cdShowBtn('conn-setup-btn-cancel', true);
 
   modal.classList.remove('hidden');
   console.log('[ConnSetup] Modal opened, ids:', connIds);
 }
 
-// ── Toggle step log for a protocol row ─────────────────────────────────────
+// ── Render one connection card from batch-status data ────────────────────
 
-function toggleConnSetupStep(connId) {
-  const el = document.getElementById(`cd-steps-${connId}`);
-  if (!el) return;
-  el.classList.toggle('hidden');
-  const chev = document.querySelector(`.cd-chevron-${connId}`);
-  if (chev) chev.style.transform = el.classList.contains('hidden') ? '' : 'rotate(180deg)';
-}
+function _csRenderCard(c) {
+  const protocol   = c.protocol || 'vless_reality';
+  const totalSteps = _CS_STEPS_COUNT[protocol] || 6;
+  const steps      = c.steps || [];
 
-// ── Render step rows for a single connection card ───────────────────────────
-
-function _cdRenderConnSteps(c) {
-  const dotEl   = document.querySelector(`#cd-row-${c.id} .cd-proto-dot`);
-  const badgeEl = document.getElementById(`cd-badge-${c.id}`);
-  const stepsEl = document.getElementById(`cd-steps-${c.id}`);
-  if (!stepsEl) return;
-
-  // Badge + dot state
-  if (c.setup_status === 'done') {
-    if (dotEl) _cdProtoIconState(dotEl, 'ok');
-    if (badgeEl) { badgeEl.textContent = '✅ готово'; badgeEl.className = 'text-[10px] text-green-400 mt-0.5'; }
-  } else if (c.setup_status === 'failed') {
-    if (dotEl) _cdProtoIconState(dotEl, 'error');
-    if (badgeEl) { badgeEl.textContent = '❌ ошибка'; badgeEl.className = 'text-[10px] text-red-400 mt-0.5'; }
-  } else {
-    if (dotEl) _cdProtoIconState(dotEl, 'running');
-    if (badgeEl) { badgeEl.textContent = '⏳ выполняется...'; badgeEl.className = 'text-[10px] text-blue-400 mt-0.5 animate-pulse'; }
-  }
-
-  // Render step rows
-  const steps = c.steps || [];
-  steps.forEach(step => {
-    const key = step.is_step ? `step_${step.n}` : `info_${step.msg.slice(0, 30)}`;
-    const st  = step.status || 'info';
-    const icon = _STEP_ICON[st] || _STEP_ICON.info;
-    const textCls = _STEP_TEXT_CLASS[st] || _STEP_TEXT_CLASS.info;
-
-    const existEl = stepsEl.querySelector(`[data-key="${CSS.escape(key)}"]`);
-    if (existEl) {
-      existEl.innerHTML = `${icon}<span class="${textCls} text-xs font-mono leading-5">${step.msg}</span>`;
+  // Badge update
+  const badgeEl = document.getElementById(`cs-badge-${c.id}`);
+  if (badgeEl) {
+    if (c.setup_status === 'done') {
+      badgeEl.textContent = '✅ готово';
+      badgeEl.style.color = '#86efac';
+    } else if (c.setup_status === 'failed') {
+      badgeEl.textContent = '❌ ошибка';
+      badgeEl.style.color = '#fca5a5';
     } else {
-      const row = document.createElement('div');
-      row.className = 'flex items-start py-0.5';
-      row.setAttribute('data-key', key);
-      row.innerHTML = `${icon}<span class="${textCls} text-xs font-mono leading-5">${step.msg}</span>`;
-      stepsEl.appendChild(row);
+      badgeEl.textContent = '⏳ выполняется...';
+      badgeEl.style.color = '#93c5fd';
     }
-  });
+  }
 
-  // Auto-open step log if running or failed
-  if (c.setup_status !== 'done') {
-    stepsEl.classList.remove('hidden');
-    const chev = document.querySelector(`.cd-chevron-${c.id}`);
-    if (chev) chev.style.transform = 'rotate(180deg)';
+  // Separate structured steps and info lines
+  const stepData   = {};  // n -> {status, msg}
+  const infoLines  = [];  // plain log lines
+
+  for (const s of steps) {
+    if (s.is_step && s.n >= 1) {
+      stepData[s.n] = { status: s.status, msg: s.msg };
+    } else if (!s.is_step) {
+      infoLines.push(s.msg);
+    }
+  }
+
+  // Find highest step seen
+  const maxStep = steps.filter(s => s.is_step && s.n >= 1)
+                       .reduce((m, s) => Math.max(m, s.n), 0);
+
+  // Update dots + connectors
+  for (let i = 1; i <= totalSteps; i++) {
+    const sd = stepData[i];
+    if (sd) {
+      // Map API status to dot state
+      let dotState = sd.status; // running | ok | error | skip
+      if (sd.status === 'ok' && /⚠|warn/i.test(sd.msg)) dotState = 'warn';
+      _csSetDot(c.id, i, dotState);
+
+      // Connector: light up if step is done/ok/skip/warn
+      if (i < totalSteps && ['ok','skip','warn'].includes(sd.status)) {
+        _csSetConn(c.id, i, true);
+      }
+
+      // Show step log
+      _csShowStepLog(c.id, i, [sd.msg], sd.status === 'running' || sd.status === 'error');
+    } else if (i <= maxStep) {
+      // Step not yet reported → pending
+      // keep as-is
+    }
+  }
+
+  // Show info lines in block 0
+  if (infoLines.length > 0) {
+    _csShowStepLog(c.id, 0, infoLines, true);
+    // Also surface logs inside the logs container (auto-expand on error/running)
+    const logsEl = document.getElementById(`cs-logs-${c.id}`);
+    if (logsEl && (c.setup_status !== 'done')) {
+      logsEl.classList.remove('hidden');
+      const chev = document.getElementById(`cs-chev-${c.id}`);
+      if (chev) chev.style.transform = 'rotate(180deg)';
+    }
+  }
+
+  // Auto-expand on error
+  if (c.setup_status === 'failed') {
+    const logsEl = document.getElementById(`cs-logs-${c.id}`);
+    if (logsEl) {
+      logsEl.classList.remove('hidden');
+      const chev = document.getElementById(`cs-chev-${c.id}`);
+      if (chev) chev.style.transform = 'rotate(180deg)';
+    }
   }
 }
 
-// ── Start polling after batch create ───────────────────────────────────────
+// ── Polling ──────────────────────────────────────────────────────────────
 
 function _startConnSetupPolling(connIds) {
   if (_connSetupPoll) clearInterval(_connSetupPoll);
   _connSetupPoll = setInterval(async () => {
-    if (!connIds || connIds.length === 0) return;
+    if (!connIds || !connIds.length) return;
     const res = await api.get(`/connections/batch-status?ids=${connIds.join(',')}`);
     if (!res.ok) return;
 
     const { connections, all_done, any_failed } = res.data;
-    connections.forEach(c => _cdRenderConnSteps(c));
+    connections.forEach(c => _csRenderCard(c));
 
     const done   = connections.filter(c => c.setup_status === 'done').length;
     const failed = connections.filter(c => c.setup_status === 'failed').length;
     const total  = connections.length;
 
     const subtEl = document.getElementById('conn-setup-subtitle');
-    if (subtEl) subtEl.textContent = `${done + failed}/${total} обработано${failed ? `, ${failed} ошибок` : ''}`;
+    if (subtEl) subtEl.textContent =
+      `${done + failed} из ${total} обработано${failed ? ` · ${failed} ошибок` : ''}`;
 
     const pct = total ? Math.round((done + failed) / total * 100) : 0;
     _cdSetProgress(pct);
@@ -1445,32 +1581,32 @@ function _startConnSetupPolling(connIds) {
       _cdSetProgress(100);
 
       const titleEl = document.getElementById('conn-setup-title');
-      if (titleEl) titleEl.textContent = any_failed ? 'Деплой завершён с ошибками' : 'Подключения настроены';
-      if (subtEl)  subtEl.textContent  = any_failed
+      if (titleEl) titleEl.textContent = any_failed
+        ? 'Деплой завершён с ошибками'
+        : 'Подключения настроены';
+      if (subtEl) subtEl.textContent = any_failed
         ? `Успешно: ${done}, ошибок: ${failed}`
         : `Все ${done} подключений настроены ✅`;
 
       _cdShowBtn('conn-setup-btn-cancel', false);
-      _cdShowBtn('conn-setup-btn-retry', false);
-      _cdShowBtn('conn-setup-btn-done', true);
+      _cdShowBtn('conn-setup-btn-retry',  false);
+      _cdShowBtn('conn-setup-btn-done',   true);
 
       if (any_failed) {
-        const errEl = document.getElementById('conn-setup-error-block');
-        if (errEl) {
-          const errTextEl = document.getElementById('conn-setup-error-text');
-          if (errTextEl) errTextEl.textContent = 'Один или несколько деплоев завершились с ошибкой. Проверьте логи выше.';
-          errEl.classList.remove('hidden');
-        }
+        const errEl     = document.getElementById('conn-setup-error-block');
+        const errTextEl = document.getElementById('conn-setup-error-text');
+        if (errEl)     errEl.classList.remove('hidden');
+        if (errTextEl) errTextEl.textContent =
+          'Один или несколько деплоев завершились с ошибкой. Разверните карточку для деталей.';
         _cdShowBtn('conn-setup-btn-retry', true);
       }
 
-      // Refresh connection list
       loadConnectionsGrouped();
     }
   }, 2000);
 }
 
-// ── Close modal ─────────────────────────────────────────────────────────────
+// ── Close ────────────────────────────────────────────────────────────────
 
 function closeConnSetup() {
   if (_connSetupPoll) { clearInterval(_connSetupPoll); _connSetupPoll = null; }
@@ -1480,28 +1616,25 @@ function closeConnSetup() {
   loadConnectionsGrouped();
 }
 
-// ── Retry (re-open deploy log modal with current ids) ──────────────────────
+// ── Retry ─────────────────────────────────────────────────────────────────
 
 async function retryConnSetup() {
-  // Just re-open deploy log which also polls
   if (!_connSetupIds.length) return;
   const errBlock = document.getElementById('conn-setup-error-block');
   if (errBlock) errBlock.classList.add('hidden');
   _cdSetDot('running');
   _cdSetProgress(0);
-  _cdShowBtn('conn-setup-btn-retry', false);
-  _cdShowBtn('conn-setup-btn-done', false);
+  _cdShowBtn('conn-setup-btn-retry',  false);
+  _cdShowBtn('conn-setup-btn-done',   false);
   _cdShowBtn('conn-setup-btn-cancel', true);
   const titleEl = document.getElementById('conn-setup-title');
   const subtEl  = document.getElementById('conn-setup-subtitle');
   if (titleEl) titleEl.textContent = 'Настройка подключений';
   if (subtEl)  subtEl.textContent  = 'Повторный опрос статуса...';
-  // Reset per-proto states
-  _connSetupIds.forEach(id => {
-    const dotEl = document.querySelector(`#cd-row-${id} .cd-proto-dot`);
-    if (dotEl) _cdProtoIconState(dotEl, 'pending');
-    const badgeEl = document.getElementById(`cd-badge-${id}`);
-    if (badgeEl) { badgeEl.textContent = 'ожидание...'; badgeEl.className = 'text-[10px] text-gray-500 mt-0.5'; }
-  });
   _startConnSetupPolling(_connSetupIds);
 }
+
+window.openConnSetupModal  = openConnSetupModal;
+window.closeConnSetup      = closeConnSetup;
+window.retryConnSetup      = retryConnSetup;
+window._csToggleLogs       = _csToggleLogs;
