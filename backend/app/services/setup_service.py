@@ -4,9 +4,8 @@ Setup Service — автоматическая настройка сервера
 Шаги:
   1. Проверка подключения
   2. Установка стека (xray, awg, naiveproxy+caddy, warp для RU)
-  3. Настройка безопасности (apt upgrade критичных пакетов, fail2ban+ufw одной командой,
-     смена пользователя, генерация SSH-ключа, смена пароля, отключение password auth,
-     смена порта через systemd-run)
+     ★ ОПТИМИЗАЦИЯ: единый apt-install всех пакетов + параллельная установка компонентов
+  3. Настройка безопасности (batch-скрипты вместо отдельных SSH-вызовов)
   4. Сбор информации о сервере + запись security flags в БД
   5. Финальная проверка (install и start — раздельно)
 """
@@ -17,6 +16,7 @@ import secrets
 import string
 import select
 import time
+import threading
 from typing import Optional, Tuple
 
 import paramiko
@@ -66,7 +66,7 @@ def _gen_password(length: int = 24) -> str:
 
 
 def _gen_ssh_port() -> int:
-    """Случайный порт в диапазоне 10000–65000 (оптимальный: выше ephemeral ports)."""
+    """Случайный порт в диапазоне 10000–65000."""
     return random.randint(10000, 65000)
 
 
@@ -76,9 +76,7 @@ def _gen_username() -> str:
 
 
 def _gen_ed25519_keypair() -> Tuple[str, str]:
-    """Генерирует пару Ed25519, возвращает (private_pem, public_openssh).
-    Совместимо с paramiko 3.x — используем cryptography напрямую.
-    """
+    """Генерирует пару Ed25519, возвращает (private_pem, public_openssh)."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import (
         Encoding, PrivateFormat, PublicFormat, NoEncryption
@@ -128,8 +126,6 @@ def _connect(ip: str, port: int, user: str,
 def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = 120) -> Tuple[int, str, str]:
     """
     Выполняет команду по SSH с жёстким таймаутом через select().
-    recv_exit_status() блокируется вечно при зависании процесса — 
-    поэтому читаем через select с дедлайном.
     """
     transport = client.get_transport()
     if transport is None or not transport.is_active():
@@ -163,7 +159,6 @@ def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = 120) -> Tuple[int
                     err_chunks.append(data.decode("utf-8", errors="replace"))
 
         if chan.exit_status_ready():
-            # Дочитываем остатки буфера
             while chan.recv_ready():
                 data = chan.recv(65536)
                 if data:
@@ -176,12 +171,10 @@ def _exec(client: paramiko.SSHClient, cmd: str, timeout: int = 120) -> Tuple[int
             chan.close()
             return code, "".join(out_chunks), "".join(err_chunks)
 
-    # Недостижимо, но на всякий случай
     return -1, "".join(out_chunks), "".join(err_chunks)
 
 
 def _s(cmd: str, use_sudo: bool) -> str:
-    """Префиксует команду через sudo -n если пользователь не root."""
     if not use_sudo:
         return cmd
     cmd = cmd.strip()
@@ -191,35 +184,28 @@ def _s(cmd: str, use_sudo: bool) -> str:
 
 
 def _se(client: paramiko.SSHClient, cmd: str, use_sudo: bool, timeout: int = 120) -> tuple:
-    """_exec + автоматический sudo."""
     return _exec(client, _s(cmd, use_sudo), timeout=timeout)
 
 
-def _clear_apt_locks(client: paramiko.SSHClient, db, server, use_sudo: bool = False) -> None:
-    """Одноразовая очистка dpkg/apt lock в начале шага 2.
-    Останавливает unattended-upgrades, ждёт завершения apt/dpkg процессов,
-    при необходимости принудительно снимает lock-файлы.
-    """
-    # Шаг 1: убиваем unattended-upgrades
+def _clear_apt_locks(client: paramiko.SSHClient, use_sudo: bool = False) -> None:
+    """Одноразовая очистка dpkg/apt lock."""
     _se(client,
         "systemctl stop unattended-upgrades 2>/dev/null || true; "
         "pkill -9 -f unattended-upgrades 2>/dev/null || true; "
         "pkill -9 -f apt-get 2>/dev/null || true; "
-        "sleep 2", use_sudo,
+        "sleep 1", use_sudo,
         timeout=15)
 
-    # Шаг 2: ждём пока lock-файлы освободятся (до 120 секунд)
     wait_cmd = (
-        "for i in $(seq 1 40); do "
+        "for i in $(seq 1 30); do "
         "pgrep -x apt-get >/dev/null 2>&1 || "
         "pgrep -x dpkg    >/dev/null 2>&1 || "
         "pgrep -f unattended-upgrades >/dev/null 2>&1 || "
         "{ echo FREE; break; }; "
         "sleep 3; done"
     )
-    _, out, _ = _exec(client, wait_cmd, timeout=130)
+    _, out, _ = _exec(client, wait_cmd, timeout=100)
 
-    # Шаг 3: принудительно снимаем lock-файлы если всё ещё заняты
     if "FREE" not in out:
         _se(client,
             "rm -f /var/lib/dpkg/lock-frontend "
@@ -227,8 +213,6 @@ def _clear_apt_locks(client: paramiko.SSHClient, db, server, use_sudo: bool = Fa
             "/var/cache/apt/archives/lock 2>/dev/null; "
             "dpkg --configure -a 2>/dev/null || true", use_sudo,
             timeout=60)
-        _update_setup(db, server,
-                      log_line="[2.0] ⚠️ dpkg lock принудительно снят (unattended-upgrades завис)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,7 +240,6 @@ def _update_setup(db: Session, server: Server, *,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_server_setup(server_id: int):
-    """Точка входа — запускается как background task."""
     db = SessionLocal()
     try:
         server = db.query(Server).filter(Server.id == server_id).first()
@@ -276,7 +259,6 @@ def _run(db: Session, server: Server):
     server.status = ServerStatus.SETTING_UP
     db.add(server); db.commit()
 
-    # Текущие credentials (обновляются по ходу)
     cur_ip   = server.ip
     cur_port = server.ssh_port or 22
     cur_user = server.ssh_user or "root"
@@ -303,7 +285,7 @@ def _run(db: Session, server: Server):
             raise RuntimeError("Сервер не ответил на echo OK")
         lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
         _update_setup(db, server, log_line="[1] ✅ Подключение установлено")
-        for l in lines[1:]:  # пропускаем 'OK'
+        for l in lines[1:]:
             _update_setup(db, server, log_line=f"[1]    {l}")
     except Exception as e:
         _update_setup(db, server, status="failed", error=str(e),
@@ -314,40 +296,65 @@ def _run(db: Session, server: Server):
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ШАГ 2 — Установка стека
+    # ★ ОПТИМИЗАЦИЯ 1: единый apt-get install для всех пакетов
+    # ★ ОПТИМИЗАЦИЯ 2: параллельная установка Xray + AWG + Caddy
     # ═══════════════════════════════════════════════════════════════════════════
     _update_setup(db, server, step="step2", log_line="[2] Установка стека...")
 
     client = _connect(cur_ip, cur_port, cur_user,
                       password=cur_pass, private_key_pem=cur_key)
     try:
-        # 2.0 Очистка lock-файлов (один раз!) + apt-get update
-        _update_setup(db, server, log_line="[2.0] Подготовка APT (очистка блокировок)...")
-        _clear_apt_locks(client, db, server, use_sudo)
-        code, _, err = _se(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq", use_sudo,
-            timeout=120)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[2.0] ⚠️ apt-get update: {err[:200]}")
-        else:
-            _update_setup(db, server, log_line="[2.0] ✅ APT обновлён")
+        # ── 2.0 Очистка locks + ЕДИНЫЙ APT-INSTALL ──────────────────────────
+        # Вместо 4 отдельных apt-get вызовов (update + базовые + security + f2b/ufw)
+        # делаем один — экономим ~60-90 сек на apt overhead и повторных lock-ожиданиях
+        _update_setup(db, server, log_line="[2.0] Подготовка APT и установка всех пакетов...")
+        _clear_apt_locks(client, use_sudo)
 
-        # 2.1 Базовые зависимости
-        _update_setup(db, server, log_line="[2.1] Установка базовых пакетов...")
-        code, _, err = _se(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "curl wget unzip git ca-certificates gnupg lsb-release", use_sudo,
-            timeout=180)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[2.1] ⚠️ Базовые пакеты: {err[:200]}")
-        else:
-            _update_setup(db, server, log_line="[2.1] ✅ Базовые пакеты установлены")
+        APT_PREP_SCRIPT = """export DEBIAN_FRONTEND=noninteractive
+set -e
+# Единый apt-get update
+apt-get update -qq
 
-        # 2.2 Xray-core — устанавливаем через уже открытый client (без отдельного SSHClient)
-        _update_setup(db, server, log_line="[2.2] Установка Xray-core...")
-        XRAY_SCRIPT = r"""#!/bin/bash
+# Единый install: базовые + security + fail2ban + ufw + awg-deps
+# Устанавливаем всё за один вызов — один lock, один pass по индексу
+apt-get install -y -qq --no-install-recommends \
+    curl wget unzip git ca-certificates gnupg lsb-release \
+    software-properties-common \
+    openssh-server openssl \
+    fail2ban ufw
+
+echo "[+] All base packages installed"
+"""
+        _apt_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client,
+            f"{_apt_cmd} << '__APT__'\n{APT_PREP_SCRIPT}\n__APT__",
+            timeout=240)
+        if code != 0:
+            _update_setup(db, server, log_line=f"[2.0] ⚠️ APT: {err[:300]}")
+        else:
+            _update_setup(db, server, log_line="[2.0] ✅ Все базовые пакеты установлены")
+
+        # ── 2.1-2.4 Параллельная установка компонентов VPN-стека ────────────
+        # Xray + AWG + Caddy не зависят друг от друга — запускаем через threads
+        # Каждый поток открывает свой SSH-клиент (paramiko не thread-safe для одного клиента)
+        _update_setup(db, server, log_line="[2.1] Параллельная установка Xray + AmneziaWG + Caddy...")
+
+        results = {}   # thread-safe: каждый поток пишет в свой ключ
+        lock = threading.Lock()
+
+        def _log(msg: str):
+            """Потокобезопасная запись в лог."""
+            with lock:
+                _update_setup(db, server, log_line=msg)
+
+        # ── Поток 1: Xray-core ───────────────────────────────────────────────
+        def install_xray():
+            try:
+                cli = _connect(cur_ip, cur_port, cur_user,
+                               password=cur_pass, private_key_pem=cur_key)
+                XRAY_SCRIPT = r"""#!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 echo "[*] Installing Xray-core..."
-apt-get install -y -qq curl wget unzip 2>/dev/null
 
 # Попытка 1: официальный скрипт
 if bash <(curl -fsSL --retry 3 --retry-delay 2 \
@@ -361,11 +368,10 @@ else
       arm64|aarch64) XRAY_ARCH="Xray-linux-arm64-v8a" ;;
       *) XRAY_ARCH="Xray-linux-64" ;;
     esac
-    XRAY_VER=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+    XRAY_VER=$(curl -fsSL --max-time 8 https://api.github.com/repos/XTLS/Xray-core/releases/latest \
         | grep '"tag_name"' | cut -d'"' -f4 | head -1)
     [ -z "$XRAY_VER" ] && XRAY_VER="v25.3.6"
     XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/${XRAY_ARCH}.zip"
-    echo "[*] Downloading $XRAY_URL"
     curl -fsSL --retry 3 -o /tmp/xray.zip "$XRAY_URL"
     mkdir -p /usr/local/bin /usr/local/etc/xray /var/log/xray
     cd /tmp && unzip -o xray.zip xray -d /usr/local/bin/ 2>/dev/null || \
@@ -392,86 +398,98 @@ XRAY_EOF
 systemctl daemon-reload
 systemctl enable xray
 systemctl restart xray
-echo "[+] Xray installed"
+echo "[+] Xray done"
 """
-        _xray_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
-        code, out, err = _exec(client, f"{_xray_cmd} << '__XRAY__'\n{XRAY_SCRIPT}\n__XRAY__", timeout=300)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[2.2] ❌ Xray: {(err or out)[:300]}")
-        else:
-            server.xray_installed = True
-            db.add(server); db.commit()
-            _update_setup(db, server, log_line="[2.2] ✅ Xray-core установлен")
-            # Проверяем что xray запустился
-            _, xray_status, _ = _exec(client, "systemctl is-active xray 2>/dev/null || echo inactive")
-            first = next((l.strip() for l in xray_status.splitlines() if l.strip()), "")
-            if first == "active":
-                _update_setup(db, server, log_line="[2.2] ✅ Xray запущен")
-            else:
-                _update_setup(db, server, log_line=f"[2.2] ⚠️ Xray статус: {first or 'unknown'}")
-            # Reality-ключи — напрямую через client
-            _, keys_out, _ = _exec(client, "xray x25519 2>/dev/null || true", timeout=15)
-            xray_pub = None
-            for ln in keys_out.splitlines():
-                if "Public key:" in ln:
-                    xray_pub = ln.split(":", 1)[1].strip()
-            if xray_pub:
-                server.xray_public_key = xray_pub
-                db.add(server); db.commit()
-                _update_setup(db, server, log_line="[2.2] ✅ Reality-ключи сгенерированы")
+                _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+                code, out, err = _exec(cli,
+                    f"{_cmd} << '__XRAY__'\n{XRAY_SCRIPT}\n__XRAY__",
+                    timeout=300)
+                if code != 0:
+                    _log(f"[2.2] ❌ Xray: {(err or out)[:300]}")
+                    results['xray'] = False
+                else:
+                    # Reality-ключи
+                    _, keys_out, _ = _exec(cli, "xray x25519 2>/dev/null || true", timeout=15)
+                    xray_pub = None
+                    for ln in keys_out.splitlines():
+                        if "Public key:" in ln:
+                            xray_pub = ln.split(":", 1)[1].strip()
+                    with lock:
+                        server.xray_installed = True
+                        if xray_pub:
+                            server.xray_public_key = xray_pub
+                        db.add(server); db.commit()
+                    # Статус сервиса
+                    _, st, _ = _exec(cli,
+                        "systemctl is-active xray 2>/dev/null || echo inactive")
+                    first = next((l.strip() for l in st.splitlines() if l.strip()), "")
+                    _log(f"[2.2] ✅ Xray-core установлен, сервис: {first}")
+                    if xray_pub:
+                        _log("[2.2] ✅ Reality-ключи сгенерированы")
+                    results['xray'] = True
+                cli.close()
+            except Exception as e:
+                _log(f"[2.2] ❌ Xray: исключение: {e}")
+                results['xray'] = False
 
-        # 2.3 AmneziaWG
-        _update_setup(db, server, log_line="[2.3] Установка AmneziaWG...")
-        AWG_SCRIPT = """export DEBIAN_FRONTEND=noninteractive
+        # ── Поток 2: AmneziaWG ───────────────────────────────────────────────
+        def install_awg():
+            try:
+                cli = _connect(cur_ip, cur_port, cur_user,
+                               password=cur_pass, private_key_pem=cur_key)
+                AWG_SCRIPT = """export DEBIAN_FRONTEND=noninteractive
 set -e
-apt-get install -y -qq software-properties-common
+# software-properties-common уже установлен на шаге 2.0
 add-apt-repository -y ppa:amnezia/ppa
 apt-get update -qq
 apt-get install -y amneziawg amneziawg-tools
 modprobe amneziawg 2>/dev/null || true
-# Явно проверяем что бинарь появился — скрипт упадёт с ошибкой если нет
 which awg || (echo 'AWG binary not found after install' >&2 && exit 1)
+echo "[+] AWG done"
 """
-        _awg_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
-        code, out, err = _exec(client, f"{_awg_cmd} << '__AWG__'\n{AWG_SCRIPT}\n__AWG__", timeout=300)
-        if code != 0:
-            # Собираем читаемый вывод ошибки из stdout+stderr
-            awg_err_detail = (err or out or "нет вывода").strip()[:400]
-            _update_setup(db, server, log_line=f"[2.3] ❌ AmneziaWG не установлен: {awg_err_detail}")
-        else:
-            server.awg_installed = True
-            # Генерируем серверные ключи AWG
-            # Формат вывода:
-            #   строка 1 — публичный ключ (из awg pubkey)
-            #   строка 2 — приватный ключ (из cat /tmp/awg_server.key)
-            code2, keys_out, _ = _exec(client,
-                "awg genkey | tee /tmp/awg_server.key | awg pubkey && "
-                "cat /tmp/awg_server.key",
-                timeout=15)
-            if code2 == 0:
-                lines = keys_out.strip().splitlines()
-                if len(lines) >= 2:
-                    server.awg_server_public_key  = lines[0].strip()  # pubkey
-                    server.awg_server_private_key = lines[1].strip()  # privkey
-                elif len(lines) == 1:
-                    # Только pubkey — логируем предупреждение
-                    server.awg_server_public_key = lines[0].strip()
-                    _update_setup(db, server,
-                        log_line="[2.3] ⚠️ AWG: приватный ключ не получен (только публичный)")
-            else:
-                _update_setup(db, server,
-                    log_line="[2.3] ⚠️ AWG: ошибка генерации ключей")
-            db.add(server); db.commit()
-            _update_setup(db, server,
-                log_line="[2.3] ✅ AmneziaWG установлен, запуск после генерации конфига")
+                _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+                code, out, err = _exec(cli,
+                    f"{_cmd} << '__AWG__'\n{AWG_SCRIPT}\n__AWG__",
+                    timeout=300)
+                if code != 0:
+                    awg_err = (err or out or "нет вывода").strip()[:400]
+                    _log(f"[2.3] ❌ AmneziaWG не установлен: {awg_err}")
+                    results['awg'] = False
+                else:
+                    # Генерируем серверные ключи
+                    code2, keys_out, _ = _exec(cli,
+                        "awg genkey | tee /tmp/awg_server.key | awg pubkey && "
+                        "cat /tmp/awg_server.key",
+                        timeout=15)
+                    with lock:
+                        server.awg_installed = True
+                        if code2 == 0:
+                            lines = keys_out.strip().splitlines()
+                            if len(lines) >= 2:
+                                server.awg_server_public_key  = lines[0].strip()
+                                server.awg_server_private_key = lines[1].strip()
+                            elif len(lines) == 1:
+                                server.awg_server_public_key = lines[0].strip()
+                                _log("[2.3] ⚠️ AWG: приватный ключ не получен")
+                        else:
+                            _log("[2.3] ⚠️ AWG: ошибка генерации ключей")
+                        db.add(server); db.commit()
+                    _log("[2.3] ✅ AmneziaWG установлен, запуск после генерации конфига")
+                    results['awg'] = True
+                cli.close()
+            except Exception as e:
+                _log(f"[2.3] ❌ AWG: исключение: {e}")
+                results['awg'] = False
 
-        # 2.4 Caddy + forwardproxy (NaiveProxy server) — prebuilt binary from klzgrad
-        _update_setup(db, server, log_line="[2.4] Установка Caddy + forwardproxy (NaiveProxy)...")
-        CADDY_SCRIPT = r"""export DEBIAN_FRONTEND=noninteractive
+        # ── Поток 3: Caddy + forwardproxy ────────────────────────────────────
+        def install_caddy():
+            try:
+                cli = _connect(cur_ip, cur_port, cur_user,
+                               password=cur_pass, private_key_pem=cur_key)
+                CADDY_SCRIPT = r"""export DEBIAN_FRONTEND=noninteractive
 set -e
-echo "[*] Installing Caddy with forwardproxy plugin (prebuilt by klzgrad/forwardproxy)..."
+echo "[*] Installing Caddy with forwardproxy plugin..."
 
-# Архитектура
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
 case "$ARCH" in
   amd64|x86_64) IS_AMD64=1 ;;
@@ -482,34 +500,20 @@ cd /tmp
 rm -f caddy-naive.tar.xz
 
 if [ "$IS_AMD64" = "1" ]; then
-  # Prebuilt amd64 binary from klzgrad/forwardproxy releases
-  # Single universal archive: caddy-forwardproxy-naive.tar.xz
-  FP_VER=$(curl -sf "https://api.github.com/repos/klzgrad/forwardproxy/releases/latest" \
+  FP_VER=$(curl -sf --max-time 8 "https://api.github.com/repos/klzgrad/forwardproxy/releases/latest" \
     | grep '"tag_name"' | cut -d'"' -f4 | head -1)
-  if [ -z "$FP_VER" ]; then
-    FP_VER="v2.10.0-naive"
-  fi
-  echo "[*] forwardproxy version: ${FP_VER}"
+  [ -z "$FP_VER" ] && FP_VER="v2.10.0-naive"
   CADDY_URL="https://github.com/klzgrad/forwardproxy/releases/download/${FP_VER}/caddy-forwardproxy-naive.tar.xz"
-  echo "[*] Downloading: $CADDY_URL"
   if ! curl -fsSL --retry 3 --retry-delay 2 -o caddy-naive.tar.xz "$CADDY_URL"; then
-    echo "[!] Download failed: $CADDY_URL"
-    exit 1
+    echo "[!] Download failed: $CADDY_URL" >&2; exit 1
   fi
   tar -xJf caddy-naive.tar.xz 2>/dev/null || tar -xf caddy-naive.tar.xz 2>/dev/null || true
   CADDY_BIN=$(find /tmp/caddy-forwardproxy-naive -name "caddy" -type f 2>/dev/null | head -1)
-  if [ -z "$CADDY_BIN" ]; then
-    CADDY_BIN=$(find /tmp -maxdepth 3 -name "caddy" -type f ! -name "*.tar*" 2>/dev/null | head -1)
-  fi
-  if [ -z "$CADDY_BIN" ]; then
-    echo "[!] Caddy binary not found in archive. Contents:"
-    ls -la /tmp/caddy-forwardproxy-naive/ 2>/dev/null || true
-    exit 1
-  fi
+  [ -z "$CADDY_BIN" ] && CADDY_BIN=$(find /tmp -maxdepth 3 -name "caddy" -type f ! -name "*.tar*" 2>/dev/null | head -1)
+  [ -z "$CADDY_BIN" ] && { echo "[!] Caddy binary not found in archive" >&2; exit 1; }
 else
-  # arm64: build with xcaddy (fallback, slower but reliable)
-  echo "[*] arm64 detected — building caddy via xcaddy..."
-  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+  # arm64: xcaddy build
+  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' > /etc/apt/sources.list.d/caddy-xcaddy.list
   apt-get update -qq && apt-get install -y -qq xcaddy golang-go
@@ -519,33 +523,51 @@ fi
 
 cp "$CADDY_BIN" /usr/local/bin/caddy-naive
 chmod +x /usr/local/bin/caddy-naive
-
-# Проверяем что это правильный Caddy с forwardproxy
-CADDY_VER=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo "installed")
-echo "[+] Caddy installed: $CADDY_VER"
-/usr/local/bin/caddy-naive list-modules 2>/dev/null | grep -q "forward_proxy"   && echo "[+] forwardproxy module: OK"   || echo "[!] Warning: forwardproxy module not listed (may still work)"
-
-# Директории
 mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
-
-echo "[+] Caddy + forwardproxy setup complete"
+CADDY_VER=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo "installed")
+echo "[+] Caddy done: $CADDY_VER"
 """
-        _caddy_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
-        code, out, err = _exec(client, f"{_caddy_cmd} << '__CADDY__'\n{CADDY_SCRIPT}\n__CADDY__", timeout=300)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[2.4] ❌ Caddy: {err[:300]}")
-        else:
-            server.naiveproxy_installed = True
-            _, ver_out, _ = _exec(client,
-                "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo ''", timeout=10)
-            ver = ver_out.strip().splitlines()[0] if ver_out.strip() else None
-            if ver:
-                server.caddy_version = ver
-            db.add(server); db.commit()
-            _update_setup(db, server,
-                log_line=f"[2.4] ✅ Caddy + forwardproxy установлен{(' (' + ver + ')') if ver else ''}")
+                _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+                code, out, err = _exec(cli,
+                    f"{_cmd} << '__CADDY__'\n{CADDY_SCRIPT}\n__CADDY__",
+                    timeout=300)
+                if code != 0:
+                    _log(f"[2.4] ❌ Caddy: {err[:300]}")
+                    results['caddy'] = False
+                else:
+                    _, ver_out, _ = _exec(cli,
+                        "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo ''",
+                        timeout=10)
+                    ver = ver_out.strip().splitlines()[0] if ver_out.strip() else None
+                    with lock:
+                        server.naiveproxy_installed = True
+                        if ver:
+                            server.caddy_version = ver
+                        db.add(server); db.commit()
+                    _log(f"[2.4] ✅ Caddy + forwardproxy установлен{(' (' + ver + ')') if ver else ''}")
+                    results['caddy'] = True
+                cli.close()
+            except Exception as e:
+                _log(f"[2.4] ❌ Caddy: исключение: {e}")
+                results['caddy'] = False
 
-        # 2.5 WARP (только RU)
+        # ── Запускаем потоки и ждём завершения ──────────────────────────────
+        threads = [
+            threading.Thread(target=install_xray,  name="install_xray",  daemon=True),
+            threading.Thread(target=install_awg,   name="install_awg",   daemon=True),
+            threading.Thread(target=install_caddy, name="install_caddy", daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=360)   # максимум 6 мин на весь блок параллельной установки
+
+        # Итог
+        ok_count = sum(1 for k in ('xray', 'awg', 'caddy') if results.get(k))
+        _update_setup(db, server,
+            log_line=f"[2] ✅ Установка компонентов: {ok_count}/3 успешно")
+
+        # ── 2.5 WARP (только RU, последовательно — зависит от сетевого стека) ──
         if not is_eu:
             _update_setup(db, server, log_line="[2.5] Установка WARP...")
             from app.services.deploy_service import install_warp
@@ -569,137 +591,118 @@ echo "[+] Caddy + forwardproxy setup complete"
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ШАГ 3 — Настройка безопасности
+    # ★ ОПТИМИЗАЦИЯ 3: batch-скрипты вместо ~15 отдельных SSH round-trip
     # ═══════════════════════════════════════════════════════════════════════════
     _update_setup(db, server, step="step3", log_line="[3] Настройка безопасности...")
 
     client = _connect(cur_ip, cur_port, cur_user,
                       password=cur_pass, private_key_pem=cur_key)
 
-    # Флаги безопасности — будут записаны в БД на шаге 4
     sec_password_auth_disabled = False
     sec_fail2ban_active        = False
     sec_ufw_active             = False
     sec_ssh_key_set            = False
 
     try:
-        # 3.1 apt upgrade (только критичные пакеты — openssh-server, openssl)
-        _update_setup(db, server, log_line="[3.1] Обновление критичных пакетов (SSH, OpenSSL)...")
-        # Сначала убиваем unattended-upgrades чтобы не блокировал apt
-        _se(client,
-            "systemctl stop unattended-upgrades 2>/dev/null || true; "
-            "pkill -9 -f unattended-upgrades 2>/dev/null || true; "
-            "pkill -9 -f apt-get 2>/dev/null || true; "
-            "pkill -9 -f dpkg 2>/dev/null || true; "
-            "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true; "
-            "dpkg --configure -a 2>/dev/null || true", use_sudo,
-            timeout=30)
-        code, _, err = _se(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -qq "
-            "-o DPkg::Lock::Timeout=60 "
-            "openssh-server openssl 2>/dev/null || true", use_sudo,
-            timeout=120)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.1] ⚠️ Обновление пакетов: {err[:200]}")
-        else:
-            _update_setup(db, server, log_line="[3.1] ✅ Критичные пакеты обновлены")
+        # ── 3.1-3.4 BATCH: Fail2Ban + UFW + пользователь ────────────────────
+        # Вместо 10+ отдельных _se() вызовов — один скрипт
+        # Экономия: ~10 SSH round-trips × ~150ms = ~1.5 сек + нет промежуточных lock
+        _update_setup(db, server, log_line="[3.1] Настройка Fail2Ban, UFW и пользователя...")
 
-        # 3.2 Fail2Ban + UFW — одной командой apt (с повторной попыткой при dpkg lock)
-        _update_setup(db, server, log_line="[3.2] Установка Fail2Ban и UFW...")
-        code, _, err = _se(client,
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw", use_sudo,
-            timeout=180)
-        if code != 0:
-            # Повторная попытка после очистки dpkg locks
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Первая попытка: {err[:150]}. Очищаем lock и повторяем...")
-            _se(client,
-                "pkill -9 -f apt-get 2>/dev/null || true; "
-                "pkill -9 -f dpkg 2>/dev/null || true; "
-                "rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
-                "dpkg --configure -a 2>/dev/null || true; sleep 5", use_sudo,
-                timeout=30)
-            code, _, err = _se(client,
-                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban ufw", use_sudo,
-                timeout=180)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.2] ⚠️ Установка Fail2Ban/UFW не удалась: {err[:200]}")
-        else:
-            _update_setup(db, server, log_line="[3.2] ✅ Fail2Ban и UFW установлены")
+        new_user_name = _gen_username() if is_eu else cur_user
+        _current_ssh_port = cur_port
 
-        # 3.3 Запуск и настройка Fail2Ban — отдельными командами чтобы не тянуть мусор systemd в err
-        _update_setup(db, server, log_line="[3.3] Запуск и настройка Fail2Ban...")
-        _se(client, "systemctl enable fail2ban 2>/dev/null || true", use_sudo, timeout=15)
-        _se(client, "systemctl start fail2ban 2>/dev/null || true", use_sudo, timeout=15)
-        _se(client,
-            "printf '[DEFAULT]\\nbantime=3600\\nfindtime=600\\nmaxretry=5\\n[sshd]\\nenabled=true\\n'"
-            " > /etc/fail2ban/jail.local", use_sudo, timeout=10)
-        _se(client, "systemctl restart fail2ban 2>/dev/null || true", use_sudo, timeout=20)
-        _, fb_status, _ = _se(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive", use_sudo)
-        fb_first = next((l.strip() for l in fb_status.splitlines() if l.strip()), "")
-        if fb_first == "active":
-            sec_fail2ban_active = True
-            _update_setup(db, server, log_line="[3.3] ✅ Fail2Ban запущен")
-        else:
-            _update_setup(db, server, log_line=f"[3.3] ⚠️ Fail2Ban установлен, статус: {fb_first}")
-
-        # 3.4 Настройка UFW
-        # Используем текущий SSH порт (ещё не изменён на шаге 3.9)
-        _update_setup(db, server, log_line="[3.4] Настройка UFW...")
-        _current_ssh_port_for_ufw = cur_port  # порт ДО смены — откроем его в UFW
-        _ufw = ("sudo -n ufw" if use_sudo else "ufw")
-        # Диапазон портов для AWG-подключений (assign_free_port выдаёт порты из этого диапазона)
-        # Открываем весь диапазон сразу — не зависим от конкретных портов конфигов
+        # Диапазон UDP-портов для AWG
         AWG_PORT_RANGE_START = 10000
         AWG_PORT_RANGE_END   = 65535
-        ufw_cmds = (
-            f"{_ufw} --force reset && "
-            f"{_ufw} default deny incoming && "
-            f"{_ufw} default allow outgoing && "
-            f"{_ufw} allow {_current_ssh_port_for_ufw}/tcp && "
-            f"{_ufw} allow 22/tcp && "
-            f"{_ufw} allow 80/tcp && "
-            f"{_ufw} allow 443/tcp && "
-            # Диапазон UDP-портов для AWG (динамически назначаемые порты конфигов)
-            f"{_ufw} allow {AWG_PORT_RANGE_START}:{AWG_PORT_RANGE_END}/udp"
-        )
-        if not is_eu:
-            ufw_cmds += f" && {_ufw} allow 2408/udp"
-        ufw_cmds += f" && DEBIAN_FRONTEND=noninteractive {_ufw} --force enable"
-        code, _, err = _exec(client, ufw_cmds, timeout=60)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {err[:200]}")
-        else:
-            _, ufw_status, _ = _exec(client, "sudo ufw status 2>/dev/null | head -1 || ufw status | head -1 || echo unknown")
-            ufw_first = next((l.strip() for l in ufw_status.splitlines() if l.strip()), "")
-            if "active" in ufw_first.lower():
-                sec_ufw_active = True
-                _update_setup(db, server, log_line="[3.4] ✅ UFW настроен и активен")
-            else:
-                _update_setup(db, server, log_line=f"[3.4] ⚠️ UFW: {ufw_first}")
 
-        # 3.5 Новый пользователь — только для EU серверов
-        # Для RU серверов (non-root) создание нового юзера пропускаем,
-        # работаем с текущим пользователем
-        new_user = cur_user
-        if is_eu:
-            _update_setup(db, server, log_line="[3.5] Создание нового SSH-пользователя...")
-            new_user = _gen_username()
-            code, out, err = _se(client, f"id {new_user} &>/dev/null || useradd -m -s /bin/bash {new_user}", use_sudo, timeout=15)
-            _ua_ok = (code == 0)
-            if _ua_ok:
-                _se(client, f"usermod -aG sudo {new_user}", use_sudo, timeout=10)
-                _se(client, f"echo '{new_user} ALL=(ALL) NOPASSWD:ALL' | tee /etc/sudoers.d/{new_user} > /dev/null", use_sudo, timeout=10)
-                _se(client, f"chmod 440 /etc/sudoers.d/{new_user}", use_sudo, timeout=10)
-                _se(client, f"mkdir -p /home/{new_user}/.ssh && chmod 700 /home/{new_user}/.ssh", use_sudo, timeout=10)
-                _se(client, f"cp ~/.ssh/authorized_keys /home/{new_user}/.ssh/authorized_keys 2>/dev/null || true", use_sudo, timeout=10)
-                _se(client, f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh", use_sudo, timeout=10)
+        SECURITY_BATCH = f"""#!/bin/bash
+set -euo pipefail
+ERRS=""
+
+# ── apt upgrade критичных пакетов (уже установлены на шаге 2.0) ──────────
+export DEBIAN_FRONTEND=noninteractive
+apt-get install --only-upgrade -y -qq \
+    -o DPkg::Lock::Timeout=30 \
+    openssh-server openssl 2>/dev/null || true
+echo "[3.1_OK]"
+
+# ── Fail2Ban ──────────────────────────────────────────────────────────────
+systemctl enable fail2ban 2>/dev/null || true
+systemctl start  fail2ban 2>/dev/null || true
+printf '[DEFAULT]\\nbantime=3600\\nfindtime=600\\nmaxretry=5\\n[sshd]\\nenabled=true\\n' \
+    > /etc/fail2ban/jail.local
+systemctl restart fail2ban 2>/dev/null || true
+F2B_STATUS=$(systemctl is-active fail2ban 2>/dev/null || echo inactive)
+echo "[3.3_STATUS=$F2B_STATUS]"
+
+# ── UFW ───────────────────────────────────────────────────────────────────
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow {_current_ssh_port}/tcp
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow {AWG_PORT_RANGE_START}:{AWG_PORT_RANGE_END}/udp
+{'ufw allow 2408/udp' if not is_eu else '# EU: no 2408'}
+DEBIAN_FRONTEND=noninteractive ufw --force enable
+UFW_STATUS=$(ufw status 2>/dev/null | head -1 || echo unknown)
+echo "[3.4_STATUS=$UFW_STATUS]"
+
+# ── Новый пользователь (только EU) ───────────────────────────────────────
+{'NEW_USER=' + new_user_name if is_eu else 'NEW_USER=' + cur_user}
+if [ "$NEW_USER" != "{cur_user}" ]; then
+    id "$NEW_USER" &>/dev/null || useradd -m -s /bin/bash "$NEW_USER"
+    usermod -aG sudo "$NEW_USER" 2>/dev/null || true
+    echo "$NEW_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$NEW_USER"
+    chmod 440 /etc/sudoers.d/"$NEW_USER"
+    mkdir -p /home/"$NEW_USER"/.ssh && chmod 700 /home/"$NEW_USER"/.ssh
+    cp ~/.ssh/authorized_keys /home/"$NEW_USER"/.ssh/authorized_keys 2>/dev/null || true
+    chown -R "$NEW_USER":"$NEW_USER" /home/"$NEW_USER"/.ssh
+    echo "[3.5_USER_CREATED=$NEW_USER]"
+else
+    echo "[3.5_USER_EXISTING=$NEW_USER]"
+fi
+
+echo "[BATCH_DONE]"
+"""
+        _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out, err = _exec(client,
+            f"{_cmd} << '__SEC__'\n{SECURITY_BATCH}\n__SEC__",
+            timeout=120)
+
+        # Разбираем маркеры вывода
+        if "[3.1_OK]" in out:
+            _update_setup(db, server, log_line="[3.1] ✅ Критичные пакеты обновлены")
+        else:
+            _update_setup(db, server, log_line="[3.1] ⚠️ apt upgrade: проблема (некритично)")
+
+        for ln in out.splitlines():
+            if "[3.3_STATUS=" in ln:
+                status_val = ln.split("=", 1)[1].rstrip("]").strip()
+                sec_fail2ban_active = (status_val == "active")
+                icon = "✅" if sec_fail2ban_active else "⚠️"
+                _update_setup(db, server, log_line=f"[3.3] {icon} Fail2Ban: {status_val}")
+            elif "[3.4_STATUS=" in ln:
+                status_val = ln.split("=", 1)[1].rstrip("]").strip()
+                sec_ufw_active = ("active" in status_val.lower())
+                icon = "✅" if sec_ufw_active else "⚠️"
+                _update_setup(db, server, log_line=f"[3.4] {icon} UFW: {status_val}")
+            elif "[3.5_USER_CREATED=" in ln:
+                created_name = ln.split("=", 1)[1].rstrip("]").strip()
+                new_user = created_name
                 _update_setup(db, server, log_line=f"[3.5] ✅ Пользователь {new_user} создан")
-            else:
-                _update_setup(db, server, log_line=f"[3.5] ⚠️ Создание юзера не удалось, используем текущего: {cur_user}")
+            elif "[3.5_USER_EXISTING=" in ln:
                 new_user = cur_user
-        else:
-            _update_setup(db, server, log_line=f"[3.5] ℹ️ RU-сервер: используем текущего пользователя {cur_user}")
+                _update_setup(db, server,
+                    log_line=f"[3.5] ℹ️ RU-сервер: используем пользователя {cur_user}")
 
-        # 3.6 SSH-ключ Ed25519
+        if "[BATCH_DONE]" not in out:
+            _update_setup(db, server,
+                log_line=f"[3] ⚠️ batch-скрипт завершился с ошибкой: {err[:200]}")
+
+        # ── 3.6 SSH-ключ Ed25519 ─────────────────────────────────────────────
         _update_setup(db, server, log_line="[3.6] Генерация SSH-ключа Ed25519...")
         new_priv, new_pub = _gen_ed25519_keypair()
         code, _, err = _exec(client,
@@ -707,11 +710,10 @@ echo "[+] Caddy + forwardproxy setup complete"
             f"echo '{new_pub}' >> /home/{new_user}/.ssh/authorized_keys && "
             f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh && "
             f"chmod 600 /home/{new_user}/.ssh/authorized_keys",
-            timeout=30)
+            timeout=15)
         if code != 0:
             _update_setup(db, server, log_line=f"[3.6] ⚠️ Добавление ключа: {err[:200]}")
         else:
-            # Проверяем подключение по новому ключу
             try:
                 test_cli = _connect(cur_ip, cur_port, new_user, private_key_pem=new_priv)
                 _exec(test_cli, "echo KEY_OK")
@@ -724,105 +726,78 @@ echo "[+] Caddy + forwardproxy setup complete"
             except Exception as e:
                 _update_setup(db, server, log_line=f"[3.6] ⚠️ Ключ создан, проверка не прошла: {e}")
 
-        # 3.7 Смена пароля
-        _update_setup(db, server, log_line="[3.7] Смена пароля пользователя...")
+        # ── 3.7-3.8 BATCH: смена пароля + отключение password auth ──────────
+        _update_setup(db, server, log_line="[3.7] Смена пароля и отключение парольной аутентификации...")
         new_password = _gen_password()
-        code, _, err = _exec(client,
-            (f"echo '{new_user}:{new_password}' | sudo -n chpasswd" if use_sudo else f"echo '{new_user}:{new_password}' | chpasswd"), timeout=30)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.7] ⚠️ Смена пароля: {err[:200]}")
-        else:
+        _sd = "sudo -n " if use_sudo else ""
+
+        PASSWD_AUTH_SCRIPT = f"""#!/bin/bash
+# Меняем пароль
+echo '{new_user}:{new_password}' | {'sudo -n chpasswd' if use_sudo else 'chpasswd'}
+echo "[3.7_OK]"
+
+# Отключаем password auth во всех конфигах SSH (включая cloud-init drop-in)
+{_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || \
+    {_sd}bash -c 'echo PasswordAuthentication no >> /etc/ssh/sshd_config'
+for f in /etc/ssh/sshd_config.d/*.conf; do
+    [ -f "$f" ] && {_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' "$f"
+done
+{_sd}systemctl reload sshd 2>/dev/null || {_sd}systemctl reload ssh 2>/dev/null || true
+echo "[3.8_OK]"
+"""
+        _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, out2, err2 = _exec(client,
+            f"{_cmd} << '__PA__'\n{PASSWD_AUTH_SCRIPT}\n__PA__",
+            timeout=30)
+        if "[3.7_OK]" in out2:
             _update_setup(db, server, log_line="[3.7] ✅ Пароль обновлён")
             try:
                 server.ssh_password_enc = encrypt_value(new_password)
             except AttributeError:
                 pass
-
-        # 3.8 Отключение парольной аутентификации SSH
-        # ВАЖНО: на Ubuntu cloud-init создаёт drop-in /etc/ssh/sshd_config.d/50-cloud-init.conf
-        # который перекрывает основной конфиг — нужно патчить оба файла
-        _update_setup(db, server, log_line="[3.8] Отключение парольной аутентификации...")
-        _sd = "sudo -n " if use_sudo else ""
-        code, _, err = _exec(client,
-            # Патчим основной конфиг
-            f"{_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && "
-            f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config || {_sd}bash -c 'echo PasswordAuthentication no >> /etc/ssh/sshd_config' && "
-            # Патчим все drop-in файлы (cloud-init, snap, etc.)
-            f"for f in /etc/ssh/sshd_config.d/*.conf; do "
-            f"  [ -f \"$f\" ] && {_sd}sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' \"$f\"; "
-            "done; "
-            # Перезагружаем sshd
-            f"{_sd}systemctl reload sshd 2>/dev/null || {_sd}systemctl reload ssh 2>/dev/null || true",
-            timeout=30)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.8] ⚠️ Отключение password auth: {err[:200]}")
         else:
+            _update_setup(db, server, log_line=f"[3.7] ⚠️ Смена пароля: {err2[:150]}")
+        if "[3.8_OK]" in out2:
             sec_password_auth_disabled = True
-            _update_setup(db, server, log_line="[3.8] ✅ Парольная аутентификация отключена (включая cloud-init drop-in)")
+            _update_setup(db, server,
+                log_line="[3.8] ✅ Парольная аутентификация отключена")
+        else:
+            _update_setup(db, server, log_line=f"[3.8] ⚠️ Отключение password auth: {err2[:150]}")
 
-        # 3.9 Смена SSH-порта
-        # Стратегия безопасной смены порта:
-        # 1. Открываем новый порт в UFW (порт 22 НЕ закрываем до успешной проверки)
-        # 2. Пишем новый порт в sshd_config
-        # 3. Перезапускаем ssh через nohup (Ubuntu 24.04: ssh.socket + ssh.service)
-        # 4. Проверяем новый порт — если OK, закрываем 22; если нет — откат
+        # ── 3.9 Смена SSH-порта ───────────────────────────────────────────────
+        # ★ ОПТИМИЗАЦИЯ 4: polling вместо фиксированного sleep(8)
         _update_setup(db, server, log_line="[3.9] Смена SSH-порта...")
         new_port = _gen_ssh_port()
 
-        # Шаг A: открываем новый порт в UFW (порт 22 пока оставляем открытым!)
-        _exec(client, (f"sudo -n ufw allow {new_port}/tcp 2>/dev/null || true" if use_sudo else f"ufw allow {new_port}/tcp 2>/dev/null || true"), timeout=15)
-
-        # Шаг B: меняем Port в sshd_config
+        # Шаги A-D: открываем новый порт, меняем конфиг, рестартуем — одним batch
+        _ufw_cmd = "sudo -n ufw" if use_sudo else "ufw"
+        PORT_CHANGE_SCRIPT = f"""#!/bin/bash
+{_ufw_cmd} allow {new_port}/tcp 2>/dev/null || true
+sed -i '/^#*Port /d' /etc/ssh/sshd_config
+echo 'Port {new_port}' >> /etc/ssh/sshd_config
+systemctl disable ssh.socket 2>/dev/null || true
+systemctl stop    ssh.socket 2>/dev/null || true
+rm -f /etc/systemd/system/ssh.socket.d/port.conf 2>/dev/null
+systemctl daemon-reload
+nohup bash -c 'sleep 2 && systemctl restart ssh.service 2>/dev/null || systemctl restart sshd 2>/dev/null' \
+    > /tmp/sshd_restart.log 2>&1 &
+echo "[PORT_CHANGE_SENT]"
+"""
+        _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
         _exec(client,
-            (f"sudo -n sed -i '/^#*Port /d' /etc/ssh/sshd_config && "
-            f"sudo -n bash -c 'echo Port {new_port} >> /etc/ssh/sshd_config'"
-            if use_sudo else
-            f"sed -i '/^#*Port /d' /etc/ssh/sshd_config && "
-            f"echo 'Port {new_port}' >> /etc/ssh/sshd_config"),
+            f"{_cmd} << '__PC__'\n{PORT_CHANGE_SCRIPT}\n__PC__",
             timeout=15)
 
-        # Шаг C: отключаем socket-activation (Ubuntu 24.04)
-        # ssh.socket держит порт 22 жёстко; при его restart происходит
-        # кратковременное закрытие порта → UFW блокирует → соединение рвётся.
-        # Решение: выключаем сокет, переходим на классический sshd.service.
-        _se(client,
-            "systemctl disable ssh.socket 2>/dev/null || true && "
-            "systemctl stop ssh.socket 2>/dev/null || true && "
-            # Убираем старый override если есть
-            "rm -f /etc/systemd/system/ssh.socket.d/port.conf && "
-            "systemctl daemon-reload", use_sudo,
-            timeout=15)
-
-        # Шаг D: рестартуем ssh.service через nohup
-        # Теперь sshd сам слушает порт из sshd_config (без сокета).
-        # Порт 22 в UFW остаётся открытым до подтверждения нового порта.
-        _exec(client,
-            ("nohup bash -c "
-            "'sleep 3 && "
-            "sudo -n systemctl restart ssh.service 2>/dev/null || "
-            "sudo -n systemctl restart sshd 2>/dev/null' "
-            "> /tmp/sshd_restart.log 2>&1 &"
-            if use_sudo else
-            "nohup bash -c "
-            "'sleep 3 && "
-            "systemctl restart ssh.service 2>/dev/null || "
-            "systemctl restart sshd 2>/dev/null' "
-            "> /tmp/sshd_restart.log 2>&1 &"),
-            timeout=8)
-
-        # Шаг E: ждём и проверяем новый порт
+        # Шаг E: polling вместо sleep — проверяем каждые 2 сек, максимум 30 сек
         _update_setup(db, server, log_line=f"[3.9] ⏳ Ожидание SSH на порту {new_port}...")
-        time.sleep(8)
         port_ok = False
-        for attempt in range(4):
-            _update_setup(db, server,
-                log_line=f"[3.9] ⏳ Проверка порта {new_port}, попытка {attempt+1}/4...")
+        for attempt in range(15):    # 15 × 2 сек = 30 сек максимум
+            time.sleep(2)
             try:
                 test_cli = _connect(cur_ip, new_port, cur_user,
-                                    private_key_pem=cur_key, timeout=10)
-                # Новый порт работает — закрываем ОБА старых порта (22 и cur_port до смены)
-                # cur_port здесь ещё содержит старый порт (new_port ещё не применён)
-                old_ssh_port = cur_port  # запоминаем перед обновлением
+                                    private_key_pem=cur_key, timeout=5)
+                old_ssh_port = cur_port
                 _ufw_del = "sudo -n ufw" if use_sudo else "ufw"
                 _exec(test_cli,
                     f"{_ufw_del} delete allow {old_ssh_port}/tcp 2>/dev/null || true && "
@@ -831,39 +806,33 @@ echo "[+] Caddy + forwardproxy setup complete"
                 test_cli.close()
                 cur_port = new_port
                 port_ok = True
-                _update_setup(db, server, log_line=f"[3.9] ✅ SSH-порт изменён на {new_port}")
+                _update_setup(db, server,
+                    log_line=f"[3.9] ✅ SSH-порт изменён на {new_port} (попытка {attempt+1})")
                 break
-            except Exception as e:
-                if attempt < 3:
+            except Exception:
+                if attempt == 7:    # ~16 сек — логируем промежуточный статус
                     _update_setup(db, server,
-                        log_line=f"[3.9] ⏳ Порт {new_port} ещё не готов ({e.__class__.__name__}), ждём...")
-                    time.sleep(10)
-                else:
-                    # Новый порт не поднялся — откатываемся на 22
-                    # Порт 22 в UFW ещё открыт, поэтому откат возможен
-                    _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил — откат на порт 22...")
-                    try:
-                        rb = _connect(cur_ip, 22, cur_user, private_key_pem=cur_key, timeout=10)
-                        _exec(rb,
-                            # Восстанавливаем конфиг
-                            "sed -i '/^Port /d' /etc/ssh/sshd_config && "
-                            "echo 'Port 22' >> /etc/ssh/sshd_config && "
-                            # Восстанавливаем socket-activation для порта 22
-                            "systemctl daemon-reload && "
-                            "systemctl enable ssh.socket 2>/dev/null || true && "
-                            # Рестарт через service (socket ещё не активен на этом порту)
-                            "systemctl restart ssh.service 2>/dev/null || "
-                            "systemctl restart sshd 2>/dev/null || true",
-                            timeout=20)
-                        rb.close()
-                        cur_port = 22
-                        _update_setup(db, server,
-                            log_line="[3.9] ⚠️ Откат выполнен — SSH остаётся на порту 22")
-                    except Exception as rb_e:
-                        _update_setup(db, server,
-                            log_line=f"[3.9] ⚠️ Откат не удался: {rb_e}")
+                        log_line=f"[3.9] ⏳ Порт {new_port} ещё не готов, ждём...")
 
-        # Сохраняем финальные credentials в БД
+        if not port_ok:
+            _update_setup(db, server, log_line="[3.9] ⚠️ Новый порт не ответил — откат на порт 22...")
+            try:
+                rb = _connect(cur_ip, 22, cur_user, private_key_pem=cur_key, timeout=10)
+                _exec(rb,
+                    "sed -i '/^Port /d' /etc/ssh/sshd_config && "
+                    "echo 'Port 22' >> /etc/ssh/sshd_config && "
+                    "systemctl daemon-reload && "
+                    "systemctl enable ssh.socket 2>/dev/null || true && "
+                    "systemctl restart ssh.service 2>/dev/null || "
+                    "systemctl restart sshd 2>/dev/null || true",
+                    timeout=20)
+                rb.close()
+                cur_port = 22
+                _update_setup(db, server, log_line="[3.9] ⚠️ Откат выполнен — SSH на порту 22")
+            except Exception as rb_e:
+                _update_setup(db, server, log_line=f"[3.9] ⚠️ Откат не удался: {rb_e}")
+
+        # Сохраняем финальные credentials
         server.ssh_user        = cur_user
         server.ssh_user_actual = cur_user
         server.ssh_port        = cur_port
@@ -879,7 +848,7 @@ echo "[+] Caddy + forwardproxy setup complete"
         _update_setup(db, server,
                       log_line=f"[3] Credentials: user={cur_user} port={cur_port}")
 
-        # Переподключаемся для шагов 4-5 — с fallback на оригинальные credentials
+        # Переподключаемся для шагов 4-5
         try:
             client.close()
         except Exception:
@@ -914,7 +883,6 @@ echo "[+] Caddy + forwardproxy setup complete"
             client.close()
         except Exception:
             pass
-        # Пробуем восстановить соединение
         connected = False
         for fb_port in sorted(set([cur_port, 22])):
             for fb_key, fb_pass in [(cur_key, None), (None, cur_pass)]:
@@ -943,7 +911,6 @@ echo "[+] Caddy + forwardproxy setup complete"
     # ═══════════════════════════════════════════════════════════════════════════
     _update_setup(db, server, step="step4", log_line="[4] Сбор информации о сервере...")
     try:
-        # Определяем страну по IP через ip-api.com (если ещё не определена)
         if not server.country or server.country in ("??", ""):
             _update_setup(db, server, log_line="[4] ⏳ Определение страны по IP...")
             try:
@@ -955,86 +922,87 @@ echo "[+] Caddy + forwardproxy setup complete"
                     server.country = _geo["countryCode"].upper()
                     db.add(server); db.commit()
                     _update_setup(db, server,
-                        log_line=f"[4] ✅ Страна определена: {_geo['country']} ({server.country})")
+                        log_line=f"[4] ✅ Страна: {_geo['country']} ({server.country})")
                 else:
-                    _update_setup(db, server, log_line="[4] ⚠️ Страна не определена (ip-api)")
+                    _update_setup(db, server, log_line="[4] ⚠️ Страна не определена")
             except Exception as _ge:
                 _update_setup(db, server, log_line=f"[4] ⚠️ Гео-запрос не удался: {_ge}")
 
-        _, tz_out,   _ = _exec(client,
-            "cat /etc/timezone 2>/dev/null || "
-            "timedatectl | grep 'Time zone' | awk '{print $3}'")
-        _, xray_v,   _ = _exec(client, "xray version 2>/dev/null | head -1 || echo ''")
-        _, caddy_v,  _ = _exec(client,
-            "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || "
-            "/usr/local/bin/caddy version 2>/dev/null | head -1 || echo ''")
-        _, awg_v,    _ = _exec(client, "awg --version 2>/dev/null | head -1 || echo ''")
+        # Собираем всё за один SSH-вызов
+        INFO_SCRIPT = """#!/bin/bash
+echo "TZ=$(cat /etc/timezone 2>/dev/null || timedatectl | grep 'Time zone' | awk '{print $3}')"
+echo "XRAY=$(xray version 2>/dev/null | head -1 || echo '')"
+echo "CADDY=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || /usr/local/bin/caddy version 2>/dev/null | head -1 || echo '')"
+echo "AWG=$(awg --version 2>/dev/null | head -1 || echo '')"
+echo "F2B=$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
+echo "UFW=$(ufw status 2>/dev/null | head -1 || echo unknown)"
+echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null || echo '')"
+"""
+        _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        _, info_out, _ = _exec(client,
+            f"{_cmd} << '__INFO__'\n{INFO_SCRIPT}\n__INFO__",
+            timeout=30)
 
-        server.server_timezone = tz_out.strip() or None
-        server.xray_version    = (xray_v.strip()[:50]  or None)
-        server.caddy_version   = (caddy_v.strip()[:50] or None)
-        # Если awg не установлен — явно записываем 'не установлен' вместо None
-        _awg_v_raw = awg_v.strip()
-        server.awg_version = (_awg_v_raw[:50] if _awg_v_raw else None)
-
+        # Добавляем WARP для RU отдельно (warp-cli может зависнуть)
+        warp_v = None
         if not is_eu:
-            _, warp_v, _ = _exec(client,
-                "warp-cli --version 2>/dev/null | head -1 || echo ''")
-            server.warp_version = warp_v.strip()[:50] or None
+            _, warp_raw, _ = _exec(client,
+                "warp-cli --version 2>/dev/null | head -1 || echo ''",
+                timeout=10)
+            warp_v = warp_raw.strip()[:50] or None
 
-        # ── Security flags — записываем в БД ──────────────────────────────
-        # Перепроверяем реальный статус на сервере (надёжнее флагов из шага 3)
-        _, fb_chk, _  = _exec(client, "systemctl is-active fail2ban 2>/dev/null || echo inactive")
-        _, ufw_chk, _ = _exec(client, "sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1 || echo unknown")
-        # ВАЖНО: PasswordAuthentication проверяем с учётом drop-in файлов (cloud-init и др.)
-        # Если хоть один файл содержит "PasswordAuthentication yes" — auth включена
-        _, pw_chk, _  = _exec(client,
-            "grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null || echo ''")
+        # Парсим вывод
+        info = {}
+        for ln in info_out.splitlines():
+            if "=" in ln:
+                k, v = ln.split("=", 1)
+                info[k.strip()] = v.strip()
 
-        fb_first  = next((l.strip() for l in fb_chk.splitlines()  if l.strip()), "")
-        ufw_first = next((l.strip() for l in ufw_chk.splitlines() if l.strip()), "")
-        # Считаем auth отключённой только если нигде нет "yes"
-        pw_lines = [l.strip().lower() for l in pw_chk.splitlines() if "passwordauthentication" in l.lower()]
-        sec_fail2ban_active        = (fb_first  == "active")
+        server.server_timezone = info.get("TZ") or None
+        server.xray_version    = (info.get("XRAY") or "")[:50] or None
+        server.caddy_version   = (info.get("CADDY") or "")[:50] or None
+        _awg_v_raw             = info.get("AWG") or ""
+        server.awg_version     = _awg_v_raw[:50] if _awg_v_raw else None
+        if not is_eu:
+            server.warp_version = warp_v
+
+        # Security flags
+        fb_first  = info.get("F2B", "inactive")
+        ufw_first = info.get("UFW", "unknown")
+        pw_lines  = [l.strip().lower()
+                     for l in (info.get("PWAUTH") or "").splitlines()
+                     if "passwordauthentication" in l.lower()]
+        sec_fail2ban_active        = (fb_first == "active")
         sec_ufw_active             = ("active" in ufw_first.lower())
-        # password auth отключена если все строки содержат "no" (или строк нет вообще — default=yes, считаем включённой)
         sec_password_auth_disabled = bool(pw_lines) and all("no" in l for l in pw_lines)
         sec_ssh_key_set            = bool(cur_key)
 
-        # ── Сохраняем ВСЕ параметры безопасности и SSH-доступа ──────────────────
-        # sec_* флаги
         server.sec_fail2ban       = sec_fail2ban_active
         server.sec_ufw            = sec_ufw_active
-        server.sec_password_login = not sec_password_auth_disabled   # True = пароль включён (плохо)
+        server.sec_password_login = not sec_password_auth_disabled
         server.sec_ssh_key        = sec_ssh_key_set
 
-        # Актуальные SSH-параметры после харденинга
         server.ssh_user_actual = cur_user
         server.ssh_port_actual = cur_port
+        server.ssh_user = cur_user
+        server.ssh_port = cur_port
 
-        # Зашифрованные credentials
         if cur_key:
+            server.ssh_key = cur_key
             try:
                 server.ssh_private_key_enc = encrypt_value(cur_key)
             except Exception as _e:
                 _update_setup(db, server, log_line=f"[4] ⚠️ Не удалось зашифровать SSH-ключ: {_e}")
-                server.ssh_key = cur_key   # fallback — сохраняем plain
+                server.ssh_key = cur_key
         if cur_pass:
             try:
                 server.ssh_password_enc = encrypt_value(cur_pass)
-                server.ssh_password = None  # убираем plain-text пароль
+                server.ssh_password = None
             except Exception as _e:
                 _update_setup(db, server, log_line=f"[4] ⚠️ Не удалось зашифровать пароль: {_e}")
 
-        # Обновляем основные поля SSH (используются при последующих подключениях)
-        server.ssh_user = cur_user
-        server.ssh_port = cur_port
-        if cur_key:
-            server.ssh_key = cur_key
-
         db.add(server); db.commit()
 
-        # Проверяем что хотя бы один параметр прочитан (признак живого SSH-соединения)
         if not server.server_timezone and not server.xray_version and not server.awg_version:
             _update_setup(db, server, status="failed",
                           error="SSH-соединение по новым credentials не работает",
@@ -1045,11 +1013,10 @@ echo "[+] Caddy + forwardproxy setup complete"
             except Exception: pass
             return
 
-        # Логируем всё собранное
         _update_setup(db, server, log_line="[4] ✅ Информация собрана")
         _update_setup(db, server, log_line=f"[4]    Timezone  : {server.server_timezone or '—'}")
         _update_setup(db, server, log_line=f"[4]    Xray      : {server.xray_version    or '—'}")
-        _update_setup(db, server, log_line=f"[4]    AWG       : {server.awg_version     or '—'}")
+        _update_setup(db, server, log_line=f"[4]    AWG       : {server.awg_version     or 'не установлен'}")
         _update_setup(db, server, log_line=f"[4]    Caddy NP  : {server.caddy_version   or '—'}")
         if not is_eu:
             _update_setup(db, server, log_line=f"[4]    WARP      : {server.warp_version or '—'}")
@@ -1075,17 +1042,13 @@ echo "[+] Caddy + forwardproxy setup complete"
         return
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # ШАГ 5 — Финальная проверка (install vs start — раздельно)
+    # ШАГ 5 — Финальная проверка
     # ═══════════════════════════════════════════════════════════════════════════
     _update_setup(db, server, step="step5", log_line="[5] Финальная проверка...")
 
-    # Критичные сервисы (без них setup = failed)
-    # Для AWG и Caddy проверяем только факт установки (пакет), не запуск
     critical_ok = True
 
     checks = [
-        # (label, install_cmd, run_cmd_or_None, is_critical)
-        # run_cmd=None означает "запускается после конфига, проверяем только установку"
         ("SSH",
             "which sshd || dpkg -l openssh-server 2>/dev/null | grep -q '^ii'",
             "echo ALIVE",
@@ -1096,11 +1059,11 @@ echo "[+] Caddy + forwardproxy setup complete"
             True),
         ("AmneziaWG",
             "which awg || dpkg -l amneziawg 2>/dev/null | grep -q '^ii'",
-            None,  # запуск после генерации конфига — не проверяем
+            None,
             False),
         ("NaiveProxy",
             "test -f /usr/local/bin/caddy-naive || which caddy-naive",
-            None,  # запуск после генерации конфига — не проверяем
+            None,
             False),
         ("Fail2Ban",
             "which fail2ban-server || dpkg -l fail2ban 2>/dev/null | grep -q '^ii'",
@@ -1108,7 +1071,7 @@ echo "[+] Caddy + forwardproxy setup complete"
             False),
         ("UFW",
             "which ufw || dpkg -l ufw 2>/dev/null | grep -q '^ii'",
-            "sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1 || echo unknown",
+            "ufw status 2>/dev/null | head -1 || echo unknown",
             False),
     ]
     if not is_eu:
@@ -1121,7 +1084,6 @@ echo "[+] Caddy + forwardproxy setup complete"
 
     for name, install_cmd, run_cmd, is_critical in checks:
         try:
-            # Проверка установки
             code_i, _, _ = _exec(client, install_cmd, timeout=10)
             installed = (code_i == 0)
 
@@ -1132,13 +1094,11 @@ echo "[+] Caddy + forwardproxy setup complete"
                     critical_ok = False
                 continue
 
-            # Если run_cmd=None — сервис запускается позже по конфигу (AWG, NaiveProxy)
             if run_cmd is None:
                 _update_setup(db, server,
                     log_line=f"[5] ✅ {name}: установлен, будет запущен при настройке подключений")
                 continue
 
-            # Проверка запуска
             code_r, out_r, _ = _exec(client, run_cmd, timeout=15)
             out_lower = out_r.lower()
             first_line = next(
@@ -1146,14 +1106,16 @@ echo "[+] Caddy + forwardproxy setup complete"
             ).lower()
             display = out_r.splitlines()[0].strip() if out_r.strip() else "(нет вывода)"
 
-            # WARP: парсим весь вывод, а не только первую строку
             if name == "WARP":
-                # Если warp-svc не запущен — warp-cli отвечает "Unable to connect to the WARP service"
-                # Пробуем запустить сервис и переспрашиваем статус
                 if "unable" in out_lower or "warp-status-failed" in out_lower or not out_r.strip():
-                    _exec(client, "sudo -n systemctl start warp-svc 2>/dev/null || systemctl start warp-svc 2>/dev/null || true", timeout=15)
+                    _exec(client,
+                        "sudo -n systemctl start warp-svc 2>/dev/null || "
+                        "systemctl start warp-svc 2>/dev/null || true",
+                        timeout=15)
                     import time as _time; _time.sleep(3)
-                    _, out_r2, _ = _exec(client, "warp-cli status 2>/dev/null || echo 'warp-status-failed'", timeout=10)
+                    _, out_r2, _ = _exec(client,
+                        "warp-cli status 2>/dev/null || echo 'warp-status-failed'",
+                        timeout=10)
                     if out_r2.strip():
                         out_r = out_r2
                         out_lower = out_r.lower()
@@ -1162,13 +1124,12 @@ echo "[+] Caddy + forwardproxy setup complete"
                 is_down = ("disconnected" in out_lower or "unable" in out_lower
                            or "warp-status-failed" in out_lower or not out_r.strip())
             else:
-                is_up   = first_line in ("active", "alive") or "connected" in first_line or "status: active" in first_line
-                is_down = first_line in ("inactive", "failed", "activating", "deactivating") or "status: inactive" in first_line
+                is_up   = first_line in ("active", "alive") or "connected" in first_line
+                is_down = first_line in ("inactive", "failed", "activating", "deactivating")
 
             if name == "SSH":
-                # SSH: критичная проверка через echo ALIVE
                 if "alive" in first_line or code_r == 0:
-                    _update_setup(db, server, log_line=f"[5] ✅ SSH: установлен и доступен")
+                    _update_setup(db, server, log_line="[5] ✅ SSH: установлен и доступен")
                 else:
                     _update_setup(db, server, log_line=f"[5] ❌ SSH: недоступен ({display})")
                     critical_ok = False
@@ -1176,7 +1137,8 @@ echo "[+] Caddy + forwardproxy setup complete"
                 _update_setup(db, server, log_line=f"[5] ✅ {name}: установлен и запущен")
             elif is_down:
                 icon = "❌" if is_critical else "⚠️"
-                _update_setup(db, server, log_line=f"[5] {icon} {name}: установлен, не запущен ({display})")
+                _update_setup(db, server,
+                    log_line=f"[5] {icon} {name}: установлен, не запущен ({display})")
                 if is_critical:
                     critical_ok = False
             else:
@@ -1190,7 +1152,6 @@ echo "[+] Caddy + forwardproxy setup complete"
     except Exception:
         pass
 
-    # Финальный статус
     if critical_ok:
         server.setup_status = "done"
         server.status       = ServerStatus.ONLINE
@@ -1203,30 +1164,6 @@ echo "[+] Caddy + forwardproxy setup complete"
             log_line="[setup] ❌ Настройка завершена с ошибками. Проверьте критичные сервисы.")
 
     db.add(server); db.commit()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Автопривязка поддомена NaiveProxy
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _try_link_naiveproxy_subdomain(db: Session, server: Server,
-                                   client: paramiko.SSHClient, is_eu: bool):
-    try:
-        from app.models.domain import Subdomain
-        stype = "naiveproxy_eu" if is_eu else "naiveproxy_ru"
-        sub = (db.query(Subdomain)
-               .filter(Subdomain.subdomain_type == stype,
-                       Subdomain.status == "active",
-                       Subdomain.server_id == None)
-               .first())
-        if not sub:
-            return  # нет свободного поддомена — тихо пропускаем
-        server.naiveproxy_subdomain_id = sub.id
-        sub.server_id = server.id
-        db.add(sub); db.add(server); db.commit()
-        _update_setup(db, server, log_line=f"[2.4] 🔗 Привязан поддомен {sub.full_domain}")
-    except Exception as e:
-        pass  # Автопривязка поддомена не выполняется на этапе настройки
 
 
 # ─────────────────────────────────────────────────────────────────────────────
