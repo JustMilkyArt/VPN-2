@@ -221,6 +221,28 @@ def patch_param(
     return {"ok": ok, "message": msg}
 
 
+@router.post("/check-all", summary="Проверить все подключения параллельно")
+def check_all_connections(
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """
+    Запускает параллельную SSH-проверку всех подключений.
+    Группирует по EU-серверу — одно SSH-соединение на сервер.
+    Offline-серверы пропускаются (сразу inactive, без SSH).
+    Возвращает dict {id: {alive, status, message}}.
+    """
+    results = connection_service.check_all_connections(db)
+    total   = len(results)
+    active  = sum(1 for r in results.values() if r["alive"])
+    return {
+        "results": results,
+        "total":   total,
+        "active":  active,
+        "inactive": total - active,
+    }
+
+
 @router.post("/{connection_id}/check", summary="Проверить живость подключения")
 def check_connection(
     connection_id: int,

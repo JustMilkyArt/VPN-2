@@ -6,7 +6,8 @@ import json
 import logging
 import time
 import threading
-from typing import List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional, Tuple, Dict
 from sqlalchemy.orm import Session
 
 from app.models.connection import Connection, Protocol, ConnectionType, ConnectionStatus
@@ -404,10 +405,20 @@ def patch_connection_param(db: Session, conn: Connection, field: str, value) -> 
 # ─── check status ────────────────────────────────────────────────────────────
 
 def check_connection_live(db: Session, conn: Connection) -> Tuple[bool, str]:
-    """Проверяет что подключение реально активно на сервере."""
+    """Проверяет что подключение реально активно на сервере.
+
+    Если EU-сервер помечен как offline в БД — не пытаемся SSH,
+    сразу возвращаем inactive и сохраняем статус.
+    """
     eu_server = db.query(Server).filter(Server.id == conn.server_id).first()
     if not eu_server:
         return False, "EU сервер не найден"
+
+    # Если сервер помечен offline — не тратим время на SSH
+    if eu_server.status == ServerStatus.OFFLINE:
+        conn.status = ConnectionStatus.INACTIVE
+        db.commit()
+        return False, "Сервер недоступен"
 
     try:
         from app.services.ssh_service import SSHClient
@@ -431,3 +442,117 @@ def check_connection_live(db: Session, conn: Connection) -> Tuple[bool, str]:
 
     except Exception as e:
         return False, f"Ошибка проверки: {e}"
+
+
+def check_all_connections(db: Session) -> Dict[int, dict]:
+    """Параллельная проверка всех подключений через ThreadPoolExecutor.
+
+    Группирует подключения по EU-серверу и открывает одно SSH-соединение
+    на сервер, выполняя все проверки внутри него — вместо N отдельных SSH.
+
+    Возвращает dict {conn_id: {alive, status, message}}.
+    """
+    from app.services.ssh_service import SSHClient
+
+    # Забираем все подключения (не в состоянии deploying)
+    conns = db.query(Connection).filter(
+        Connection.setup_status.in_(["done", "failed", None])
+    ).all()
+
+    if not conns:
+        return {}
+
+    # Группируем по server_id чтобы минимизировать SSH-соединения
+    by_server: Dict[int, List[Connection]] = {}
+    for c in conns:
+        by_server.setdefault(c.server_id, []).append(c)
+
+    results: Dict[int, dict] = {}
+    results_lock = threading.Lock()
+
+    def _check_server_group(server_id: int, group: List[Connection]) -> None:
+        """Проверяет все подключения одного сервера в одном SSH-соединении."""
+        # Нужна своя сессия БД для потока
+        from app.db.database import SessionLocal
+        thread_db = SessionLocal()
+        try:
+            eu_server = thread_db.query(Server).filter(Server.id == server_id).first()
+            if not eu_server:
+                with results_lock:
+                    for c in group:
+                        results[c.id] = {"alive": False, "status": "inactive", "message": "Сервер не найден"}
+                return
+
+            # Сервер offline — пропускаем SSH, ставим всем inactive
+            if eu_server.status == ServerStatus.OFFLINE:
+                with results_lock:
+                    for c in group:
+                        db_conn = thread_db.query(Connection).filter(Connection.id == c.id).first()
+                        if db_conn:
+                            db_conn.status = ConnectionStatus.INACTIVE
+                            results[c.id] = {"alive": False, "status": "inactive", "message": "Сервер недоступен"}
+                thread_db.commit()
+                return
+
+            # Открываем одно SSH-соединение на сервер
+            try:
+                with SSHClient(eu_server) as ssh:
+                    # Собираем все нужные данные одним батчем команд
+                    _, ss_out,  _ = ssh.exec("ss -tlnp 2>/dev/null")
+                    _, awg_out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
+                    _, np_out,  _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
+
+                np_alive  = np_out.strip() == "active"
+                awg_alive = "interface" in awg_out.lower()
+
+                for c in group:
+                    db_conn = thread_db.query(Connection).filter(Connection.id == c.id).first()
+                    if not db_conn:
+                        continue
+
+                    if c.protocol == Protocol.VLESS_REALITY:
+                        alive = str(c.port) in ss_out
+                    elif c.protocol == Protocol.AMNEZIA_WG:
+                        alive = awg_alive
+                    elif c.protocol == Protocol.NAIVE_PROXY:
+                        alive = np_alive
+                    else:
+                        alive = False
+
+                    db_conn.status = ConnectionStatus.ACTIVE if alive else ConnectionStatus.INACTIVE
+                    with results_lock:
+                        results[c.id] = {
+                            "alive":   alive,
+                            "status":  "active" if alive else "inactive",
+                            "message": "Активно" if alive else "Не отвечает",
+                        }
+
+                thread_db.commit()
+
+            except Exception as e:
+                # SSH не удалось — помечаем всё как inactive
+                for c in group:
+                    db_conn = thread_db.query(Connection).filter(Connection.id == c.id).first()
+                    if db_conn:
+                        db_conn.status = ConnectionStatus.INACTIVE
+                    with results_lock:
+                        results[c.id] = {"alive": False, "status": "inactive", "message": f"SSH ошибка: {e}"}
+                thread_db.commit()
+
+        finally:
+            thread_db.close()
+
+    # Запускаем параллельно — по одному потоку на сервер
+    max_workers = min(len(by_server), 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_check_server_group, srv_id, grp): srv_id
+            for srv_id, grp in by_server.items()
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error("check_all_connections worker error: %s", e)
+
+    return results

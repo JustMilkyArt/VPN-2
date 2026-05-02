@@ -28,6 +28,9 @@ async function loadConnectionsGrouped() {
 
   emptyEl.classList.add('hidden');
   listEl.innerHTML = groups.map(renderEuGroup).join('');
+
+  // Автоматически запускаем фоновую проверку статусов после отрисовки
+  _checkAllConnectionsBackground();
 }
 
 // ─── EU SERVER GROUP ─────────────────────────────────────────────────────────
@@ -37,6 +40,10 @@ function renderEuGroup(group) {
   const flag   = getFlag(srv.country);
   const online = srv.status === 'online';
 
+  // Collect all connection IDs for this group (for per-server refresh)
+  const allConns = [...(group.direct || []), ...(group.cascade || [])];
+  const connIds  = allConns.map(c => c.id);
+
   const directRows  = (group.direct  || []).map(c => renderConnRow(c, srv, 'direct')).join('');
   const cascadeRows = (group.cascade || []).map(c => renderConnRow(c, srv, 'cascade')).join('');
 
@@ -44,7 +51,7 @@ function renderEuGroup(group) {
   if (!hasRows) return '';
 
   return `
-<div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-4">
+<div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-4" id="conn-group-${srv.id}">
 
   <!-- EU server header -->
   <div class="flex items-center justify-between px-4 py-3 bg-gray-800/60 border-b border-gray-800">
@@ -55,9 +62,19 @@ function renderEuGroup(group) {
         <div class="text-gray-500 text-xs font-mono">${srv.ip}</div>
       </div>
     </div>
-    <div class="flex items-center gap-1.5">
-      <span class="w-1.5 h-1.5 rounded-full ${online ? 'bg-green-400' : 'bg-gray-600'}"></span>
-      <span class="text-xs ${online ? 'text-green-400' : 'text-gray-500'}">${online ? 'Online' : srv.status}</span>
+    <div class="flex items-center gap-3">
+      <!-- Status indicator -->
+      <div class="flex items-center gap-1.5">
+        <span class="w-1.5 h-1.5 rounded-full ${online ? 'bg-green-400' : 'bg-gray-600'}"></span>
+        <span class="text-xs ${online ? 'text-green-400' : 'text-gray-500'}">${online ? 'Online' : srv.status}</span>
+      </div>
+      <!-- Refresh button for this server group -->
+      <button id="refresh-group-btn-${srv.id}"
+        onclick="checkServerGroup(${srv.id}, [${connIds.join(',')}])"
+        class="p-1.5 rounded-md text-gray-500 hover:text-gray-300 hover:bg-gray-700/60 transition"
+        title="Проверить подключения этого сервера">
+        <i class="fas fa-arrows-rotate text-xs"></i>
+      </button>
     </div>
   </div>
 
@@ -95,15 +112,18 @@ const PROTO_META = {
 };
 
 const STATUS_META = {
-  active:    { dot: 'bg-green-400',  text: 'text-green-400',  label: 'Активно'    },
-  inactive:  { dot: 'bg-gray-500',   text: 'text-gray-500',   label: 'Неактивно'  },
-  deploying: { dot: 'bg-amber-400 animate-pulse', text: 'text-amber-400', label: 'Деплой...' },
-  error:     { dot: 'bg-red-400',    text: 'text-red-400',    label: 'Ошибка'     },
+  active:         { dot: 'bg-green-400',  text: 'text-green-400',  label: 'Активно'         },
+  inactive:       { dot: 'bg-gray-500',   text: 'text-gray-500',   label: 'Неактивно'       },
+  deploying:      { dot: 'bg-amber-400 animate-pulse', text: 'text-amber-400', label: 'Деплой...' },
+  error:          { dot: 'bg-red-400',    text: 'text-red-400',    label: 'Ошибка'          },
+  server_offline: { dot: 'bg-gray-600',   text: 'text-gray-500',   label: 'Сервер недоступен' },
 };
 
 function renderConnRow(conn, euSrv, type) {
   const pm = PROTO_META[conn.protocol] || { icon: 'fa-network-wired', label: conn.protocol, color: 'text-gray-400 bg-gray-800 border-gray-700' };
-  const sm = STATUS_META[conn.status]  || STATUS_META.inactive;
+  // If the EU exit server is offline — show connection as unavailable regardless of DB status
+  const effectiveStatus = (euSrv && euSrv.status !== 'online') ? 'server_offline' : conn.status;
+  const sm = STATUS_META[effectiveStatus] || STATUS_META.inactive;
 
   // For cascade: show RU → EU
   let serverLabel = '';
@@ -131,8 +151,8 @@ function renderConnRow(conn, euSrv, type) {
 
   <!-- Status -->
   <div class="flex items-center gap-1.5 flex-shrink-0">
-    <span class="w-1.5 h-1.5 rounded-full ${sm.dot}"></span>
-    <span class="text-xs ${sm.text}">${sm.label}</span>
+    <span class="conn-status-dot w-1.5 h-1.5 rounded-full ${sm.dot}"></span>
+    <span class="conn-status-text text-xs ${sm.text}">${sm.label}</span>
   </div>
 
   <!-- Actions: delete (hover) + open (always visible) -->
@@ -1129,10 +1149,111 @@ async function checkConnLive(connId) {
   if (res.ok) {
     const { alive, message } = res.data;
     toast(alive ? `✅ ${message}` : `⚠️ ${message}`, alive ? 'success' : 'warning', 3000);
+    // Обновляем точку статуса прямо в строке без перерисовки всего списка
+    _applyConnStatusInRow(connId, res.data.status);
     showConnDetail(connId);
   } else {
     toast(`Ошибка: ${res.error}`, 'error');
   }
+}
+
+// ─── CHECK ALL / CHECK GROUP ─────────────────────────────────────────────────
+
+/**
+ * Обновляет точку статуса и текст в строке подключения на лету,
+ * без перерисовки всего списка.
+ */
+function _applyConnStatusInRow(connId, statusKey) {
+  const row = document.getElementById(`conn-row-${connId}`);
+  if (!row) return;
+  const sm  = STATUS_META[statusKey] || STATUS_META.inactive;
+  const dot = row.querySelector('.conn-status-dot');
+  const txt = row.querySelector('.conn-status-text');
+  if (dot) { dot.className = `conn-status-dot w-1.5 h-1.5 rounded-full ${sm.dot}`; }
+  if (txt) { txt.className = `conn-status-text text-xs ${sm.text}`; txt.textContent = sm.label; }
+}
+
+/**
+ * Ставит кнопку обновления группы в состояние «крутится» или «готово».
+ */
+function _setGroupBtnSpinning(srvId, spinning) {
+  const btn = document.getElementById(`refresh-group-btn-${srvId}`);
+  if (!btn) return;
+  btn.disabled  = spinning;
+  btn.innerHTML = spinning
+    ? '<span class="spinner" style="width:10px;height:10px;display:inline-block;"></span>'
+    : '<i class="fas fa-arrows-rotate text-xs"></i>';
+}
+
+/**
+ * Проверяет подключения одного конкретного сервера (клик на кнопку группы).
+ * Посылает check-all на бэкенд и применяет результаты только к этой группе.
+ */
+async function checkServerGroup(srvId, connIds) {
+  _setGroupBtnSpinning(srvId, true);
+  // Используем общий /check-all — он проверяет всё, но мы применяем только нужные ids
+  const res = await api.post('/connections/check-all', {});
+  _setGroupBtnSpinning(srvId, false);
+  if (!res.ok) {
+    toast(`Ошибка проверки: ${res.error}`, 'error');
+    return;
+  }
+  const results = res.data.results || {};
+  let active = 0, total = connIds.length;
+  connIds.forEach(id => {
+    const r = results[id] || results[String(id)];
+    if (r) {
+      _applyConnStatusInRow(id, r.status);
+      if (r.alive) active++;
+    }
+  });
+  toast(`Проверено: ${active}/${total} активно`, active === total ? 'success' : 'info', 3000);
+}
+
+/**
+ * Кнопка «Проверить все» в шапке вкладки.
+ */
+async function checkAllConnections() {
+  const btn = document.getElementById('check-all-conns-btn');
+  if (btn) {
+    btn.disabled  = true;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;display:inline-block;"></span><span class="hidden sm:inline ml-2">Проверяю...</span>';
+  }
+
+  const res = await api.post('/connections/check-all', {});
+
+  if (btn) {
+    btn.disabled  = false;
+    btn.innerHTML = '<i class="fas fa-rotate text-xs"></i><span class="hidden sm:inline ml-2">Проверить все</span>';
+  }
+
+  if (!res.ok) {
+    toast(`Ошибка: ${res.error}`, 'error');
+    return;
+  }
+
+  const { results, active, total } = res.data;
+  Object.entries(results).forEach(([id, r]) => {
+    _applyConnStatusInRow(Number(id), r.status);
+  });
+  toast(
+    `Проверено: ${active}/${total} активно`,
+    active === total ? 'success' : active > 0 ? 'info' : 'warning',
+    4000
+  );
+}
+
+/**
+ * Фоновая проверка — запускается автоматически после загрузки списка.
+ * Тихо обновляет статусы без уведомлений пользователю.
+ */
+async function _checkAllConnectionsBackground() {
+  const res = await api.post('/connections/check-all', {});
+  if (!res.ok) return;
+  const results = res.data.results || {};
+  Object.entries(results).forEach(([id, r]) => {
+    _applyConnStatusInRow(Number(id), r.status);
+  });
 }
 
 async function toggleWarp(connId, enabled) {
@@ -1231,6 +1352,8 @@ window.toggleWarp               = toggleWarp;
 window.confirmDeleteConnection  = confirmDeleteConnection;
 window._renderWizardStep1       = _renderWizardStep1;
 window.downloadConfig           = downloadConfig;
+window.checkAllConnections      = checkAllConnections;
+window.checkServerGroup         = checkServerGroup;
 
 // ═══════════════════════════════════════════════════════════════════════════
 

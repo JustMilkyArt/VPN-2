@@ -63,6 +63,7 @@ class Server(Base):
     warp_version           = Column(String(50),  nullable=True)
     xray_public_key        = Column(Text, nullable=True)
     awg_server_public_key  = Column(Text, nullable=True)
+    awg_server_private_key = Column(Text, nullable=True)   # приватный ключ AWG-интерфейса сервера
 
     # ── Зашифрованные credentials (флаги для фронта) ───────────────
     ssh_private_key_enc = Column(Text, nullable=True)   # зашифрованный приватный ключ

@@ -423,28 +423,44 @@ echo "[+] Xray installed"
         # 2.3 AmneziaWG
         _update_setup(db, server, log_line="[2.3] Установка AmneziaWG...")
         AWG_SCRIPT = """export DEBIAN_FRONTEND=noninteractive
-echo "[*] Installing AmneziaWG..."
+set -e
 apt-get install -y -qq software-properties-common
-add-apt-repository -y ppa:amnezia/ppa 2>/dev/null || true
+add-apt-repository -y ppa:amnezia/ppa
 apt-get update -qq
-apt-get install -y -qq amneziawg amneziawg-tools
+apt-get install -y amneziawg amneziawg-tools
 modprobe amneziawg 2>/dev/null || true
-echo "[+] AmneziaWG installed"
+# Явно проверяем что бинарь появился — скрипт упадёт с ошибкой если нет
+which awg || (echo 'AWG binary not found after install' >&2 && exit 1)
 """
         _awg_cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
         code, out, err = _exec(client, f"{_awg_cmd} << '__AWG__'\n{AWG_SCRIPT}\n__AWG__", timeout=300)
         if code != 0:
-            _update_setup(db, server, log_line=f"[2.3] ❌ AmneziaWG: {err[:300]}")
+            # Собираем читаемый вывод ошибки из stdout+stderr
+            awg_err_detail = (err or out or "нет вывода").strip()[:400]
+            _update_setup(db, server, log_line=f"[2.3] ❌ AmneziaWG не установлен: {awg_err_detail}")
         else:
             server.awg_installed = True
             # Генерируем серверные ключи AWG
+            # Формат вывода:
+            #   строка 1 — публичный ключ (из awg pubkey)
+            #   строка 2 — приватный ключ (из cat /tmp/awg_server.key)
             code2, keys_out, _ = _exec(client,
                 "awg genkey | tee /tmp/awg_server.key | awg pubkey && "
-                "cat /tmp/awg_server.key")
+                "cat /tmp/awg_server.key",
+                timeout=15)
             if code2 == 0:
                 lines = keys_out.strip().splitlines()
                 if len(lines) >= 2:
+                    server.awg_server_public_key  = lines[0].strip()  # pubkey
+                    server.awg_server_private_key = lines[1].strip()  # privkey
+                elif len(lines) == 1:
+                    # Только pubkey — логируем предупреждение
                     server.awg_server_public_key = lines[0].strip()
+                    _update_setup(db, server,
+                        log_line="[2.3] ⚠️ AWG: приватный ключ не получен (только публичный)")
+            else:
+                _update_setup(db, server,
+                    log_line="[2.3] ⚠️ AWG: ошибка генерации ключей")
             db.add(server); db.commit()
             _update_setup(db, server,
                 log_line="[2.3] ✅ AmneziaWG установлен, запуск после генерации конфига")
@@ -630,6 +646,10 @@ echo "[+] Caddy + forwardproxy setup complete"
         _update_setup(db, server, log_line="[3.4] Настройка UFW...")
         _current_ssh_port_for_ufw = cur_port  # порт ДО смены — откроем его в UFW
         _ufw = ("sudo -n ufw" if use_sudo else "ufw")
+        # Диапазон портов для AWG-подключений (assign_free_port выдаёт порты из этого диапазона)
+        # Открываем весь диапазон сразу — не зависим от конкретных портов конфигов
+        AWG_PORT_RANGE_START = 10000
+        AWG_PORT_RANGE_END   = 65535
         ufw_cmds = (
             f"{_ufw} --force reset && "
             f"{_ufw} default deny incoming && "
@@ -638,8 +658,8 @@ echo "[+] Caddy + forwardproxy setup complete"
             f"{_ufw} allow 22/tcp && "
             f"{_ufw} allow 80/tcp && "
             f"{_ufw} allow 443/tcp && "
-            f"{_ufw} allow 51820/udp && "
-            f"{_ufw} allow 51821/udp"
+            # Диапазон UDP-портов для AWG (динамически назначаемые порты конфигов)
+            f"{_ufw} allow {AWG_PORT_RANGE_START}:{AWG_PORT_RANGE_END}/udp"
         )
         if not is_eu:
             ufw_cmds += f" && {_ufw} allow 2408/udp"
@@ -800,8 +820,14 @@ echo "[+] Caddy + forwardproxy setup complete"
             try:
                 test_cli = _connect(cur_ip, new_port, cur_user,
                                     private_key_pem=cur_key, timeout=10)
-                # Порт новый работает — теперь закрываем старый 22 в UFW
-                _exec(test_cli, ("sudo -n ufw delete allow 22/tcp 2>/dev/null || true" if use_sudo else "ufw delete allow 22/tcp 2>/dev/null || true"), timeout=10)
+                # Новый порт работает — закрываем ОБА старых порта (22 и cur_port до смены)
+                # cur_port здесь ещё содержит старый порт (new_port ещё не применён)
+                old_ssh_port = cur_port  # запоминаем перед обновлением
+                _ufw_del = "sudo -n ufw" if use_sudo else "ufw"
+                _exec(test_cli,
+                    f"{_ufw_del} delete allow {old_ssh_port}/tcp 2>/dev/null || true && "
+                    f"{_ufw_del} delete allow 22/tcp 2>/dev/null || true",
+                    timeout=10)
                 test_cli.close()
                 cur_port = new_port
                 port_ok = True
@@ -947,7 +973,9 @@ echo "[+] Caddy + forwardproxy setup complete"
         server.server_timezone = tz_out.strip() or None
         server.xray_version    = (xray_v.strip()[:50]  or None)
         server.caddy_version   = (caddy_v.strip()[:50] or None)
-        server.awg_version     = (awg_v.strip()[:50]   or None)
+        # Если awg не установлен — явно записываем 'не установлен' вместо None
+        _awg_v_raw = awg_v.strip()
+        server.awg_version = (_awg_v_raw[:50] if _awg_v_raw else None)
 
         if not is_eu:
             _, warp_v, _ = _exec(client,
@@ -1104,10 +1132,10 @@ echo "[+] Caddy + forwardproxy setup complete"
                     critical_ok = False
                 continue
 
-            # Если run_cmd=None — сервис запускается по конфигу
+            # Если run_cmd=None — сервис запускается позже по конфигу (AWG, NaiveProxy)
             if run_cmd is None:
                 _update_setup(db, server,
-                    log_line=f"[5] ✅ {name}: установлен, запуск после генерации конфига")
+                    log_line=f"[5] ✅ {name}: установлен, будет запущен при настройке подключений")
                 continue
 
             # Проверка запуска
