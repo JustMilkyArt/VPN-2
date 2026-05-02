@@ -1182,8 +1182,11 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
                 is_down = ("disconnected" in out_lower or "unable" in out_lower
                            or "warp-status-failed" in out_lower or not out_r.strip())
             else:
-                is_up   = first_line in ("active", "alive") or "connected" in first_line
-                is_down = first_line in ("inactive", "failed", "activating", "deactivating")
+                is_up   = (first_line in ("active", "alive")
+                           or "active" in first_line
+                           or "connected" in first_line)
+                is_down = ("inactive" in first_line or "failed" in first_line
+                           or first_line in ("activating", "deactivating"))
 
             if name == "SSH":
                 if "alive" in first_line or code_r == 0:
