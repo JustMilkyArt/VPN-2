@@ -755,14 +755,22 @@ echo "[BATCH_DONE]"
         # ── 3.6 SSH-ключ Ed25519 ─────────────────────────────────────────────
         _update_setup(db, server, log_line="[3.6] Генерация SSH-ключа Ed25519...")
         new_priv, new_pub = _gen_ed25519_keypair()
-        code, _, err = _exec(client,
-            f"mkdir -p /home/{new_user}/.ssh && "
-            f"echo '{new_pub}' >> /home/{new_user}/.ssh/authorized_keys && "
-            f"chown -R {new_user}:{new_user} /home/{new_user}/.ssh && "
-            f"chmod 600 /home/{new_user}/.ssh/authorized_keys",
-            timeout=15)
-        if code != 0:
-            _update_setup(db, server, log_line=f"[3.6] ⚠️ Добавление ключа: {err[:200]}")
+        # Используем bash-скрипт с sudo чтобы создать .ssh в чужой home-директории
+        _sd36 = "sudo -n " if use_sudo else ""
+        KEY_SCRIPT = f"""#!/bin/bash
+mkdir -p /home/{new_user}/.ssh
+chmod 700 /home/{new_user}/.ssh
+echo '{new_pub}' >> /home/{new_user}/.ssh/authorized_keys
+chmod 600 /home/{new_user}/.ssh/authorized_keys
+chown -R {new_user}:{new_user} /home/{new_user}/.ssh
+echo KEY_WRITTEN
+"""
+        _kcmd = ("sudo -n bash -s" if use_sudo else "bash -s")
+        code, kout, err = _exec(client,
+            f"{_kcmd} << '__KEY__'\n{KEY_SCRIPT}\n__KEY__",
+            timeout=20)
+        if code != 0 or "KEY_WRITTEN" not in kout:
+            _update_setup(db, server, log_line=f"[3.6] ⚠️ Добавление ключа: {err[:200] or kout[:200]}")
         else:
             try:
                 test_cli = _connect(cur_ip, cur_port, new_user, private_key_pem=new_priv)
@@ -1121,7 +1129,7 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
             False),
         ("UFW",
             "which ufw || dpkg -l ufw 2>/dev/null | grep -q '^ii'",
-            "ufw status 2>/dev/null | head -1 || sudo ufw status 2>/dev/null | head -1 || echo unknown",
+            "ufw status 2>/dev/null | head -1 || echo unknown",
             False),
     ]
     if not is_eu:
@@ -1134,7 +1142,7 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
 
     for name, install_cmd, run_cmd, is_critical in checks:
         try:
-            code_i, _, _ = _exec(client, install_cmd, timeout=10)
+            code_i, _, _ = _exec(client, _s(install_cmd, use_sudo), timeout=10)
             installed = (code_i == 0)
 
             if not installed:
@@ -1149,7 +1157,7 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
                     log_line=f"[5] ✅ {name}: установлен, будет запущен при настройке подключений")
                 continue
 
-            code_r, out_r, _ = _exec(client, run_cmd, timeout=15)
+            code_r, out_r, _ = _exec(client, _s(run_cmd, use_sudo), timeout=15)
             out_lower = out_r.lower()
             first_line = next(
                 (l.strip() for l in out_r.splitlines() if l.strip()), ""
