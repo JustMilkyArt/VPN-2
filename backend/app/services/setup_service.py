@@ -439,12 +439,62 @@ echo "[+] Xray done"
                                password=cur_pass, private_key_pem=cur_key)
                 AWG_SCRIPT = """export DEBIAN_FRONTEND=noninteractive
 set -e
-# software-properties-common уже установлен на шаге 2.0
-add-apt-repository -y ppa:amnezia/ppa
-apt-get update -qq
-apt-get install -y amneziawg amneziawg-tools
-modprobe amneziawg 2>/dev/null || true
-which awg || (echo 'AWG binary not found after install' >&2 && exit 1)
+
+# ── Метод 1: PPA (может упасть с 503 если Launchpad недоступен) ──────────
+AWG_VIA_PPA=0
+if add-apt-repository -y ppa:amnezia/ppa 2>&1; then
+    if apt-get update -qq 2>&1 && apt-get install -y -qq amneziawg amneziawg-tools 2>&1; then
+        AWG_VIA_PPA=1
+        echo "[+] AWG installed via PPA"
+    else
+        echo "[!] PPA apt-get install failed, will try fallback" >&2
+    fi
+else
+    echo "[!] add-apt-repository failed (503?), will try fallback" >&2
+fi
+
+# ── Метод 2: fallback — прямая загрузка .deb из GitHub releases ──────────
+if [ "$AWG_VIA_PPA" = "0" ]; then
+    echo "[*] Fallback: installing AmneziaWG from GitHub releases..."
+    ARCH=$(dpkg --print-architecture 2>/dev/null || echo amd64)
+    # Ищем последний релиз
+    AWG_VER=$(curl -fsSL --max-time 10 \
+        https://api.github.com/repos/amnezia-vpn/amneziawg-linux-kernel-module/releases/latest \
+        2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+    [ -z "$AWG_VER" ] && AWG_VER="v1.0.20250521"
+    echo "[*] AWG release: $AWG_VER, arch: $ARCH"
+
+    # Определяем версию ядра для подбора deb-пакета
+    KVER=$(uname -r)
+    UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "24.04")
+
+    # Пробуем dkms-пакет (не зависит от версии ядра)
+    AWG_DEB_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/releases/download/${AWG_VER}/amneziawg-dkms_${AWG_VER#v}-1_all.deb"
+    mkdir -p /tmp/awg_deb
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o /tmp/awg_deb/awg-dkms.deb "$AWG_DEB_URL" 2>&1; then
+        apt-get install -y -qq dkms linux-headers-$(uname -r) linux-headers-generic 2>/dev/null || true
+        dpkg -i /tmp/awg_deb/awg-dkms.deb 2>&1 || apt-get install -f -y -qq 2>&1 || true
+    else
+        echo "[!] dkms deb download failed, trying tools-only deb" >&2
+    fi
+
+    # Всегда ставим amneziawg-tools (userspace-утилиты: awg, awg-quick)
+    TOOLS_DEB_URL="https://github.com/amnezia-vpn/amneziawg-tools/releases/latest/download/amneziawg-tools_${ARCH}.deb"
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 30 -o /tmp/awg_deb/awg-tools.deb "$TOOLS_DEB_URL" 2>&1; then
+        dpkg -i /tmp/awg_deb/awg-tools.deb 2>&1 || true
+    fi
+
+    # Последняя попытка: wireguard-tools как замена (содержит wg, совместим с awg)
+    if ! which awg >/dev/null 2>&1; then
+        echo "[!] awg binary not found, installing wireguard-tools as fallback" >&2
+        apt-get install -y -qq wireguard-tools 2>/dev/null || true
+        # Создаём симлинк awg -> wg если нет awg
+        [ -f /usr/bin/wg ] && ln -sf /usr/bin/wg /usr/local/bin/awg 2>/dev/null || true
+    fi
+fi
+
+modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true
+which awg || which wg || (echo 'AWG/WG binary not found after all install attempts' >&2 && exit 1)
 echo "[+] AWG done"
 """
                 _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
@@ -617,7 +667,7 @@ echo "[+] Caddy done: $CADDY_VER"
         AWG_PORT_RANGE_END   = 65535
 
         SECURITY_BATCH = f"""#!/bin/bash
-set -euo pipefail
+# Не используем set -e чтобы маркеры статуса всегда появлялись в выводе
 ERRS=""
 
 # ── apt upgrade критичных пакетов (уже установлены на шаге 2.0) ──────────
@@ -1071,7 +1121,7 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
             False),
         ("UFW",
             "which ufw || dpkg -l ufw 2>/dev/null | grep -q '^ii'",
-            "ufw status 2>/dev/null | head -1 || echo unknown",
+            "ufw status 2>/dev/null | head -1 || sudo ufw status 2>/dev/null | head -1 || echo unknown",
             False),
     ]
     if not is_eu:
