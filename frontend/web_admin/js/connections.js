@@ -1234,41 +1234,37 @@ window.downloadConfig           = downloadConfig;
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-// CONNECTION AUTO-SETUP MODAL — server-setup style (step timeline + per-step logs)
+
+// CONNECTION AUTO-SETUP MODAL — protocol-step UI (server-setup style)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Layout: 5 steps in top timeline, each step = one protocol or phase:
+//   1 = VLESS+Reality  (all vless_reality connections)
+//   2 = AmneziaWG      (all amnezia_wg connections)
+//   3 = NaiveProxy     (all naive_proxy connections)
+//   4 = Cascade        (cascade-specific: step 5+ of naiveproxy, vless cascade)
+//   5 = Finish         (WARP / split-tunnel / misc info lines)
+//
+// Each step accordion shows aggregated logs from matching connections.
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _connSetupIds  = [];   // ids of connections being deployed
-let _connSetupPoll = null; // interval handle
+let _connSetupIds  = [];
+let _connSetupPoll = null;
+let _connSetupData = {};  // connId -> last known data snapshot
 
-// ── Step labels per protocol ──────────────────────────────────────────────
-const _CS_STEP_LABELS = {
-  vless_reality: {
-    1: 'Порт',    2: 'Xray',    3: 'Keypair',
-    4: 'Конфиг',  5: 'Загрузка', 6: 'Ссылка',  7: '',
-  },
-  amnezia_wg: {
-    1: 'Порт',    2: 'AWG',     3: 'Keypair',
-    4: 'IP',      5: 'Конфиг',  6: 'Запуск',   7: 'Ссылка',
-  },
-  naive_proxy: {
-    1: 'Режим',   2: 'Caddy',   3: 'Caddyfile',
-    4: 'Сервис',  5: 'TLS',     6: 'Поддомен', 7: 'Ссылка',
-  },
+// ── Mappings ──────────────────────────────────────────────────────────────
+
+// Which modal step index (1-5) owns a given protocol
+const _CSD_PROTO_STEP = {
+  vless_reality: 1,
+  amnezia_wg:    2,
+  naive_proxy:   3,
 };
 
-const _CS_STEPS_COUNT = {
-  vless_reality: 6,
-  amnezia_wg:    7,
-  naive_proxy:   7,
-};
+// Labels for header status dots
+const _CSD_STEP_LABEL = { 1:'VLESS+Reality', 2:'AmneziaWG', 3:'NaiveProxy', 4:'Cascade', 5:'Финал' };
 
-const _CS_PROTO_LABEL = {
-  vless_reality: 'VLESS+Reality',
-  amnezia_wg:    'AmneziaWG',
-  naive_proxy:   'NaiveProxy',
-};
-
-// ── Small CSS helpers (mirrored from servers.js pattern) ──────────────────
+// ── Global status dot + progress bar helpers ─────────────────────────────
 
 function _cdSetDot(state) {
   const d = document.getElementById('conn-setup-status-dot');
@@ -1293,171 +1289,318 @@ function _cdShowBtn(id, visible) {
   if (el) el.style.display = visible ? 'flex' : 'none';
 }
 
-function _csEsc(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
+// ── Per-step timeline dot helpers (reuse stp-dot CSS from server-setup) ──
 
-// ── Step dot state for a per-connection card ──────────────────────────────
-
-function _csDotId(connId, n)  { return `cs-dot-${connId}-${n}`; }
-function _csConnId(connId, n) { return `cs-con-${connId}-${n}`; }
-function _csLogId(connId, n)  { return `cs-log-${connId}-${n}`; }
-
-function _csSetDot(connId, n, state) {
-  const el = document.getElementById(_csDotId(connId, n));
-  if (!el) return;
-  const styles = {
-    pending: { bg:'#374151', border:'#4b5563', color:'#9ca3af',  icon:'fa-minus' },
-    running: { bg:'#1e3a5f', border:'#3b82f6', color:'#93c5fd',  icon:'fa-circle-notch fa-spin' },
-    ok:      { bg:'#14532d', border:'#22c55e', color:'#86efac',  icon:'fa-check' },
-    error:   { bg:'#450a0a', border:'#ef4444', color:'#fca5a5',  icon:'fa-xmark' },
-    warn:    { bg:'#451a03', border:'#f59e0b', color:'#fcd34d',  icon:'fa-triangle-exclamation' },
-    skip:    { bg:'#1f2937', border:'#374151', color:'#6b7280',  icon:'fa-forward' },
+function _csdSetDot(n, state) {
+  const dot = document.getElementById(`csd-dot-${n}`);
+  if (!dot) return;
+  dot.className = `stp-dot stp-${state}`;
+  const iconMap = {
+    pending: 'fa-minus',
+    running: 'fa-circle-notch stp-spin',
+    ok:      'fa-check',
+    error:   'fa-xmark',
+    warn:    'fa-triangle-exclamation',
+    skip:    'fa-forward',
   };
-  const s = styles[state] || styles.pending;
-  el.style.cssText = `
-    width:22px;height:22px;border-radius:50%;border:2px solid ${s.border};
-    background:${s.bg};display:flex;align-items:center;justify-content:center;
-    flex-shrink:0;transition:all .3s;`;
-  el.innerHTML = `<i class="fas ${s.icon}" style="font-size:9px;color:${s.color};"></i>`;
+  dot.innerHTML = `<i class="fas ${iconMap[state] || 'fa-minus'}"></i>`;
 }
 
-function _csSetConn(connId, n, done) {
-  const el = document.getElementById(_csConnId(connId, n));
-  if (el) {
-    el.style.background = done
-      ? 'linear-gradient(90deg,#22c55e,#16a34a)'
-      : '#374151';
+function _csdSetConn(n, done) {
+  const el = document.getElementById(`csd-conn-${n}`);
+  if (el) el.className = 'stp-connector' + (done ? ' done' : '');
+}
+
+// ── Step accordion toggle ─────────────────────────────────────────────────
+
+function _csdToggleLog(n) {
+  const log  = document.getElementById(`csd-log-${n}`);
+  const chev = document.getElementById(`csd-chev-${n}`);
+  if (!log) return;
+  const isHidden = log.classList.toggle('hidden');
+  if (chev) chev.style.transform = isHidden ? '' : 'rotate(90deg)';
+}
+
+// ── Icon text for step header ─────────────────────────────────────────────
+
+function _csdStepIcon(state) {
+  const m = { running:'⏳', ok:'✅', error:'❌', warn:'⚠️', skip:'⏭', pending:'·' };
+  return m[state] || '·';
+}
+
+// ── Log line classifier (reuse stp-log-line classes) ─────────────────────
+
+function _csdLineClass(line) {
+  if (/❌|✖|\berror\b|\bfail\b/i.test(line)) return 'err';
+  if (/⚠|\bwarn/i.test(line))                   return 'warn';
+  if (/✅|\bok\b|success|done|installed|активен|запущен|задеплоен|сгенерир|готов|открыт/i.test(line)) return 'ok';
+  if (/⏳|ожидани|попытк|проверка/i.test(line))   return 'wait';
+  if (/^  /.test(line))                           return 'sub';
+  return '';
+}
+
+function _csdEsc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Append lines to a step log block (incremental) ───────────────────────
+
+function _csdAppendLog(n, headerLabel, lines, autoOpen) {
+  const el = document.getElementById(`csd-log-${n}`);
+  if (!el || !lines.length) return;
+
+  // Add separator header for this connection if not yet present
+  const headerId = `csd-log-${n}-hdr-${CSS.escape(headerLabel)}`;
+  if (!el.querySelector(`[data-hdr="${CSS.escape(headerLabel)}"]`)) {
+    const hdr = document.createElement('div');
+    hdr.className = 'stp-log-line sub';
+    hdr.style.cssText = 'margin-top:4px;padding-bottom:2px;border-bottom:1px solid #1f2937;';
+    hdr.setAttribute('data-hdr', headerLabel);
+    hdr.textContent = '── ' + headerLabel + ' ──';
+    el.appendChild(hdr);
   }
+
+  // Append each line (update if already present by key)
+  lines.forEach((l, idx) => {
+    const key = `${headerLabel}::${idx}`;
+    let row = el.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    const cls  = _csdLineClass(l);
+    const text = _csdEsc(l).replace(/❌/g, '✖');
+    if (row) {
+      row.className = `stp-log-line ${cls}`;
+      row.innerHTML = text;
+    } else {
+      row = document.createElement('div');
+      row.className = `stp-log-line ${cls}`;
+      row.setAttribute('data-key', key);
+      row.innerHTML = text;
+      el.appendChild(row);
+    }
+  });
+
+  if (autoOpen) el.classList.remove('hidden');
+
+  // Show step wrapper
+  const wrap = document.getElementById(`csd-step-${n}-wrap`);
+  if (wrap) wrap.classList.remove('hidden');
 }
 
-function _csLogLineClass(line) {
-  if (/❌|✖|\berror\b|\bfail\b/i.test(line)) return 'color:#fca5a5;';
-  if (/⚠|\bwarn/i.test(line))                   return 'color:#fcd34d;';
-  if (/✅|\bok\b|success|done|installed|активен|запущен|задеплоен|сгенерир|готов|открыт/i.test(line)) return 'color:#86efac;';
-  if (/⏳|ожидани|попытк|проверка/i.test(line))   return 'color:#93c5fd;';
-  if (/^    /.test(line))                         return 'color:#6b7280;';
-  return 'color:#9ca3af;';
+// ── Determine dot state from connection status + its steps ────────────────
+
+function _csdConnDotState(c) {
+  if (c.setup_status === 'done')   return 'ok';
+  if (c.setup_status === 'failed') return 'error';
+  // in-progress: check last step status
+  const steps = (c.steps || []).filter(s => s.is_step && s.n >= 1);
+  if (!steps.length) return 'running';
+  const last = steps[steps.length - 1];
+  if (last.status === 'error') return 'error';
+  if (last.status === 'ok')    return 'running'; // still more steps ahead
+  return 'running';
 }
 
-function _csShowStepLog(connId, n, lines, autoOpen) {
-  const el = document.getElementById(_csLogId(connId, n));
-  if (!el) return;
-  el.innerHTML = lines.map(l => {
-    const txt = _csEsc(l).replace(/❌/g,'✖');
-    return `<div style="padding:1px 0;font-size:11px;font-family:monospace;line-height:1.5;${_csLogLineClass(l)}">${txt}</div>`;
-  }).join('');
-  if (autoOpen && lines.length) el.classList.remove('hidden');
+// ── Worst-state aggregator for multiple connections ───────────────────────
+
+function _csdWorstState(states) {
+  if (!states.length) return 'pending';
+  const priority = ['error', 'warn', 'running', 'ok', 'skip', 'pending'];
+  for (const p of priority) {
+    if (states.includes(p)) return p;
+  }
+  return 'pending';
 }
 
-// ── Build card HTML for one connection ───────────────────────────────────
+// ── Main render: called on every poll tick ────────────────────────────────
 
-function _csBuildCard(ct) {
-  const protocol = ct.protocol || 'vless_reality';
-  const totalSteps = _CS_STEPS_COUNT[protocol] || 6;
-  const labels = _CS_STEP_LABELS[protocol] || {};
-  const protoLabel = _CS_PROTO_LABEL[protocol] || protocol;
-  const typeLabel  = ct.connection_type === 'cascade' ? 'CASCADE' : 'DIRECT';
-  const typeColor  = ct.connection_type === 'cascade' ? '#c084fc' : '#67e8f9';
+function _csdRenderAll(connections) {
+  // Group connections by modal step
+  const stepConns = { 1:[], 2:[], 3:[], 4:[], 5:[] };
 
-  // Build step timeline
-  let timeline = '<div style="display:flex;align-items:center;padding:10px 0 6px;">';
-  for (let i = 1; i <= totalSteps; i++) {
-    const lbl = labels[i] || `${i}`;
-    timeline += `
-      <div style="display:flex;flex-direction:column;align-items:center;">
-        <div id="${_csDotId(ct.id, i)}" style="
-          width:22px;height:22px;border-radius:50%;border:2px solid #4b5563;
-          background:#374151;display:flex;align-items:center;justify-content:center;
-          flex-shrink:0;">
-          <i class="fas fa-minus" style="font-size:9px;color:#9ca3af;"></i>
-        </div>
-        <span style="font-size:9px;color:#6b7280;margin-top:4px;white-space:nowrap;">${lbl}</span>
-      </div>`;
-    if (i < totalSteps) {
-      timeline += `
-      <div id="${_csConnId(ct.id, i)}"
-           style="flex:1;height:2px;background:#374151;margin:0 2px;margin-bottom:16px;transition:background .4s;"></div>`;
+  for (const c of connections) {
+    const proto = c.protocol || 'vless_reality';
+    const protoStep = _CSD_PROTO_STEP[proto] || 1;
+    stepConns[protoStep].push(c);
+
+    // Cascade: any connection with connection_type=cascade also feeds step 4
+    if (c.connection_type === 'cascade') {
+      stepConns[4].push(c);
+    }
+
+    // Finish (step 5): plain info lines from all connections
+    stepConns[5].push(c);
+  }
+
+  // Process each modal step
+  for (let n = 1; n <= 5; n++) {
+    const conns = stepConns[n];
+    if (!conns.length) continue;
+
+    const dotStates = [];
+
+    for (const c of conns) {
+      const proto = c.protocol || 'vless_reality';
+      const protoStep = _CSD_PROTO_STEP[proto] || 1;
+      const typeLabel = c.connection_type === 'cascade' ? 'CASCADE' : 'DIRECT';
+      const protoName = _CSD_STEP_LABEL[protoStep] || proto;
+      const headerLabel = `${protoName} · ${typeLabel}`;
+
+      const steps     = c.steps || [];
+      const stepItems = steps.filter(s => s.is_step && s.n >= 1);
+      const infoItems = steps.filter(s => !s.is_step);
+
+      // For step n == protoStep: show all [STEP:N:...] lines from this connection
+      if (n === protoStep) {
+        const lines = stepItems.map(s => `[${s.n}] ${s.msg}`);
+        _csdAppendLog(n, headerLabel, lines, c.setup_status !== 'done' || stepItems.some(s => s.status === 'error'));
+        dotStates.push(_csdConnDotState(c));
+      }
+
+      // For cascade step 4: show only cascade-relevant log lines (DIRECT ones excluded)
+      if (n === 4 && c.connection_type === 'cascade') {
+        // Show last few steps (typically step 5+ in naiveproxy = cascade RU Xray routing)
+        const cascadeLines = stepItems
+          .filter(s => s.n >= 5)
+          .map(s => `[${s.n}] ${s.msg}`);
+        const cascadeInfo = infoItems
+          .filter(l => /cascade|RU|xray|outbound|warp/i.test(l.msg))
+          .map(l => l.msg);
+        const allCascade = [...cascadeLines, ...cascadeInfo];
+        if (allCascade.length) {
+          _csdAppendLog(4, headerLabel, allCascade, c.setup_status === 'failed');
+        }
+        if (c.setup_status === 'done')        dotStates.push('ok');
+        else if (c.setup_status === 'failed') dotStates.push('error');
+        else                                   dotStates.push('running');
+      }
+
+      // For finish step 5: show WARP / split-tunnel info lines from all connections
+      if (n === 5) {
+        const finishLines = infoItems
+          .filter(l => /warp|split.tunnel|split_tunnel|sni|fallback|финал|finish|mtu|mss/i.test(l.msg))
+          .map(l => l.msg);
+        if (finishLines.length) {
+          _csdAppendLog(5, headerLabel, finishLines, false);
+        }
+        if (c.setup_status === 'done') dotStates.push('ok');
+        else dotStates.push(c.setup_status === 'failed' ? 'error' : 'running');
+      }
+    }
+
+    // Set dot for this step
+    if (dotStates.length) {
+      const worst = _csdWorstState(dotStates);
+
+      // Determine if ALL connections in this step are terminal (done or failed)
+      const allTerminal = conns.every(c =>
+        c.setup_status === 'done' || c.setup_status === 'failed'
+      );
+
+      let dotState = worst;
+      if (allTerminal) {
+        dotState = conns.some(c => c.setup_status === 'failed') ? 'error' : 'ok';
+      }
+
+      _csdSetDot(n, dotState);
+
+      // Update step icon in accordion header
+      const iconEl = document.getElementById(`csd-icon-${n}`);
+      if (iconEl) iconEl.textContent = _csdStepIcon(dotState);
+
+      // Connector to next step: light up if this step is terminal and not error
+      if (n < 5 && allTerminal && dotState !== 'error') {
+        _csdSetConn(n, true);
+      }
+
+      // Auto-open log on error
+      if (dotState === 'error') {
+        const log = document.getElementById(`csd-log-${n}`);
+        if (log) {
+          log.classList.remove('hidden');
+          const chev = document.getElementById(`csd-chev-${n}`);
+          if (chev) chev.style.transform = 'rotate(90deg)';
+        }
+      }
     }
   }
-  timeline += '</div>';
 
-  // Build step log blocks
-  let logBlocks = '';
-  for (let i = 1; i <= totalSteps; i++) {
-    logBlocks += `<div id="${_csLogId(ct.id, i)}"
-      class="hidden"
-      style="border-left:2px solid #374151;margin-left:8px;padding-left:8px;margin-bottom:2px;max-height:120px;overflow-y:auto;">
-    </div>`;
+  // Subtitle: which step is currently active
+  const subtEl = document.getElementById('conn-setup-subtitle');
+  if (subtEl) {
+    const running = connections.filter(c => c.setup_status !== 'done' && c.setup_status !== 'failed');
+    if (running.length) {
+      const activeProtos = [...new Set(running.map(c => {
+        const s = _CSD_PROTO_STEP[c.protocol] || 1;
+        return _CSD_STEP_LABEL[s];
+      }))];
+      subtEl.textContent = `Выполняется: ${activeProtos.join(', ')}...`;
+    }
   }
-  // Info lines block (step 0 / plain logs)
-  logBlocks += `<div id="${_csLogId(ct.id, 0)}"
-    class="hidden"
-    style="border-left:2px solid #374151;margin-left:8px;padding-left:8px;margin-bottom:2px;max-height:80px;overflow-y:auto;">
-  </div>`;
 
-  return `
-<div id="cs-card-${ct.id}" style="background:#111827;border:1px solid #1f2937;border-radius:12px;overflow:hidden;margin-bottom:8px;">
-  <!-- Card header: protocol + type + badge -->
-  <div style="display:flex;align-items:center;gap:10px;padding:10px 14px 0;cursor:pointer;"
-       onclick="_csToggleLogs(${ct.id})">
-    <div style="flex:1;min-width:0;">
-      <div style="display:flex;align-items:center;gap:6px;">
-        <span style="font-size:13px;font-weight:600;color:#f9fafb;">${protoLabel}</span>
-        <span style="font-size:10px;font-weight:700;color:${typeColor};">${typeLabel}</span>
-      </div>
-      <div id="cs-badge-${ct.id}" style="font-size:10px;color:#6b7280;margin-top:1px;">ожидание...</div>
-    </div>
-    <i class="fas fa-chevron-down" id="cs-chev-${ct.id}" style="font-size:10px;color:#4b5563;transition:transform .2s;flex-shrink:0;"></i>
-  </div>
-
-  <!-- Step timeline -->
-  <div style="padding:0 14px;">
-    ${timeline}
-  </div>
-
-  <!-- Per-step log blocks (hidden by default, toggle via chevron) -->
-  <div id="cs-logs-${ct.id}" class="hidden" style="padding:0 14px 10px;">
-    ${logBlocks}
-  </div>
-</div>`;
+  // Update overall progress
+  const done   = connections.filter(c => c.setup_status === 'done').length;
+  const failed = connections.filter(c => c.setup_status === 'failed').length;
+  const total  = connections.length;
+  const pct    = total ? Math.round((done + failed) / total * 100) : 0;
+  _cdSetProgress(pct);
 }
 
-function _csToggleLogs(connId) {
-  const el = document.getElementById(`cs-logs-${connId}`);
-  if (!el) return;
-  el.classList.toggle('hidden');
-  const chev = document.getElementById(`cs-chev-${connId}`);
-  if (chev) chev.style.transform = el.classList.contains('hidden') ? '' : 'rotate(180deg)';
-}
-
-// ── Open modal ───────────────────────────────────────────────────────────
+// ── Open modal ────────────────────────────────────────────────────────────
 
 function openConnSetupModal(connIds, euServerName, connectionTypes) {
-  _connSetupIds = connIds;
+  _connSetupIds  = connIds;
+  _connSetupData = {};
 
   const modal = document.getElementById('modal-conn-setup');
-  if (!modal) { console.error('[ConnSetup] modal-conn-setup not found!'); return; }
+  if (!modal) { console.error('[ConnSetup] modal not found!'); return; }
 
   // Header
   const titleEl = document.getElementById('conn-setup-title');
   const subtEl  = document.getElementById('conn-setup-subtitle');
   const srvEl   = document.getElementById('conn-setup-server-name');
   if (titleEl) titleEl.textContent = 'Настройка подключений';
-  if (subtEl)  subtEl.textContent  = 'Деплой выполняется...';
+  if (subtEl)  subtEl.textContent  = 'Шаги выполняются последовательно';
   if (srvEl)   srvEl.textContent   = euServerName || '';
+
+  // Reset step dots
+  for (let i = 1; i <= 5; i++) {
+    _csdSetDot(i, 'pending');
+    _csdSetConn(i, false);
+    const log  = document.getElementById(`csd-log-${i}`);
+    const wrap = document.getElementById(`csd-step-${i}-wrap`);
+    const icon = document.getElementById(`csd-icon-${i}`);
+    const chev = document.getElementById(`csd-chev-${i}`);
+    if (log)  { log.innerHTML = ''; log.classList.add('hidden'); }
+    if (wrap) wrap.classList.add('hidden');
+    if (icon) icon.textContent = '·';
+    if (chev) chev.style.transform = '';
+  }
+
+  // Show steps that are relevant for the connections being deployed
+  const hasProto = { vless_reality:false, amnezia_wg:false, naive_proxy:false };
+  let hasCascade = false;
+  (connectionTypes || []).forEach(ct => {
+    if (ct.protocol in hasProto) hasProto[ct.protocol] = true;
+    if (ct.connection_type === 'cascade') hasCascade = true;
+  });
+
+  // Pre-show step wrappers for present protocols
+  const protoToStep = { vless_reality:1, amnezia_wg:2, naive_proxy:3 };
+  Object.entries(hasProto).forEach(([p, present]) => {
+    if (present) {
+      const wrap = document.getElementById(`csd-step-${protoToStep[p]}-wrap`);
+      if (wrap) wrap.classList.remove('hidden');
+      _csdSetDot(protoToStep[p], 'running');
+    }
+  });
+  if (hasCascade) {
+    const w4 = document.getElementById('csd-step-4-wrap');
+    if (w4) w4.classList.remove('hidden');
+    _csdSetDot(4, 'pending');
+  }
 
   _cdSetDot('running');
   _cdSetProgress(0);
 
-  // Build per-connection cards
-  const cardsEl = document.getElementById('conn-setup-cards');
-  if (cardsEl) {
-    cardsEl.innerHTML = (connectionTypes || []).map(_csBuildCard).join('');
-  }
-
-  // Buttons
   const errBlock = document.getElementById('conn-setup-error-block');
   if (errBlock) errBlock.classList.add('hidden');
   _cdShowBtn('conn-setup-btn-retry',  false);
@@ -1465,93 +1608,10 @@ function openConnSetupModal(connIds, euServerName, connectionTypes) {
   _cdShowBtn('conn-setup-btn-cancel', true);
 
   modal.classList.remove('hidden');
-  console.log('[ConnSetup] Modal opened, ids:', connIds);
+  console.log('[ConnSetup] Modal opened for ids:', connIds);
 }
 
-// ── Render one connection card from batch-status data ────────────────────
-
-function _csRenderCard(c) {
-  const protocol   = c.protocol || 'vless_reality';
-  const totalSteps = _CS_STEPS_COUNT[protocol] || 6;
-  const steps      = c.steps || [];
-
-  // Badge update
-  const badgeEl = document.getElementById(`cs-badge-${c.id}`);
-  if (badgeEl) {
-    if (c.setup_status === 'done') {
-      badgeEl.textContent = '✅ готово';
-      badgeEl.style.color = '#86efac';
-    } else if (c.setup_status === 'failed') {
-      badgeEl.textContent = '❌ ошибка';
-      badgeEl.style.color = '#fca5a5';
-    } else {
-      badgeEl.textContent = '⏳ выполняется...';
-      badgeEl.style.color = '#93c5fd';
-    }
-  }
-
-  // Separate structured steps and info lines
-  const stepData   = {};  // n -> {status, msg}
-  const infoLines  = [];  // plain log lines
-
-  for (const s of steps) {
-    if (s.is_step && s.n >= 1) {
-      stepData[s.n] = { status: s.status, msg: s.msg };
-    } else if (!s.is_step) {
-      infoLines.push(s.msg);
-    }
-  }
-
-  // Find highest step seen
-  const maxStep = steps.filter(s => s.is_step && s.n >= 1)
-                       .reduce((m, s) => Math.max(m, s.n), 0);
-
-  // Update dots + connectors
-  for (let i = 1; i <= totalSteps; i++) {
-    const sd = stepData[i];
-    if (sd) {
-      // Map API status to dot state
-      let dotState = sd.status; // running | ok | error | skip
-      if (sd.status === 'ok' && /⚠|warn/i.test(sd.msg)) dotState = 'warn';
-      _csSetDot(c.id, i, dotState);
-
-      // Connector: light up if step is done/ok/skip/warn
-      if (i < totalSteps && ['ok','skip','warn'].includes(sd.status)) {
-        _csSetConn(c.id, i, true);
-      }
-
-      // Show step log
-      _csShowStepLog(c.id, i, [sd.msg], sd.status === 'running' || sd.status === 'error');
-    } else if (i <= maxStep) {
-      // Step not yet reported → pending
-      // keep as-is
-    }
-  }
-
-  // Show info lines in block 0
-  if (infoLines.length > 0) {
-    _csShowStepLog(c.id, 0, infoLines, true);
-    // Also surface logs inside the logs container (auto-expand on error/running)
-    const logsEl = document.getElementById(`cs-logs-${c.id}`);
-    if (logsEl && (c.setup_status !== 'done')) {
-      logsEl.classList.remove('hidden');
-      const chev = document.getElementById(`cs-chev-${c.id}`);
-      if (chev) chev.style.transform = 'rotate(180deg)';
-    }
-  }
-
-  // Auto-expand on error
-  if (c.setup_status === 'failed') {
-    const logsEl = document.getElementById(`cs-logs-${c.id}`);
-    if (logsEl) {
-      logsEl.classList.remove('hidden');
-      const chev = document.getElementById(`cs-chev-${c.id}`);
-      if (chev) chev.style.transform = 'rotate(180deg)';
-    }
-  }
-}
-
-// ── Polling ──────────────────────────────────────────────────────────────
+// ── Polling ───────────────────────────────────────────────────────────────
 
 function _startConnSetupPolling(connIds) {
   if (_connSetupPoll) clearInterval(_connSetupPoll);
@@ -1561,18 +1621,8 @@ function _startConnSetupPolling(connIds) {
     if (!res.ok) return;
 
     const { connections, all_done, any_failed } = res.data;
-    connections.forEach(c => _csRenderCard(c));
 
-    const done   = connections.filter(c => c.setup_status === 'done').length;
-    const failed = connections.filter(c => c.setup_status === 'failed').length;
-    const total  = connections.length;
-
-    const subtEl = document.getElementById('conn-setup-subtitle');
-    if (subtEl) subtEl.textContent =
-      `${done + failed} из ${total} обработано${failed ? ` · ${failed} ошибок` : ''}`;
-
-    const pct = total ? Math.round((done + failed) / total * 100) : 0;
-    _cdSetProgress(pct);
+    _csdRenderAll(connections);
 
     if (all_done) {
       clearInterval(_connSetupPoll);
@@ -1580,13 +1630,23 @@ function _startConnSetupPolling(connIds) {
       _cdSetDot(any_failed ? 'error' : 'ok');
       _cdSetProgress(100);
 
+      const done   = connections.filter(c => c.setup_status === 'done').length;
+      const failed = connections.filter(c => c.setup_status === 'failed').length;
+
       const titleEl = document.getElementById('conn-setup-title');
+      const subtEl  = document.getElementById('conn-setup-subtitle');
       if (titleEl) titleEl.textContent = any_failed
         ? 'Деплой завершён с ошибками'
-        : 'Подключения настроены';
+        : 'Все подключения настроены';
       if (subtEl) subtEl.textContent = any_failed
         ? `Успешно: ${done}, ошибок: ${failed}`
-        : `Все ${done} подключений настроены ✅`;
+        : `${done} подключений задеплоено ✅`;
+
+      // Mark all pending dots as skip (not used in this batch)
+      for (let i = 1; i <= 5; i++) {
+        const dot = document.getElementById(`csd-dot-${i}`);
+        if (dot && dot.className.includes('pending')) _csdSetDot(i, 'skip');
+      }
 
       _cdShowBtn('conn-setup-btn-cancel', false);
       _cdShowBtn('conn-setup-btn-retry',  false);
@@ -1597,7 +1657,7 @@ function _startConnSetupPolling(connIds) {
         const errTextEl = document.getElementById('conn-setup-error-text');
         if (errEl)     errEl.classList.remove('hidden');
         if (errTextEl) errTextEl.textContent =
-          'Один или несколько деплоев завершились с ошибкой. Разверните карточку для деталей.';
+          'Один или несколько деплоев завершились с ошибкой. Разверните шаг для деталей.';
         _cdShowBtn('conn-setup-btn-retry', true);
       }
 
@@ -1606,17 +1666,18 @@ function _startConnSetupPolling(connIds) {
   }, 2000);
 }
 
-// ── Close ────────────────────────────────────────────────────────────────
+// ── Close ─────────────────────────────────────────────────────────────────
 
 function closeConnSetup() {
   if (_connSetupPoll) { clearInterval(_connSetupPoll); _connSetupPoll = null; }
-  _connSetupIds = [];
+  _connSetupIds  = [];
+  _connSetupData = {};
   const m = document.getElementById('modal-conn-setup');
   if (m) m.classList.add('hidden');
   loadConnectionsGrouped();
 }
 
-// ── Retry ─────────────────────────────────────────────────────────────────
+// ── Retry ──────────────────────────────────────────────────────────────────
 
 async function retryConnSetup() {
   if (!_connSetupIds.length) return;
@@ -1624,17 +1685,18 @@ async function retryConnSetup() {
   if (errBlock) errBlock.classList.add('hidden');
   _cdSetDot('running');
   _cdSetProgress(0);
+  for (let i = 1; i <= 5; i++) _csdSetDot(i, 'pending');
   _cdShowBtn('conn-setup-btn-retry',  false);
   _cdShowBtn('conn-setup-btn-done',   false);
   _cdShowBtn('conn-setup-btn-cancel', true);
   const titleEl = document.getElementById('conn-setup-title');
   const subtEl  = document.getElementById('conn-setup-subtitle');
   if (titleEl) titleEl.textContent = 'Настройка подключений';
-  if (subtEl)  subtEl.textContent  = 'Повторный опрос статуса...';
+  if (subtEl)  subtEl.textContent  = 'Повторный опрос...';
   _startConnSetupPolling(_connSetupIds);
 }
 
 window.openConnSetupModal  = openConnSetupModal;
 window.closeConnSetup      = closeConnSetup;
 window.retryConnSetup      = retryConnSetup;
-window._csToggleLogs       = _csToggleLogs;
+window._csdToggleLog       = _csdToggleLog;

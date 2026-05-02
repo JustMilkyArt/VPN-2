@@ -661,7 +661,7 @@
 
 <!-- ═══ CONNECTION AUTO-SETUP MODAL ══════════════════════════════════════ -->
 <div id="modal-conn-setup" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[60] p-4" style="pointer-events:auto;">
-  <div class="bg-[#0f1117] border border-white/8 rounded-2xl shadow-2xl w-full max-w-[560px] overflow-hidden" onclick="event.stopPropagation()">
+  <div class="bg-[#0f1117] border border-white/8 rounded-2xl shadow-2xl w-full max-w-[540px] overflow-hidden" onclick="event.stopPropagation()">
 
     <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-white/6">
@@ -671,30 +671,117 @@
           background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.25);
           transition:background .4s,box-shadow .4s;display:inline-block;"></span>
         <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <span id="conn-setup-title" class="text-sm font-semibold text-white">Настройка подключений</span>
-          </div>
-          <p id="conn-setup-subtitle" class="text-[11px] text-gray-500 mt-0.5 truncate">Деплой выполняется...</p>
+          <span id="conn-setup-title" class="text-sm font-semibold text-white">Настройка подключений</span>
+          <p id="conn-setup-subtitle" class="text-[11px] text-gray-500 mt-0.5 truncate">Шаги выполняются последовательно</p>
         </div>
       </div>
-      <div class="flex items-center gap-2 flex-shrink-0 ml-3">
-        <span id="conn-setup-server-name" class="text-xs font-medium text-gray-300 hidden sm:block max-w-[160px] truncate"></span>
-      </div>
+      <span id="conn-setup-server-name" class="text-xs font-medium text-gray-400 hidden sm:block max-w-[180px] truncate flex-shrink-0 ml-3"></span>
     </div>
 
-    <!-- Progress bar -->
+    <!-- Progress bar (thin gradient line) -->
     <div class="h-[2px] bg-white/5">
       <div id="conn-setup-progress-fill" class="h-full rounded-full transition-all duration-700"
            style="width:0%;background:linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)"></div>
     </div>
 
-    <!-- Connection cards list -->
-    <div id="conn-setup-cards" class="px-4 pt-4 pb-2 space-y-3 max-h-[58vh] overflow-y-auto scrollbar-thin">
-      <!-- Cards injected by openConnSetupModal() -->
+    <!-- Steps timeline (5 steps) -->
+    <div class="px-6 pt-5 pb-3">
+      <div class="flex items-center">
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-1"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">VLESS</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-1"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-2"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">AWG</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-2"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-3"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">NaiveProxy</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-3"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-4"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Cascade</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-4"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-5"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Финал</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Per-step log accordions -->
+    <div class="px-6 space-y-1 pb-3 max-h-[46vh] overflow-y-auto scrollbar-thin">
+
+      <!-- Step 1: VLESS+Reality -->
+      <div id="csd-step-1-wrap" class="hidden">
+        <button onclick="_csdToggleLog(1)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-1" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">VLESS+Reality</span>
+          <i id="csd-chev-1" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-1" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 2: AmneziaWG -->
+      <div id="csd-step-2-wrap" class="hidden">
+        <button onclick="_csdToggleLog(2)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-2" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">AmneziaWG</span>
+          <i id="csd-chev-2" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-2" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 3: NaiveProxy -->
+      <div id="csd-step-3-wrap" class="hidden">
+        <button onclick="_csdToggleLog(3)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-3" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">NaiveProxy</span>
+          <i id="csd-chev-3" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-3" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 4: Cascade -->
+      <div id="csd-step-4-wrap" class="hidden">
+        <button onclick="_csdToggleLog(4)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-4" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">Cascade / RU Xray routing</span>
+          <i id="csd-chev-4" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-4" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 5: Final (WARP / split-tunnel / misc) -->
+      <div id="csd-step-5-wrap" class="hidden">
+        <button onclick="_csdToggleLog(5)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-5" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">WARP / Split-tunnel / Финал</span>
+          <i id="csd-chev-5" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-5" class="hidden stp-log-block mb-1"></div>
+      </div>
+
     </div>
 
     <!-- Error block -->
-    <div id="conn-setup-error-block" class="hidden mx-4 mb-2 px-4 py-3 bg-red-950/50 border border-red-800/60 rounded-xl">
+    <div id="conn-setup-error-block" class="hidden mx-6 mb-2 px-4 py-3 bg-red-950/50 border border-red-800/60 rounded-xl">
       <div class="flex items-start gap-2">
         <i class="fas fa-triangle-exclamation text-red-400 text-xs mt-0.5 flex-shrink-0"></i>
         <span id="conn-setup-error-text" class="text-xs text-red-300 break-all"></span>
@@ -702,7 +789,7 @@
     </div>
 
     <!-- Buttons -->
-    <div class="px-4 pb-5 pt-2 flex gap-2">
+    <div class="px-6 pb-5 pt-2 flex gap-2">
       <button id="conn-setup-btn-cancel" onclick="closeConnSetup()"
         class="py-2.5 px-5 rounded-xl text-sm font-medium border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition flex items-center justify-center gap-2 h-10">
         <i class="fas fa-xmark text-xs"></i> Отмена
