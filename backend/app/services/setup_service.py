@@ -453,48 +453,55 @@ else
     echo "[!] add-apt-repository failed (503?), will try fallback" >&2
 fi
 
-# ── Метод 2: fallback — прямая загрузка .deb из GitHub releases ──────────
+# ── Метод 2: fallback — реальный awg binary из amneziawg-tools releases ──
 if [ "$AWG_VIA_PPA" = "0" ]; then
-    echo "[*] Fallback: installing AmneziaWG from GitHub releases..."
-    ARCH=$(dpkg --print-architecture 2>/dev/null || echo amd64)
-    # Ищем последний релиз
-    AWG_VER=$(curl -fsSL --max-time 10 \
+    echo "[*] Fallback: installing awg binary from amneziawg-tools GitHub releases..."
+    mkdir -p /tmp/awg_tools
+
+    # Узнаём последний тег amneziawg-tools
+    TOOLS_VER=$(curl -fsSL --max-time 10 \
+        https://api.github.com/repos/amnezia-vpn/amneziawg-tools/releases/latest \
+        2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 | head -1)
+    [ -z "$TOOLS_VER" ] && TOOLS_VER="v1.0.20260223"
+    echo "[*] amneziawg-tools release: $TOOLS_VER"
+
+    # Скачиваем ubuntu zip — содержит готовые бинарники awg и awg-quick
+    TOOLS_ZIP_URL="https://github.com/amnezia-vpn/amneziawg-tools/releases/download/${TOOLS_VER}/ubuntu-22.04-amneziawg-tools.zip"
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 \
+            -o /tmp/awg_tools/awg-tools.zip "$TOOLS_ZIP_URL" 2>&1; then
+        cd /tmp/awg_tools
+        unzip -o awg-tools.zip 2>/dev/null || true
+        # Ищем бинарник awg в распакованном архиве
+        AWG_BIN=$(find /tmp/awg_tools -name 'awg' -type f ! -name '*.sha256' 2>/dev/null | head -1)
+        if [ -n "$AWG_BIN" ]; then
+            cp "$AWG_BIN" /usr/local/bin/awg
+            chmod +x /usr/local/bin/awg
+            AWG_QUICK_BIN=$(find /tmp/awg_tools -name 'awg-quick' -type f 2>/dev/null | head -1)
+            [ -n "$AWG_QUICK_BIN" ] && cp "$AWG_QUICK_BIN" /usr/local/bin/awg-quick && chmod +x /usr/local/bin/awg-quick
+            echo "[+] awg binary installed from tools zip: $(awg --version 2>/dev/null || echo ok)"
+        else
+            echo "[!] awg binary not found in zip" >&2
+        fi
+    else
+        echo "[!] amneziawg-tools zip download failed" >&2
+    fi
+
+    # Пробуем установить ядерный модуль через dkms (нужен для modprobe amneziawg)
+    apt-get install -y -qq dkms linux-headers-$(uname -r) linux-headers-generic 2>/dev/null || true
+    # Пробуем dkms-пакет из amnezia репо
+    KMOD_VER=$(curl -fsSL --max-time 10 \
         https://api.github.com/repos/amnezia-vpn/amneziawg-linux-kernel-module/releases/latest \
         2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 | head -1)
-    [ -z "$AWG_VER" ] && AWG_VER="v1.0.20250521"
-    echo "[*] AWG release: $AWG_VER, arch: $ARCH"
-
-    # Определяем версию ядра для подбора deb-пакета
-    KVER=$(uname -r)
-    UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "24.04")
-
-    # Пробуем dkms-пакет (не зависит от версии ядра)
-    AWG_DEB_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/releases/download/${AWG_VER}/amneziawg-dkms_${AWG_VER#v}-1_all.deb"
-    mkdir -p /tmp/awg_deb
-    if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o /tmp/awg_deb/awg-dkms.deb "$AWG_DEB_URL" 2>&1; then
-        apt-get install -y -qq dkms linux-headers-$(uname -r) linux-headers-generic 2>/dev/null || true
-        dpkg -i /tmp/awg_deb/awg-dkms.deb 2>&1 || apt-get install -f -y -qq 2>&1 || true
-    else
-        echo "[!] dkms deb download failed, trying tools-only deb" >&2
-    fi
-
-    # Всегда ставим amneziawg-tools (userspace-утилиты: awg, awg-quick)
-    TOOLS_DEB_URL="https://github.com/amnezia-vpn/amneziawg-tools/releases/latest/download/amneziawg-tools_${ARCH}.deb"
-    if curl -fsSL --retry 3 --retry-delay 2 --max-time 30 -o /tmp/awg_deb/awg-tools.deb "$TOOLS_DEB_URL" 2>&1; then
-        dpkg -i /tmp/awg_deb/awg-tools.deb 2>&1 || true
-    fi
-
-    # Последняя попытка: wireguard-tools как замена (содержит wg, совместим с awg)
-    if ! which awg >/dev/null 2>&1; then
-        echo "[!] awg binary not found, installing wireguard-tools as fallback" >&2
-        apt-get install -y -qq wireguard-tools 2>/dev/null || true
-        # Создаём симлинк awg -> wg если нет awg
-        [ -f /usr/bin/wg ] && ln -sf /usr/bin/wg /usr/local/bin/awg 2>/dev/null || true
+    [ -z "$KMOD_VER" ] && KMOD_VER="v1.0.20250521"
+    KMOD_DEB_URL="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/releases/download/${KMOD_VER}/amneziawg-dkms_${KMOD_VER#v}-1_all.deb"
+    if curl -fsSL --retry 2 --max-time 60 -o /tmp/awg_tools/awg-dkms.deb "$KMOD_DEB_URL" 2>&1; then
+        dpkg -i /tmp/awg_tools/awg-dkms.deb 2>&1 || apt-get install -f -y -qq 2>&1 || true
     fi
 fi
 
 modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true
-which awg || which wg || (echo 'AWG/WG binary not found after all install attempts' >&2 && exit 1)
+# Проверяем именно awg — wireguard-tools НЕ является заменой
+which awg || (echo 'AWG binary not found after all install attempts' >&2 && exit 1)
 echo "[+] AWG done"
 """
                 _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
@@ -705,7 +712,9 @@ echo "[3.4_STATUS=$UFW_STATUS]"
 if [ "$NEW_USER" != "{cur_user}" ]; then
     id "$NEW_USER" &>/dev/null || useradd -m -s /bin/bash "$NEW_USER"
     usermod -aG sudo "$NEW_USER" 2>/dev/null || true
-    echo "$NEW_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$NEW_USER"
+    # NOPASSWD + !requiretty чтобы sudo -n работал в non-interactive SSH (paramiko)
+    printf '%s ALL=(ALL) NOPASSWD:ALL\nDefaults:%s !requiretty\n' "$NEW_USER" "$NEW_USER" \
+        > /etc/sudoers.d/"$NEW_USER"
     chmod 440 /etc/sudoers.d/"$NEW_USER"
     mkdir -p /home/"$NEW_USER"/.ssh && chmod 700 /home/"$NEW_USER"/.ssh
     cp ~/.ssh/authorized_keys /home/"$NEW_USER"/.ssh/authorized_keys 2>/dev/null || true
@@ -993,7 +1002,7 @@ echo "XRAY=$(xray version 2>/dev/null | head -1 || echo '')"
 echo "CADDY=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || /usr/local/bin/caddy version 2>/dev/null | head -1 || echo '')"
 echo "AWG=$(awg --version 2>/dev/null | head -1 || echo '')"
 echo "F2B=$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
-echo "UFW=$(ufw status 2>/dev/null | head -1 || echo unknown)"
+echo "UFW=$(ufw status 2>/dev/null | head -1 || echo unknown)"  # выполняется под sudo -n bash -s
 echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null || echo '')"
 """
         _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
