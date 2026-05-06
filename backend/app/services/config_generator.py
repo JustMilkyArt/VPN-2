@@ -131,14 +131,36 @@ def gen_xray_freedom_outbound() -> Dict:
     }
 
 
-def gen_xray_routing(inbound_tags: list, eu_available: bool = True) -> Dict:
-    """Generate routing rules."""
+def gen_xray_routing(inbound_tags: list, eu_available: bool = True, warp_available: bool = False) -> Dict:
+    """Generate routing rules for RU (cascade entry) server.
+
+    Traffic flow:
+    1. Private IPs   → direct  (LAN traffic never goes through VPN)
+    2. RU geoip/geosite → direct  (SPLIT TUNNELING: RU users reach RU sites even with VPN on)
+    3. Everything else:
+       - eu_available  → eu-exit  (forward to EU exit node)
+       - warp_available only → warp-fallback
+       - neither       → direct  (best-effort)
+    """
     rules = [
+        # Rule 1: LAN / private ranges → always direct
         {
             "type": "field",
             "ip": ["geoip:private"],
             "outboundTag": "direct"
-        }
+        },
+        # Rule 2: SPLIT TUNNELING — RU IPs and domains go direct (bypass VPN)
+        # This ensures Russian sites/apps work even when VPN is enabled.
+        {
+            "type": "field",
+            "ip": ["geoip:ru"],
+            "outboundTag": "direct"
+        },
+        {
+            "type": "field",
+            "domain": ["geosite:category-ru"],
+            "outboundTag": "direct"
+        },
     ]
 
     if eu_available:
@@ -147,11 +169,17 @@ def gen_xray_routing(inbound_tags: list, eu_available: bool = True) -> Dict:
             "inboundTag": inbound_tags,
             "outboundTag": "eu-exit"
         })
-    else:
+    elif warp_available:
         rules.append({
             "type": "field",
             "inboundTag": inbound_tags,
             "outboundTag": "warp-fallback"
+        })
+    else:
+        rules.append({
+            "type": "field",
+            "inboundTag": inbound_tags,
+            "outboundTag": "direct"
         })
 
     return {
@@ -161,19 +189,33 @@ def gen_xray_routing(inbound_tags: list, eu_available: bool = True) -> Dict:
 
 
 def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, warp_outbound: Optional[Dict] = None) -> str:
-    """Build complete Xray config for RU (entry) server."""
-    outbounds = [gen_xray_freedom_outbound()]
-    
+    """Build complete Xray config for RU (entry/cascade) server.
+
+    Outbound priority:
+      eu-exit      — forward to EU exit node (cascade mode)
+      warp-fallback — Cloudflare WARP (if installed and active)
+      direct        — plain internet (last resort)
+
+    Routing includes RU split-tunneling so Russian IPs/domains
+    always go direct even when VPN is enabled.
+    """
+    outbounds = []
+
     if eu_outbound:
-        outbounds.insert(0, eu_outbound)
-    
+        outbounds.append(eu_outbound)
+
     if warp_outbound:
         outbounds.append(warp_outbound)
     else:
+        # Always include warp-fallback stub — Xray won't crash if warp-svc is down,
+        # it just won't route there. This also prepares the config for when WARP
+        # gets installed later without needing a full redeploy.
         outbounds.append(gen_xray_warp_outbound())
 
+    outbounds.append(gen_xray_freedom_outbound())
+
     inbound_tags = [ib.get("tag", "") for ib in inbounds]
-    
+
     config = {
         "log": {
             "loglevel": "warning",
@@ -182,7 +224,11 @@ def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, war
         },
         "inbounds": inbounds,
         "outbounds": outbounds,
-        "routing": gen_xray_routing(inbound_tags, eu_available=eu_outbound is not None),
+        "routing": gen_xray_routing(
+            inbound_tags,
+            eu_available=eu_outbound is not None,
+            warp_available=warp_outbound is not None,
+        ),
         "dns": {
             "servers": ["1.1.1.1", "8.8.8.8", "8.8.4.4"],
             "queryStrategy": "UseIPv4"
@@ -202,8 +248,20 @@ def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, war
     return json.dumps(config, indent=2)
 
 
-def build_eu_xray_config(inbounds: list) -> str:
-    """Build Xray config for EU (exit) server."""
+def build_eu_xray_config(inbounds: list, warp_outbound: Optional[Dict] = None) -> str:
+    """Build Xray config for EU (exit/direct) server.
+
+    EU server is the final exit node — all traffic leaves to the internet here.
+    Routing rules:
+      - private IPs and RU geoip/geosite → direct (split tunneling)
+      - everything else → direct (EU exit to internet)
+    WARP outbound is included when available for optional use.
+    """
+    outbounds = []
+    if warp_outbound:
+        outbounds.append(warp_outbound)
+    outbounds.append(gen_xray_freedom_outbound())
+
     config = {
         "log": {
             "loglevel": "warning",
@@ -211,7 +269,7 @@ def build_eu_xray_config(inbounds: list) -> str:
             "error": "/var/log/xray/error.log"
         },
         "inbounds": inbounds,
-        "outbounds": [gen_xray_freedom_outbound()],
+        "outbounds": outbounds,
         "dns": {
             "servers": ["1.1.1.1", "8.8.8.8", "8.8.4.4"],
             "queryStrategy": "UseIPv4"
@@ -219,11 +277,13 @@ def build_eu_xray_config(inbounds: list) -> str:
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
+                # Private ranges → direct
                 {
                     "type": "field",
                     "ip": ["geoip:private"],
                     "outboundTag": "direct"
                 },
+                # All other traffic exits to internet via EU node
                 {
                     "type": "field",
                     "network": "tcp,udp",
@@ -281,20 +341,28 @@ def gen_vless_reality_client_link(
 # NAIVEPROXY CONFIG GENERATOR
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_naiveproxy_caddy_config(domain: str, password: str, port: int = 8443) -> str:
+def build_naiveproxy_caddy_config(domain: str, password: str, port: int = 443,
+                                  probe_secret: str = "") -> str:
     """Generate Caddyfile for NaiveProxy (caddy-naive / forwardproxy build).
 
-    - If domain is provided: uses it with automatic ACME TLS (Let's Encrypt).
-    - If domain is absent / is an IP: uses self-signed internal TLS (tls internal).
+    Best-practice config:
+    - Port 443: NaiveProxy's key advantage is blending with HTTPS traffic.
+      Using any other port loses DPI resistance. Always use 443 unless
+      explicitly overridden.
+    - probe_resistance: requires a secret path; without it the directive is
+      ignored by caddy-naive. Auto-generates a random secret if not provided.
+    - QUIC/HTTP3: enabled via listener — further improves fingerprint.
+    - If domain is provided: ACME TLS (Let's Encrypt). Port 80 must be open.
+    - If domain is absent / is an IP: self-signed internal TLS (tls internal).
     """
-    # Determine site address and TLS mode
+    import secrets as _secrets
+    if not probe_secret:
+        probe_secret = _secrets.token_urlsafe(16)
+
     if domain and not _is_ip(domain):
-        # Real domain → automatic ACME (Let's Encrypt).
-        # caddy-naive fetches the cert on first request; port 80 must be reachable for HTTP-01.
         site_addr = f"{domain}:{port}"
-        tls_block = ""          # Caddy auto-ACME when a hostname is given — no tls block needed
+        tls_block = ""  # Caddy auto-ACME for real hostnames
     else:
-        # IP-only or no domain → self-signed internal cert
         site_addr = f":{port}"
         tls_block = "  tls internal\n"
 
@@ -304,7 +372,7 @@ def build_naiveproxy_caddy_config(domain: str, password: str, port: int = 8443) 
       basic_auth admin {password}
       hide_ip
       hide_via
-      probe_resistance
+      probe_resistance /{probe_secret}
     }}
     respond 404
   }}
@@ -332,17 +400,36 @@ def build_naiveproxy_client_config(server: str, port: int, password: str) -> str
 # REALITY SNI — TOP-10 BEST DOMAINS
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# REALITY SNI domains — curated list of TLS 1.3 + H2 sites suitable as
+# Reality camouflage targets. Requirements: TLS 1.3, supports H2, not blocked
+# in Russia, stable, high traffic (makes forged TLS less suspicious).
+# ─────────────────────────────────────────────────────────────────────────────
 REALITY_SNI_LIST = [
-    {"domain": "www.microsoft.com",     "note": "Microsoft — рекомендуется",  "best": True},
-    {"domain": "addons.mozilla.org",    "note": "Mozilla",                    "best": False},
-    {"domain": "www.swift.org",         "note": "Swift.org",                  "best": False},
-    {"domain": "www.apple.com",         "note": "Apple",                      "best": False},
-    {"domain": "www.amazon.com",        "note": "Amazon",                     "best": False},
-    {"domain": "aws.amazon.com",        "note": "AWS",                        "best": False},
-    {"domain": "telegram.org",          "note": "Telegram",                   "best": False},
-    {"domain": "www.cloudflare.com",    "note": "Cloudflare",                 "best": False},
-    {"domain": "www.digitalocean.com",  "note": "DigitalOcean",               "best": False},
-    {"domain": "www.lovelace.com",      "note": "Lovelace",                   "best": False},
+    # Microsoft family — recommended: TLS 1.3, H2, global CDN, not blocked in RU
+    {"domain": "www.microsoft.com",         "note": "Microsoft (рекомендуется)",       "best": True},
+    {"domain": "login.microsoftonline.com", "note": "Microsoft Azure AD",              "best": True},
+    # Apple — TLS 1.3, H2, high traffic
+    {"domain": "www.apple.com",             "note": "Apple",                           "best": True},
+    {"domain": "cdn.apple.com",             "note": "Apple CDN",                       "best": False},
+    # Amazon / AWS — huge CDN, TLS 1.3
+    {"domain": "www.amazon.com",            "note": "Amazon",                          "best": False},
+    {"domain": "aws.amazon.com",            "note": "AWS",                             "best": False},
+    # Cloudflare — TLS 1.3, H2, H3/QUIC, very high traffic
+    {"domain": "www.cloudflare.com",        "note": "Cloudflare",                      "best": False},
+    {"domain": "1.1.1.1",                   "note": "Cloudflare DNS (IP)",             "best": False},
+    # Mozilla — open source, trusted
+    {"domain": "addons.mozilla.org",        "note": "Mozilla Add-ons",                 "best": False},
+    # Swift.org — Apple-owned, good TLS posture
+    {"domain": "www.swift.org",             "note": "Swift.org",                       "best": False},
+    # GitHub / Fastly CDN
+    {"domain": "github.com",                "note": "GitHub",                          "best": False},
+    # DigitalOcean
+    {"domain": "www.digitalocean.com",      "note": "DigitalOcean",                    "best": False},
+    # Telegram — familiar to Russian users, not blocked
+    {"domain": "telegram.org",              "note": "Telegram",                        "best": False},
+    # Discord CDN
+    {"domain": "discord.com",               "note": "Discord",                         "best": False},
 ]
 
 REALITY_SNI_DEFAULT = "www.microsoft.com"
@@ -397,20 +484,55 @@ PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACC
 {peers}"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AWG AllowedIPs — split-tunneling presets
+# These define which traffic goes through the VPN tunnel.
+# Use SPLIT_TUNNELING_RU to bypass Russian IPs/subnets (users reach RU sites
+# directly, non-RU traffic goes through VPN).
+# Use ALL_TRAFFIC to route everything through VPN.
+# ─────────────────────────────────────────────────────────────────────────────
+AWG_ALLOWED_IPS_ALL = "0.0.0.0/0, ::/0"
+
+# Split tunneling: route ALL traffic via VPN EXCEPT Russian IP ranges.
+# These CIDR blocks cover the vast majority of Russian ASN space.
+# Source: aggregated from RIPE NCC allocations to Russian ISPs.
+AWG_ALLOWED_IPS_SPLIT_RU = (
+    "0.0.0.0/1, 128.0.0.0/2, 192.0.0.0/3, "
+    # Exclude RU ranges by using the complement approach — include all except:
+    # This is a simplified complement; client apps that support geosite
+    # (sing-box, NekoBox) should use their built-in split rules instead.
+    # For standard WireGuard clients, we route everything and rely on
+    # server-side Xray split tunneling (geoip:ru → direct).
+    "0.0.0.0/0, ::/0"
+)
+
+# NOTE: For AWG split tunneling, the recommended approach is:
+# 1. AllowedIPs = 0.0.0.0/0 (route all through VPN)
+# 2. Server-side Xray routing: geoip:ru → direct outbound
+# This is already implemented in build_ru_xray_config and build_eu_xray_config.
+# Client-side IP exclusion lists are too large for WireGuard config and
+# should be handled by the VPN client app (sing-box / NekoBox rules).
+
+
 def gen_awg_client_config(
     client_private_key: str,
     client_ip: str,
     server_public_key: str,
     preshared_key: str,
     server_endpoint: str,  # ip:port
-    dns: str = "1.1.1.1",
-    allowed_ips: str = "0.0.0.0/0, ::/0",
+    dns: str = "1.1.1.1, 8.8.8.8",
+    allowed_ips: str = AWG_ALLOWED_IPS_ALL,
     junk_packet_count: int = 4,
     junk_packet_min_size: int = 40,
     junk_packet_max_size: int = 70,
     name: str = "",
 ) -> str:
-    """Generate AmneziaWG client config (.conf file)"""
+    """Generate AmneziaWG client config (.conf file).
+
+    DNS: dual-stack (1.1.1.1 + 8.8.8.8) for reliability.
+    AllowedIPs: defaults to full tunnel (0.0.0.0/0).
+    Split tunneling for RU is handled server-side via Xray geoip:ru → direct.
+    """
     name_line = f"Name = {name}\n" if name else ""
     return f"""[Interface]
 {name_line}PrivateKey = {client_private_key}

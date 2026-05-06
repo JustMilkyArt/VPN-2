@@ -19,6 +19,7 @@ from app.services.config_generator import (
     build_naiveproxy_caddy_config, build_naiveproxy_client_config,
     gen_vless_reality_client_link,
     gen_awg_server_config, gen_awg_client_config,
+    REALITY_SNI_DEFAULT,
 )
 
 logger = logging.getLogger(__name__)
@@ -482,7 +483,8 @@ def install_naiveproxy(server: Server, domain: str, password: str, port: int) ->
                 return False, f"caddy-naive install failed: {err or out}"
 
             # 2. Upload Caddyfile
-            caddy_config = build_naiveproxy_caddy_config(domain, password, port)
+            _probe_secret = generate_password(16)
+            caddy_config = build_naiveproxy_caddy_config(domain, password, port, probe_secret=_probe_secret)
             ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
 
             # 3. Install systemd service
@@ -705,9 +707,9 @@ def deploy_vless_reality_connection(
                     warp_outbound = gen_xray_warp_outbound()
                     _raw_log(connection, db, "  WARP fallback: активен")
                 else:
-                    _raw_log(connection, db, "  WARP fallback: не активен")
+                    _raw_log(connection, db, "  WARP fallback: не активен (не установлен на EU)")
 
-                config_str = build_eu_xray_config(inbounds)
+                config_str = build_eu_xray_config(inbounds, warp_outbound=warp_outbound)
                 _raw_log(connection, db, f"  DIRECT: трафик выходит напрямую через {eu_server.ip}")
 
             S(4, "ok", f"Конфиг собран: {len(inbounds)} inbound(s), режим {mode}")
@@ -821,9 +823,11 @@ def deploy_naiveproxy_connection(
 
             # Step 3: Generate and upload Caddyfile
             S(3, "running", f"Генерация Caddyfile (домен={domain}, порт={port})")
-            caddy_config = build_naiveproxy_caddy_config(domain, password, port)
+            # Generate probe_resistance secret — stored in connection for reference
+            _probe_secret = connection.password[:16] if connection.password else generate_password(16)
+            caddy_config = build_naiveproxy_caddy_config(domain, password, port, probe_secret=_probe_secret)
             ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
-            S(3, "ok", "Caddyfile загружен → /etc/caddy/Caddyfile")
+            S(3, "ok", f"Caddyfile загружен → /etc/caddy/Caddyfile (probe_secret=/{_probe_secret})")
 
             # Step 4: Start caddy-naive systemd service
             S(4, "running", "Запуск systemd сервиса caddy-naive")
@@ -1345,6 +1349,7 @@ def deploy_amnezia_wg_connection(
                 server_public_key=server_pub,
                 preshared_key=psk,
                 server_endpoint=f"{server.ip}:{connection.port}",
+                dns="1.1.1.1, 8.8.8.8",
                 junk_packet_count=connection.awg_junk_packet_count,
                 junk_packet_min_size=connection.awg_junk_packet_min_size,
                 junk_packet_max_size=connection.awg_junk_packet_max_size,
@@ -1439,7 +1444,7 @@ def delete_connection_from_server(db: Session, connection: Connection, server: S
                     server_name=conn.reality_server_name or "www.microsoft.com"
                 ))
 
-        config_str = build_eu_xray_config(inbounds)
+        config_str = build_eu_xray_config(inbounds, warp_outbound=None)
 
         with SSHClient(server) as ssh:
             ssh.upload_file(config_str, "/usr/local/etc/xray/config.json")
