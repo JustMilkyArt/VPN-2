@@ -404,39 +404,66 @@ def patch_connection_param(db: Session, conn: Connection, field: str, value) -> 
 
 # ─── check status ────────────────────────────────────────────────────────────
 
+def _check_alive_on_server(ssh, conn: Connection) -> bool:
+    """Проверяет живость одного подключения через уже открытый SSH.
+
+    Вызывается как для EU-, так и для RU-сервера — в зависимости от того,
+    на каком хосте реально слушается порт/сервис.
+    """
+    if conn.protocol == Protocol.VLESS_REALITY:
+        _, out, _ = ssh.exec(f"ss -tlnp 2>/dev/null | grep ':{conn.port} '")
+        return str(conn.port) in out
+    elif conn.protocol == Protocol.AMNEZIA_WG:
+        _, out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
+        return "interface" in out.lower()
+    elif conn.protocol == Protocol.NAIVE_PROXY:
+        _, out, _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
+        return out.strip() == "active"
+    return False
+
+
+def _get_check_server(db: Session, conn: Connection):
+    """Возвращает сервер, на котором надо проверять живость подключения.
+
+    Правила:
+    - direct: всегда EU сервер (server_id)
+    - cascade VLESS+Reality: RU сервер (ru_server_id) — там Xray слушает входящий порт
+    - cascade NaiveProxy:    RU сервер (ru_server_id) — там caddy-naive принимает трафик
+    - cascade AmneziaWG:     EU сервер (server_id)    — там поднят wg-интерфейс
+    """
+    is_cascade = conn.connection_type == ConnectionType.CASCADE
+    use_ru = (
+        is_cascade
+        and conn.ru_server_id
+        and conn.protocol in (Protocol.VLESS_REALITY, Protocol.NAIVE_PROXY)
+    )
+    if use_ru:
+        return db.query(Server).filter(Server.id == conn.ru_server_id).first()
+    return db.query(Server).filter(Server.id == conn.server_id).first()
+
+
 def check_connection_live(db: Session, conn: Connection) -> Tuple[bool, str]:
     """Проверяет что подключение реально активно на сервере.
 
-    Если EU-сервер помечен как offline в БД — не пытаемся SSH,
-    сразу возвращаем inactive и сохраняем статус.
+    Для cascade VLESS+Reality и cascade NaiveProxy проверяем RU сервер,
+    т.к. именно там слушается входящий порт.
+    Для остальных (direct любой, cascade AWG) — EU сервер.
     """
-    eu_server = db.query(Server).filter(Server.id == conn.server_id).first()
-    if not eu_server:
-        return False, "EU сервер не найден"
+    check_server = _get_check_server(db, conn)
+    if not check_server:
+        return False, "Сервер не найден"
 
-    # Если сервер помечен offline — не тратим время на SSH
-    if eu_server.status == ServerStatus.OFFLINE:
+    if check_server.status == ServerStatus.OFFLINE:
         conn.status = ConnectionStatus.INACTIVE
         db.commit()
         return False, "Сервер недоступен"
 
     try:
         from app.services.ssh_service import SSHClient
-        with SSHClient(eu_server) as ssh:
-            if conn.protocol == Protocol.VLESS_REALITY:
-                _, out, _ = ssh.exec(f"ss -tlnp | grep ':{conn.port} ' | head -1")
-                alive = str(conn.port) in out
-            elif conn.protocol == Protocol.AMNEZIA_WG:
-                _, out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
-                alive = "interface" in out.lower()
-            elif conn.protocol == Protocol.NAIVE_PROXY:
-                _, out, _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
-                alive = out.strip() == "active"
-            else:
-                alive = False
+        with SSHClient(check_server) as ssh:
+            alive = _check_alive_on_server(ssh, conn)
 
-        new_status = ConnectionStatus.ACTIVE if alive else ConnectionStatus.INACTIVE
-        conn.status = new_status
+        conn.status = ConnectionStatus.ACTIVE if alive else ConnectionStatus.INACTIVE
         db.commit()
         return alive, "Активно" if alive else "Не отвечает"
 
@@ -447,9 +474,13 @@ def check_connection_live(db: Session, conn: Connection) -> Tuple[bool, str]:
 def check_all_connections(db: Session) -> Dict[int, dict]:
     """Параллельная проверка всех подключений через ThreadPoolExecutor.
 
-    Группирует подключения по EU-серверу и открывает одно SSH-соединение
-    на сервер, выполняя все проверки внутри него — вместо N отдельных SSH.
+    Группирует подключения по фактическому серверу проверки:
+    - direct любой протокол       → EU сервер (server_id)
+    - cascade VLESS+Reality        → RU сервер (ru_server_id) — там слушает Xray
+    - cascade NaiveProxy           → RU сервер (ru_server_id) — там caddy-naive
+    - cascade AmneziaWG            → EU сервер (server_id)    — там wg-интерфейс
 
+    Открывает одно SSH-соединение на каждый уникальный сервер.
     Возвращает dict {conn_id: {alive, status, message}}.
     """
     from app.services.ssh_service import SSHClient
@@ -462,43 +493,51 @@ def check_all_connections(db: Session) -> Dict[int, dict]:
     if not conns:
         return {}
 
-    # Группируем по server_id чтобы минимизировать SSH-соединения
-    by_server: Dict[int, List[Connection]] = {}
+    # Определяем для каждого подключения — на каком сервере проверять
+    # Ключ: server_id того сервера, к которому надо SSH
+    by_check_server: Dict[int, List[Connection]] = {}
     for c in conns:
-        by_server.setdefault(c.server_id, []).append(c)
+        is_cascade = c.connection_type == ConnectionType.CASCADE
+        use_ru = (
+            is_cascade
+            and c.ru_server_id
+            and c.protocol in (Protocol.VLESS_REALITY, Protocol.NAIVE_PROXY)
+        )
+        check_srv_id = c.ru_server_id if use_ru else c.server_id
+        by_check_server.setdefault(check_srv_id, []).append(c)
 
     results: Dict[int, dict] = {}
     results_lock = threading.Lock()
 
-    def _check_server_group(server_id: int, group: List[Connection]) -> None:
+    def _check_server_group(check_server_id: int, group: List[Connection]) -> None:
         """Проверяет все подключения одного сервера в одном SSH-соединении."""
-        # Нужна своя сессия БД для потока
         from app.db.database import SessionLocal
         thread_db = SessionLocal()
         try:
-            eu_server = thread_db.query(Server).filter(Server.id == server_id).first()
-            if not eu_server:
+            check_server = thread_db.query(Server).filter(Server.id == check_server_id).first()
+            if not check_server:
                 with results_lock:
                     for c in group:
                         results[c.id] = {"alive": False, "status": "inactive", "message": "Сервер не найден"}
                 return
 
             # Сервер offline — пропускаем SSH, ставим всем inactive
-            if eu_server.status == ServerStatus.OFFLINE:
+            if check_server.status == ServerStatus.OFFLINE:
                 with results_lock:
                     for c in group:
                         db_conn = thread_db.query(Connection).filter(Connection.id == c.id).first()
                         if db_conn:
                             db_conn.status = ConnectionStatus.INACTIVE
-                            results[c.id] = {"alive": False, "status": "inactive", "message": "Сервер недоступен"}
+                        results[c.id] = {"alive": False, "status": "inactive", "message": "Сервер недоступен"}
                 thread_db.commit()
                 return
 
-            # Открываем одно SSH-соединение на сервер
+            # Открываем одно SSH-соединение на нужный сервер
             try:
-                with SSHClient(eu_server) as ssh:
-                    # Собираем все нужные данные одним батчем команд
+                with SSHClient(check_server) as ssh:
+                    # Батч команд — берём все данные сразу
                     _, ss_out,  _ = ssh.exec("ss -tlnp 2>/dev/null")
+                    _, ss_udp,  _ = ssh.exec("ss -ulnp 2>/dev/null")
                     _, awg_out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
                     _, np_out,  _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
 
@@ -511,10 +550,13 @@ def check_all_connections(db: Session) -> Dict[int, dict]:
                         continue
 
                     if c.protocol == Protocol.VLESS_REALITY:
+                        # TCP порт — проверяем в ss -tlnp
                         alive = str(c.port) in ss_out
                     elif c.protocol == Protocol.AMNEZIA_WG:
+                        # AWG: проверяем наличие интерфейса
                         alive = awg_alive
                     elif c.protocol == Protocol.NAIVE_PROXY:
+                        # NaiveProxy: systemctl статус caddy-naive
                         alive = np_alive
                     else:
                         alive = False
@@ -543,11 +585,11 @@ def check_all_connections(db: Session) -> Dict[int, dict]:
             thread_db.close()
 
     # Запускаем параллельно — по одному потоку на сервер
-    max_workers = min(len(by_server), 8)
+    max_workers = min(len(by_check_server), 8)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(_check_server_group, srv_id, grp): srv_id
-            for srv_id, grp in by_server.items()
+            for srv_id, grp in by_check_server.items()
         }
         for future in as_completed(futures):
             try:
