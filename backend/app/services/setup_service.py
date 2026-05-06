@@ -944,6 +944,9 @@ echo "[PORT_CHANGE_SENT]"
             db.add(server); db.commit()
             return
 
+        # Обновляем use_sudo: после смены пользователя (vpnadmin*) нужен sudo
+        use_sudo = (cur_user != "root")
+
     except Exception as e:
         _update_setup(db, server, log_line=f"[3] ⚠️ Шаг безопасности упал: {e}")
         try:
@@ -971,6 +974,9 @@ echo "[PORT_CHANGE_SENT]"
             db.add(server); db.commit()
             return
 
+        # Обновляем use_sudo при fallback-переподключении
+        use_sudo = (cur_user != "root")
+
     _update_setup(db, server, log_line="[3] ✅ Настройка безопасности завершена")
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -996,17 +1002,16 @@ echo "[PORT_CHANGE_SENT]"
                 _update_setup(db, server, log_line=f"[4] ⚠️ Гео-запрос не удался: {_ge}")
 
         # Собираем всё за один SSH-вызов
-        # UFW_CMD: если скрипт запускается через sudo -n bash -s — ufw уже под root,
-        # но если use_sudo=False (root сессия) — тоже без sudo. Главное: явно вызываем
-        # sudo -n ufw только когда нужно (на случай если сессия не root)
-        _ufw_info_cmd = "sudo -n ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1 || echo unknown"
+        # INFO_SCRIPT запускается через «sudo -n bash -s» (use_sudo=True) или «bash -s» (root).
+        # Внутри скрипта мы уже root-пользователь (через sudo), поэтому вложенный sudo не нужен —
+        # просто вызываем ufw напрямую.
         INFO_SCRIPT = f"""#!/bin/bash
 echo "TZ=$(cat /etc/timezone 2>/dev/null || timedatectl | grep 'Time zone' | awk '{{print $3}}')"
 echo "XRAY=$(xray version 2>/dev/null | head -1 || echo '')"
 echo "CADDY=$(/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || /usr/local/bin/caddy version 2>/dev/null | head -1 || echo '')"
 echo "AWG=$(awg --version 2>/dev/null | head -1 || echo '')"
 echo "F2B=$(systemctl is-active fail2ban 2>/dev/null || echo inactive)"
-echo "UFW=$({_ufw_info_cmd})"
+echo "UFW=$(ufw status 2>/dev/null | head -1 || echo unknown)"
 echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null || echo '')"
 """
         _cmd = ("sudo -n bash -s" if use_sudo else "bash -s")
@@ -1142,7 +1147,7 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
             False),
         ("UFW",
             "which ufw || dpkg -l ufw 2>/dev/null | grep -q '^ii'",
-            "ufw status 2>/dev/null | head -1 || echo unknown",
+            "sudo -n bash -c 'ufw status 2>/dev/null | head -1' 2>/dev/null || ufw status 2>/dev/null | head -1 || echo unknown",
             False),
     ]
     if not is_eu:
