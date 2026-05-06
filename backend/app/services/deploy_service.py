@@ -161,30 +161,66 @@ echo "[+] Xray-core installed and started"
 
 GENERATE_REALITY_KEYS_CMD = "xray x25519"
 
-WARP_INSTALL_SCRIPT = """#!/bin/bash
+WARP_INSTALL_SCRIPT = r"""#!/bin/bash
 set -e
 echo "[*] Installing Cloudflare WARP..."
-# Запускаем через sudo если не root
 _SUDO=""
 [ "$(id -u)" != "0" ] && _SUDO="sudo -n"
 
-$_SUDO apt-get install -y -qq curl
+$_SUDO apt-get install -y -qq curl lsb-release expect
 
 # Add Cloudflare GPG key and repo
-curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | $_SUDO gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | $_SUDO tee /etc/apt/sources.list.d/cloudflare-client.list > /dev/null
+curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+    | $_SUDO gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+    | $_SUDO tee /etc/apt/sources.list.d/cloudflare-client.list > /dev/null
 $_SUDO apt-get update -qq
 $_SUDO apt-get install -y -qq cloudflare-warp
 
-# Register and connect WARP
-warp-cli --accept-tos registration new || true
-warp-cli --accept-tos mode proxy
-warp-cli --accept-tos proxy port 40000
-warp-cli --accept-tos connect
-
-echo "[+] WARP installed"
+# Сначала запускаем warp-svc, потом регистрируем
 $_SUDO systemctl enable warp-svc
 $_SUDO systemctl start warp-svc
+
+# Ждём запуска (до 20 сек)
+for i in $(seq 1 20); do
+    systemctl is-active warp-svc >/dev/null 2>&1 && break
+    echo "[*] Waiting for warp-svc ($i/20)..."
+    sleep 1
+done
+echo "[+] warp-svc: $(systemctl is-active warp-svc)"
+
+# Удаляем старую регистрацию
+warp-cli --accept-tos registration delete 2>/dev/null || true
+sleep 1
+
+# Регистрируем через expect (автоматически принимает ToS prompt [y/N])
+_warp_expect_cmd() {
+    expect -c "
+        set timeout 30
+        spawn warp-cli $*
+        expect {
+            {y/N}    { send \"y\r\"; exp_continue }
+            {Success} { }
+            timeout   { exit 1 }
+            eof       { }
+        }
+    " 2>&1 || warp-cli --accept-tos $* 2>&1 || true
+}
+
+_warp_expect_cmd "registration new"
+sleep 2
+_warp_expect_cmd "mode proxy"
+sleep 1
+_warp_expect_cmd "proxy port 40000"
+sleep 1
+_warp_expect_cmd "connect"
+sleep 4
+
+WSTATUS=$(warp-cli status 2>&1 || echo "unknown")
+echo "[+] WARP status: $WSTATUS"
+echo "[+] WARP version: $(warp-cli --version 2>&1 || echo unknown)"
+echo "[+] warp-svc: $(systemctl is-active warp-svc)"
+echo "[+] WARP installation complete"
 """
 
 
@@ -306,14 +342,21 @@ echo "[+] AmneziaWG installed"
 
 
 def install_warp(server: Server) -> Tuple[bool, str]:
-    """Install Cloudflare WARP on server."""
+    """Install Cloudflare WARP on server. Returns (success, version_or_error)."""
     try:
         with SSHClient(server) as ssh:
             logger.info(f"Installing WARP on {server.ip}")
-            code, out, err = ssh.exec(WARP_INSTALL_SCRIPT, timeout=180)
+            code, out, err = ssh.exec(WARP_INSTALL_SCRIPT, timeout=240)
+            # Non-zero exit is non-fatal: warp-svc may still be active
             if code != 0:
-                return False, f"WARP install failed: {err}"
-            return True, "WARP installed"
+                logger.warning(f"WARP install script exit={code} on {server.ip}: {(err or out)[:200]}")
+            # Fetch version regardless of exit code
+            _, ver_out, _ = ssh.exec(
+                "warp-cli --version 2>/dev/null | head -1 || echo ''", timeout=10
+            )
+            version = (ver_out or "").strip() or "installed"
+            logger.info(f"WARP on {server.ip}: {version}")
+            return True, version
     except Exception as e:
         return False, str(e)
 
@@ -351,30 +394,52 @@ echo "WARP_STATUS:$STATUS"
 
 def get_warp_status(server):
     """Get current WARP service status on server.
-    Returns dict: {installed, running, connected, version}
+    Returns dict: {installed, running, connected, version, needs_registration}
     """
     try:
         with SSHClient(server) as ssh:
             code, out, err = ssh.exec(
-                "systemctl is-active warp-svc 2>/dev/null; "
-                "warp-cli status 2>/dev/null | head -3; "
-                "warp-cli --version 2>/dev/null | head -1",
+                "which warp-cli >/dev/null 2>&1 && echo INSTALLED || echo NOT_INSTALLED; "
+                "systemctl is-active warp-svc 2>/dev/null || echo inactive; "
+                "warp-cli status 2>/dev/null || echo 'status-unavailable'; "
+                "warp-cli --version 2>/dev/null | head -1 || echo ''",
                 timeout=15
             )
             lines = out.strip().splitlines()
-            svc_active = lines[0].strip() == "active" if lines else False
-            status_lines = " ".join(lines[1:]) if len(lines) > 1 else ""
-            connected = "Connected" in status_lines or "connected" in status_lines
-            version = lines[-1].strip() if lines else None
+            installed_bin = lines[0].strip() == "INSTALLED" if lines else False
+            svc_active = lines[1].strip() == "active" if len(lines) > 1 else False
+            status_raw = " ".join(lines[2:-1]) if len(lines) > 3 else (lines[2] if len(lines) > 2 else "")
+            version = lines[-1].strip() if len(lines) > 1 else ""
+
+            needs_registration = "Terms of Service" in status_raw or "ToS" in status_raw
+            connected = ("Connected" in status_raw or "connected" in status_raw) and not needs_registration
+            
+            # Краткий человекочитаемый статус
+            if not installed_bin:
+                state = "not_installed"
+            elif needs_registration:
+                state = "needs_tos"
+            elif not svc_active:
+                state = "stopped"
+            elif connected:
+                state = "connected"
+            else:
+                state = "running"
+
             return {
-                "installed": True,
+                "installed": installed_bin,
                 "running": svc_active,
                 "connected": connected,
-                "status_text": status_lines[:100],
-                "version": version,
+                "needs_registration": needs_registration,
+                "state": state,
+                "status_text": status_raw[:150],
+                "version": version or None,
             }
     except Exception as e:
-        return {"installed": False, "running": False, "connected": False, "error": str(e)}
+        return {
+            "installed": False, "running": False, "connected": False,
+            "state": "error", "error": str(e)
+        }
 
 
 

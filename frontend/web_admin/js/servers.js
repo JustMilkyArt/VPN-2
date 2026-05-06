@@ -1450,24 +1450,43 @@ async function loadWarpStatus(serverId) {
   const statusEl = document.getElementById('stack-status-warp');
   if (!statusEl) return;
   statusEl.textContent = 'Проверяю...';
+  statusEl.style.color = '';
 
   const res = await api.get(`/api/v1/servers/${serverId}/warp/status`);
   if (res.ok) {
     const d = res.data;
+    const dot = document.getElementById('stack-icon-warp');
+    const state = d.state || (d.connected ? 'connected' : d.running ? 'running' : 'stopped');
+
     if (!d.installed) {
       statusEl.textContent = 'Не установлен';
-    } else if (d.running && d.connected) {
+      statusEl.style.color = '#9ca3af';
+      if (dot) dot.className = 'w-2 h-2 rounded-full flex-shrink-0 bg-gray-600';
+    } else if (state === 'needs_tos' || d.needs_registration) {
+      statusEl.textContent = 'Требует регистрации ⚠';
+      statusEl.style.color = '#f59e0b';
+      if (dot) dot.className = 'w-2 h-2 rounded-full flex-shrink-0 bg-yellow-500';
+      // Автоматически попытаться переподключить
+      statusEl.title = d.status_text || 'Нажмите "Включить" для регистрации WARP';
+    } else if (state === 'connected' || (d.running && d.connected)) {
       statusEl.textContent = 'Активен ✓';
       statusEl.style.color = '#4ade80';
+      if (dot) dot.className = 'w-2 h-2 rounded-full flex-shrink-0 bg-green-500';
     } else if (d.running && !d.connected) {
       statusEl.textContent = 'Запущен (не подключён)';
       statusEl.style.color = '#fb923c';
-    } else {
+      if (dot) dot.className = 'w-2 h-2 rounded-full flex-shrink-0 bg-orange-500';
+    } else if (state === 'stopped' || !d.running) {
       statusEl.textContent = 'Остановлен';
       statusEl.style.color = '#9ca3af';
+      if (dot) dot.className = 'w-2 h-2 rounded-full flex-shrink-0 bg-gray-600';
     }
-    const dot = document.getElementById('stack-icon-warp');
-    if (dot) dot.className = `w-2 h-2 rounded-full flex-shrink-0 ${(d.running && d.connected) ? 'bg-green-500' : d.running ? 'bg-yellow-500' : 'bg-gray-600'}`;
+    // Обновить версию если есть
+    const verEl = document.getElementById('stack-ver-warp');
+    if (verEl && d.version) verEl.textContent = d.version;
+  } else {
+    statusEl.textContent = 'Ошибка запроса';
+    statusEl.style.color = '#ef4444';
   }
 }
 

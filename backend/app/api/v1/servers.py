@@ -185,6 +185,9 @@ def install_stack(
         results["warp"] = {"success": ok, "message": msg}
         if ok:
             server.warp_installed = True
+            # Сохраняем версию (install_warp теперь возвращает version string)
+            if msg and msg != "WARP installed" and not msg.startswith("WARP install failed"):
+                server.warp_version = msg
 
     db.commit()
     return {"server_id": server_id, "results": results}

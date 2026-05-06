@@ -632,8 +632,11 @@ echo "[+] Caddy done: $CADDY_VER"
         ok, msg = install_warp(server)
         if ok:
             server.warp_installed = True
+            # msg теперь содержит версию (e.g. "warp-cli 2026.3.846.0")
+            if msg and not msg.startswith("WARP install failed"):
+                server.warp_version = msg
             db.add(server); db.commit()
-            _update_setup(db, server, log_line="[2.5] ✅ WARP установлен")
+            _update_setup(db, server, log_line=f"[2.5] ✅ WARP установлен ({msg})")
         else:
             _update_setup(db, server, log_line=f"[2.5] ⚠️ WARP: {msg} (не критично)")
 
