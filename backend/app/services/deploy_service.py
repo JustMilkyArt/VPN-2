@@ -4,11 +4,12 @@ Manages installation, configuration, and service management on remote servers.
 """
 import logging
 import os
+import threading
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.server import Server, ServerRole
-from app.models.connection import Connection, Protocol
+from app.models.connection import Connection, Protocol, ConnectionType
 from app.services.ssh_service import SSHClient, test_connection
 from app.services.config_generator import (
     generate_uuid, generate_password, generate_short_id,
@@ -22,7 +23,31 @@ from app.services.config_generator import (
 
 logger = logging.getLogger(__name__)
 
+# Per-server lock for AWG deploys — prevents race condition when two AWG
+# connections for the same server deploy simultaneously (both pick the same
+# free wgN number and collide on "Address already in use").
+_awg_server_locks: dict = {}
+_awg_locks_mutex = threading.Lock()
+
+def _get_awg_server_lock(server_id: int) -> threading.Lock:
+    with _awg_locks_mutex:
+        if server_id not in _awg_server_locks:
+            _awg_server_locks[server_id] = threading.Lock()
+        return _awg_server_locks[server_id]
+
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts")
+
+# Per-server lock: prevents two threads from picking the same wgN interface number
+# when deploying AWG connections to the same server simultaneously.
+_awg_deploy_locks: dict = {}
+_awg_deploy_locks_mutex = threading.Lock()
+
+def _get_awg_server_lock(server_id: int) -> threading.Lock:
+    """Return a per-server Lock for AWG interface allocation."""
+    with _awg_deploy_locks_mutex:
+        if server_id not in _awg_deploy_locks:
+            _awg_deploy_locks[server_id] = threading.Lock()
+        return _awg_deploy_locks[server_id]
 
 
 def _read_script(name: str) -> str:
@@ -491,8 +516,14 @@ def deploy_vless_reality_connection(
     is_cascade: bool = False,
 ) -> Tuple[bool, str]:
     """Deploy VLESS+Reality connection on server.
+
+    Architecture:
+      - DIRECT:  server=EU, exit_server=None  → Xray on EU, direct outbound
+      - CASCADE: server=EU, exit_server=RU    → Xray on RU (exit_server),
+                                                EU outbound → server (EU)
+
     Steps:
-      1 - Подключение и подготовка сервера
+      1 - Подключение и подготовка целевого сервера
       2 - Проверка / установка Xray
       3 - Генерация Reality keypair
       4 - Сборка Xray конфига
@@ -500,11 +531,18 @@ def deploy_vless_reality_connection(
       6 - Сохранение client link
     """
     S = lambda n, st, m: _step_log(connection, db, n, st, m)
+
+    # В режиме CASCADE деплоим Xray на RU сервере (exit_server),
+    # в режиме DIRECT — на EU (server).
+    target_server = exit_server if (is_cascade and exit_server) else server
+    eu_server     = server   # сервер с EU выходом (для outbound в cascade)
+
     try:
-        S(1, "running", "Подключение к серверу")
-        with SSHClient(server) as ssh:
+        mode = "CASCADE" if is_cascade else "DIRECT"
+        S(1, "running", f"Подключение к {'RU' if is_cascade else 'EU'} серверу ({target_server.ip})")
+        with SSHClient(target_server) as ssh:
             _ensure_server_ready(ssh, connection.port, proto="tcp")
-            S(1, "ok", f"Сервер {server.ip} готов, порт {connection.port}/tcp открыт")
+            S(1, "ok", f"Сервер {target_server.ip} готов, порт {connection.port}/tcp открыт")
 
             # Step 2: Check / install Xray
             S(2, "running", "Проверка Xray")
@@ -552,71 +590,126 @@ def deploy_vless_reality_connection(
 
             # Step 4: Build Xray config
             S(4, "running", "Сборка Xray конфига")
-            all_connections = db.query(Connection).filter(
-                Connection.server_id == server.id,
-                Connection.is_active == True,
-                Connection.protocol == Protocol.VLESS_REALITY
-            ).all()
 
-            inbounds = []
-            for conn in all_connections:
-                if conn.uuid and conn.reality_private_key:
+            if is_cascade:
+                # CASCADE: собираем inbound-ы для RU сервера.
+                # Каскадные VLESS подключения хранятся с server_id=eu_server.id
+                # (EU — основной сервер подключения) и ru_server_id=target_server.id.
+                # Прямые подключения к этому RU не существуют, поэтому inbound-ы
+                # берём из CASCADE-подключений, где ru_server_id = target_server.id.
+                ru_vless_conns = db.query(Connection).filter(
+                    Connection.ru_server_id == target_server.id,
+                    Connection.is_active == True,
+                    Connection.protocol == Protocol.VLESS_REALITY,
+                ).all()
+
+                inbounds = []
+                for conn in ru_vless_conns:
+                    if conn.uuid and conn.reality_private_key:
+                        inbounds.append(gen_xray_vless_reality_inbound(
+                            port=conn.port,
+                            uuid_str=conn.uuid,
+                            public_key=conn.reality_public_key or "",
+                            private_key=conn.reality_private_key or "",
+                            short_id=conn.reality_short_id or "",
+                            server_name=conn.reality_server_name or "www.microsoft.com"
+                        ))
+
+                # Если текущего подключения ещё нет в списке — добавляем
+                current_ids = {conn.id for conn in ru_vless_conns}
+                if connection.id not in current_ids:
                     inbounds.append(gen_xray_vless_reality_inbound(
-                        port=conn.port,
-                        uuid_str=conn.uuid,
-                        public_key=conn.reality_public_key or "",
-                        private_key=conn.reality_private_key or "",
-                        short_id=conn.reality_short_id or "",
-                        server_name=conn.reality_server_name or "www.microsoft.com"
+                        port=connection.port,
+                        uuid_str=connection.uuid,
+                        public_key=public_key,
+                        private_key=private_key,
+                        short_id=short_id,
+                        server_name=connection.reality_server_name or "www.microsoft.com"
                     ))
 
-            current_ids = {conn.id for conn in all_connections}
-            if connection.id not in current_ids:
-                inbounds.append(gen_xray_vless_reality_inbound(
-                    port=connection.port,
-                    uuid_str=connection.uuid,
-                    public_key=public_key,
-                    private_key=private_key,
-                    short_id=short_id,
-                    server_name=connection.reality_server_name or "www.microsoft.com"
-                ))
-
-            eu_outbound = None
-            if exit_server:
-                eu_conns = db.query(Connection).filter(
-                    Connection.server_id == exit_server.id,
+                # EU outbound — выходим через EU сервер (server)
+                eu_outbound = None
+                eu_direct_conn = db.query(Connection).filter(
+                    Connection.server_id == eu_server.id,
+                    Connection.connection_type == ConnectionType.DIRECT,
                     Connection.is_active == True,
-                    Connection.protocol == Protocol.VLESS_REALITY
+                    Connection.protocol == Protocol.VLESS_REALITY,
+                    Connection.reality_public_key.isnot(None),
                 ).first()
-                if eu_conns and eu_conns.reality_public_key:
+                if eu_direct_conn and eu_direct_conn.reality_public_key:
                     eu_outbound = gen_xray_outbound_to_eu(
-                        eu_ip=exit_server.ip,
-                        eu_port=eu_conns.port,
-                        eu_uuid=eu_conns.uuid,
-                        eu_public_key=eu_conns.reality_public_key,
-                        eu_short_id=eu_conns.reality_short_id or "",
-                        eu_server_name=eu_conns.reality_server_name or "www.microsoft.com"
+                        eu_ip=eu_server.ip,
+                        eu_port=eu_direct_conn.port,
+                        eu_uuid=eu_direct_conn.uuid,
+                        eu_public_key=eu_direct_conn.reality_public_key,
+                        eu_short_id=eu_direct_conn.reality_short_id or "",
+                        eu_server_name=eu_direct_conn.reality_server_name or "www.microsoft.com"
                     )
+                    _raw_log(connection, db,
+                        f"  EU outbound: {eu_server.ip}:{eu_direct_conn.port} (VLESS+Reality direct)")
+                else:
+                    _raw_log(connection, db,
+                        f"  WARN: нет готового DIRECT VLESS на EU ({eu_server.ip}) — "
+                        f"трафик через direct (без EU outbound)")
 
-            # WARP: check if warp-svc is active on this server and add outbound
-            warp_outbound = None
-            _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
-            if warp_status.strip() == "active":
-                warp_outbound = gen_xray_warp_outbound()
-                _raw_log(connection, db, "  WARP fallback: активен — добавлен warp outbound")
-            else:
-                _raw_log(connection, db, "  WARP fallback: не активен (warp-svc не запущен)")
+                # WARP на RU
+                warp_outbound = None
+                _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
+                if warp_status.strip() == "active":
+                    warp_outbound = gen_xray_warp_outbound()
+                    _raw_log(connection, db, "  WARP fallback: активен")
+                else:
+                    _raw_log(connection, db, "  WARP fallback: не активен")
 
-            if server.role == ServerRole.RU:
-                config_str = build_ru_xray_config(inbounds, eu_outbound=eu_outbound, warp_outbound=warp_outbound)
+                config_str = build_ru_xray_config(
+                    inbounds, eu_outbound=eu_outbound, warp_outbound=warp_outbound
+                )
+                _raw_log(connection, db,
+                    f"  CASCADE: RU={target_server.ip} → EU={eu_server.ip} "
+                    f"({len(inbounds)} inbound(s), EU outbound={'есть' if eu_outbound else 'нет'})")
+
             else:
+                # DIRECT: деплоим все DIRECT VLESS inbound-ы на EU сервере
+                all_eu_conns = db.query(Connection).filter(
+                    Connection.server_id == eu_server.id,
+                    Connection.is_active == True,
+                    Connection.protocol == Protocol.VLESS_REALITY,
+                ).all()
+
+                inbounds = []
+                for conn in all_eu_conns:
+                    if conn.uuid and conn.reality_private_key:
+                        inbounds.append(gen_xray_vless_reality_inbound(
+                            port=conn.port,
+                            uuid_str=conn.uuid,
+                            public_key=conn.reality_public_key or "",
+                            private_key=conn.reality_private_key or "",
+                            short_id=conn.reality_short_id or "",
+                            server_name=conn.reality_server_name or "www.microsoft.com"
+                        ))
+
+                current_ids = {conn.id for conn in all_eu_conns}
+                if connection.id not in current_ids:
+                    inbounds.append(gen_xray_vless_reality_inbound(
+                        port=connection.port,
+                        uuid_str=connection.uuid,
+                        public_key=public_key,
+                        private_key=private_key,
+                        short_id=short_id,
+                        server_name=connection.reality_server_name or "www.microsoft.com"
+                    ))
+
+                warp_outbound = None
+                _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
+                if warp_status.strip() == "active":
+                    warp_outbound = gen_xray_warp_outbound()
+                    _raw_log(connection, db, "  WARP fallback: активен")
+                else:
+                    _raw_log(connection, db, "  WARP fallback: не активен")
+
                 config_str = build_eu_xray_config(inbounds)
+                _raw_log(connection, db, f"  DIRECT: трафик выходит напрямую через {eu_server.ip}")
 
-            mode = "CASCADE" if is_cascade else "DIRECT"
-            if is_cascade and exit_server:
-                _raw_log(connection, db, f"  CASCADE: RU={server.ip} → EU={exit_server.ip} (VLESS+Reality outbound)")
-            else:
-                _raw_log(connection, db, f"  DIRECT: трафик выходит напрямую через {server.ip}")
             S(4, "ok", f"Конфиг собран: {len(inbounds)} inbound(s), режим {mode}")
 
             # Step 5: Upload and reload Xray
@@ -639,29 +732,34 @@ def deploy_vless_reality_connection(
             port_str = str(connection.port)
             _, ss_out, _ = ssh.exec(f"ss -tlnp 2>/dev/null | grep ':{port_str}' || echo NOT_LISTENING")
             if "NOT_LISTENING" in ss_out or port_str not in ss_out:
-                # non-fatal: log warning but continue (port may appear with tiny delay)
                 _raw_log(connection, db, f"  WARN: ss -tlnp не показал :{port_str} сразу после старта")
             else:
                 _raw_log(connection, db, f"  OK: TCP порт {port_str} слушается (ss confirm)")
-            S(5, "ok", f"Xray активен (статус={xray_active}), порт {port_str}/tcp открыт")
+            S(5, "ok", f"Xray активен (статус={xray_active}), порт {port_str}/tcp на {target_server.ip}")
 
             # Step 6: Save client link
+            # Клиент подключается к RU (target_server) в cascade, к EU (server) в direct
+            client_ip = target_server.ip
             S(6, "running", "Генерация и сохранение client link")
-            _ctype_str = connection.connection_type if isinstance(connection.connection_type, str) else (connection.connection_type.value if connection.connection_type else "direct")
+            _ctype_str = connection.connection_type if isinstance(connection.connection_type, str) \
+                else (connection.connection_type.value if connection.connection_type else "direct")
+            # В cascade — клиент подключается к RU серверу
+            _flag  = getattr(target_server, 'flag_emoji', '') or ''
+            _dname = getattr(target_server, 'display_name', '') or target_server.name or ''
             connection.client_link = gen_vless_reality_client_link(
-                server_ip=server.ip,
+                server_ip=client_ip,
                 port=connection.port,
                 uuid_str=connection.uuid,
                 public_key=public_key,
                 short_id=short_id,
                 server_name=connection.reality_server_name or "www.microsoft.com",
-                server_flag=getattr(server, 'flag_emoji', '') or '',
-                server_display_name=getattr(server, 'display_name', '') or server.name or '',
+                server_flag=_flag,
+                server_display_name=_dname,
                 connection_type=_ctype_str,
             )
             connection.config_json = config_str
             db.commit()
-            S(6, "ok", "VLESS+Reality задеплоен успешно ✅")
+            S(6, "ok", f"VLESS+Reality {mode} задеплоен успешно ✅ (endpoint={client_ip}:{connection.port})")
             return True, "VLESS+Reality deployed"
 
     except Exception as e:
@@ -802,9 +900,12 @@ def deploy_naiveproxy_connection(
             else:
                 _raw_log(connection, db, "  Нет активного VLESS+Reality на EU — трафик через direct")
 
+            # Собираем inbound-ы для RU Xray:
+            # Каскадные VLESS подключения хранятся с server_id=EU и ru_server_id=RU.
+            # Ищем все активные каскадные VLESS где ru_server_id == ru_server.id
             existing_ru_inbounds = []
             ru_vless_conns = db.query(Connection).filter(
-                Connection.server_id == ru_server.id,
+                Connection.ru_server_id == ru_server.id,
                 Connection.protocol == P.VLESS_REALITY,
                 Connection.is_active == True,
                 Connection.uuid.isnot(None),
@@ -1015,36 +1116,69 @@ def deploy_amnezia_wg_connection(
             )
             net_iface = net_iface_out.strip() or "eth0"
 
-            server_conf = gen_awg_server_config(
-                server_private_key=server_priv,
-                listen_port=connection.port,
-                net_interface=net_iface,
-                clients=clients_list,
-                junk_packet_count=connection.awg_junk_packet_count,
-                junk_packet_min_size=connection.awg_junk_packet_min_size,
-                junk_packet_max_size=connection.awg_junk_packet_max_size,
-            )
+            # Acquire per-server lock: prevents two concurrent AWG deploys
+            # from picking the same wgN number (race condition → Address already in use).
+            with _get_awg_server_lock(server.id):
 
-            # Determine iface name from actual .conf files on server to avoid conflicts
-            _, existing_ifaces_out, _ = ssh.exec(
-                "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | "
-                "grep -oP 'wg\\d+' | sort -V || echo NONE"
-            )
-            used_nums = set()
-            for part in existing_ifaces_out.split():
-                part = part.strip()
-                if part.startswith('wg') and part[2:].isdigit():
-                    used_nums.add(int(part[2:]))
-            iface_num = 0
-            while iface_num in used_nums:
-                iface_num += 1
-            iface_name = f"wg{iface_num}"
-            conf_path  = f"/etc/amnezia/amneziawg/{iface_name}.conf"
-            _raw_log(connection, db, f"  Интерфейс: {iface_name} (занятые: {sorted(used_nums)})")
+                # Cleanup stale .conf files (no live interface) INSIDE the lock
+                # so concurrent deploys don't both delete and then both pick wg2.
+                _, live_ifaces_out, _ = ssh.exec(
+                    "ip link show | grep -oE 'wg[0-9]+' || echo NONE"
+                )
+                live_ifaces = set(live_ifaces_out.split()) - {"NONE"}
+                _, conf_list_out, _ = ssh.exec(
+                    "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | grep -oE 'wg[0-9]+' || echo NONE"
+                )
+                for conf_iface in conf_list_out.split():
+                    conf_iface = conf_iface.strip()
+                    if conf_iface.startswith('wg') and conf_iface[2:].isdigit():
+                        if conf_iface not in live_ifaces:
+                            ssh.exec(f"rm -f /etc/amnezia/amneziawg/{conf_iface}.conf 2>/dev/null || true")
+                            _raw_log(connection, db, f"  Удалён мусорный конфиг {conf_iface}.conf (интерфейс не поднят)")
 
-            ssh.exec("mkdir -p /etc/amnezia/amneziawg")
-            ssh.upload_file(server_conf, conf_path)
-            S(4, "ok", f"Конфиг загружен: {conf_path} ({len(clients_list)} peer(s), iface={iface_name}, net={net_iface})")
+                # Determine iface_num FIRST so each interface gets unique subnet.
+                _, existing_ifaces_out, _ = ssh.exec(
+                    "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | "
+                    "grep -oE 'wg[0-9]+' | sort -V || echo NONE"
+                )
+                used_nums = set()
+                for part in existing_ifaces_out.split():
+                    part = part.strip()
+                    if part.startswith('wg') and part[2:].isdigit():
+                        used_nums.add(int(part[2:]))
+                iface_num = 0
+                while iface_num in used_nums:
+                    iface_num += 1
+                iface_name = f"wg{iface_num}"
+                conf_path  = f"/etc/amnezia/amneziawg/{iface_name}.conf"
+
+                # Each interface gets its own /24: wg0→10.8.0.0/24, wg1→10.8.1.0/24, etc.
+                server_subnet = f"10.8.{iface_num}.1/24"
+                client_ip = f"10.8.{iface_num}.2"
+                connection.wg_client_ip = client_ip
+                clients_list[0]["client_ip"] = client_ip
+
+                _raw_log(connection, db,
+                    f"  Интерфейс: {iface_name} (занятые: {sorted(used_nums)}), "
+                    f"subnet: {server_subnet}, client_ip: {client_ip}")
+
+                # Upload config INSIDE the lock — next concurrent deploy will see
+                # this .conf and skip iface_num, preventing collision.
+                ssh.exec("mkdir -p /etc/amnezia/amneziawg")
+                server_conf = gen_awg_server_config(
+                    server_private_key=server_priv,
+                    server_ip=server_subnet,
+                    listen_port=connection.port,
+                    net_interface=net_iface,
+                    clients=clients_list,
+                    junk_packet_count=connection.awg_junk_packet_count,
+                    junk_packet_min_size=connection.awg_junk_packet_min_size,
+                    junk_packet_max_size=connection.awg_junk_packet_max_size,
+                )
+                ssh.upload_file(server_conf, conf_path)
+                # Lock released here — other deploys can now safely pick next iface_num
+
+            S(4, "ok", f"Конфиг загружен: {conf_path} ({len(clients_list)} peer(s), iface={iface_name}, subnet={server_subnet}, net={net_iface})")
 
             # Step 5: Start awg-quick service
             S(5, "running", f"Запуск сервиса awg-quick@{iface_name}")
@@ -1061,38 +1195,82 @@ def deploy_amnezia_wg_connection(
             ssh.exec("modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true")
 
             # Bring down any existing interface first
+            ssh.exec(f"systemctl stop {svc} 2>/dev/null || true")
             ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || wg-quick down {iface_name} 2>/dev/null || true")
             ssh.exec(f"ip link delete {iface_name} 2>/dev/null || true")
-            ssh.exec(f"systemctl stop {svc} 2>/dev/null || true")
 
-            # Enable + start via systemd (preferred), fall back to awg-quick up
+            # awg-quick uses process substitution (awg setconf wg0 /dev/fd/63) which
+            # fails over SSH+sudo because /dev/fd/63 is not accessible in the remote
+            # shell.  We work around this by manually performing the same steps that
+            # awg-quick would do, but passing the stripped config via a temp file.
+            #
+            # Steps mirror what awg-quick up does internally:
+            #  1. ip link add wgN type amneziawg
+            #  2. awg setconf wgN <stripped-conf-file>
+            #  3. ip -4 address add <server_ip> dev wgN
+            #  4. ip link set mtu 1420 up dev wgN
+            #  5. Run PostUp rules from the config (iptables)
+            #  6. Enable + start the systemd unit so it survives reboots
+
+            # Extract stripped config (no Address/PostUp/PostDown lines) for awg setconf
+            tmp_stripped = f"/tmp/awg_stripped_{iface_name}.conf"
+            _, strip_out, strip_err = ssh.exec(
+                f"awg-quick strip {conf_path} 2>/dev/null > {tmp_stripped} && echo OK || echo STRIP_FAILED"
+            )
+            strip_ok = "STRIP_FAILED" not in (strip_out or "") and "STRIP_FAILED" not in (strip_err or "")
+
+            if strip_ok:
+                # Manual bring-up sequence (avoids /dev/fd process substitution)
+                ssh.exec(f"ip link add {iface_name} type amneziawg 2>/dev/null || true")
+                _, setconf_out, setconf_err = ssh.exec(
+                    f"awg setconf {iface_name} {tmp_stripped} 2>&1 || echo SETCONF_FAILED"
+                )
+                if "SETCONF_FAILED" in (setconf_out or ""):
+                    _raw_log(connection, db, f"  awg setconf FAILED: {setconf_out[:150]}")
+                else:
+                    _raw_log(connection, db, f"  awg setconf OK")
+                ssh.exec(f"ip -4 address add {server_subnet} dev {iface_name} 2>/dev/null || true")
+                ssh.exec(f"ip link set mtu 1420 up dev {iface_name} 2>/dev/null || true")
+                # Apply PostUp rules (iptables FORWARD + MASQUERADE)
+                ssh.exec(
+                    f"iptables -A FORWARD -i {iface_name} -j ACCEPT 2>/dev/null || true; "
+                    f"iptables -A FORWARD -o {iface_name} -j ACCEPT 2>/dev/null || true; "
+                    f"iptables -t nat -A POSTROUTING -o {net_iface} -j MASQUERADE 2>/dev/null || true"
+                )
+                ssh.exec(f"rm -f {tmp_stripped}")
+                _raw_log(connection, db, f"  Manual awg bring-up: ip link + awg setconf + PostUp applied")
+            else:
+                # Fallback: try systemctl (may fail due to /dev/fd, but worth trying)
+                _raw_log(connection, db, f"  awg-quick strip failed, falling back to systemctl")
+                ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
+                ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
+                code3, out3, _ = ssh.exec(f"systemctl start {svc} 2>&1 || echo SYSTEMD_START_FAILED")
+                if code3 == 0 and "SYSTEMD_START_FAILED" not in (out3 or ""):
+                    _raw_log(connection, db, f"  systemctl start {svc}: OK")
+                else:
+                    _raw_log(connection, db, f"  systemctl start {svc} FAILED: {(out3 or '')[:150]}")
+
+            # Register the interface in systemd for reboot persistence
             ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
             ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
-            code3, out3, err3 = ssh.exec(
-                f"systemctl start {svc} 2>&1; "
-                f"sleep 1; "
-                f"systemctl is-active {svc} 2>/dev/null || echo svc_failed"
-            )
-            svc_active = "svc_failed" not in (out3 or "") and "active" in (out3 or "")
-
-            if not svc_active:
-                # Fallback: direct awg-quick up
-                _raw_log(connection, db, f"  systemd start failed ({err3[:100]}), trying awg-quick up directly...")
-                code3b, out3b, err3b = ssh.exec(
-                    f"awg-quick up {conf_path} 2>&1 || wg-quick up {conf_path} 2>&1 || echo AWG_UP_FAILED"
-                )
-                if "AWG_UP_FAILED" in (out3b or ""):
-                    _raw_log(connection, db, f"  awg-quick up also failed: {err3b[:200]}")
-                else:
-                    _raw_log(connection, db, f"  awg-quick up result: {out3b[:200]}")
 
             # Step 6: Verify interface
+            # awg-quick is a oneshot service — the interface must be verified with
+            # `ip link show`, NOT `systemctl is-active` (which will show inactive/dead
+            # after the oneshot exits, even when the tunnel is up).
             S(6, "running", f"Верификация интерфейса {iface_name}")
+
+            # Give kernel 2s to fully set up the interface
+            ssh.exec("sleep 2")
             _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
+
             if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
-                # Last attempt: try with full path
-                ssh.exec(f"awg-quick up /etc/amnezia/amneziawg/{iface_name}.conf 2>/dev/null || true")
-                import time; time.sleep(2)
+                # Last attempt: awg-quick up directly (idempotent — ignores 'already exists')
+                _, up_out, _ = ssh.exec(
+                    f"awg-quick up {conf_path} 2>&1 || true"
+                )
+                _raw_log(connection, db, f"  last-attempt awg-quick up: {up_out.strip()[:150]}")
+                ssh.exec("sleep 2")
                 _, iface_out2, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
                 if "NO_INTERFACE" in iface_out2 or iface_name not in iface_out2:
                     _, start_err, _ = ssh.exec(
@@ -1108,7 +1286,7 @@ def deploy_amnezia_wg_connection(
                 iface_out = iface_out2
 
             iface_state = "UP" if ("UP" in iface_out or "UNKNOWN" in iface_out) else "unknown"
-            S(5, "ok", f"Сервис awg-quick@{iface_name} запущен")
+            S(5, "ok", f"Сервис awg-quick@{iface_name} запущен (проверено через ip link)")
             S(6, "ok", f"Интерфейс {iface_name} активен (state: {iface_state})")
 
             # 6a: verify UDP port is actually listening

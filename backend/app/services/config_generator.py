@@ -32,8 +32,12 @@ def generate_short_id(length: int = 8) -> str:
 
 def gen_xray_vless_reality_inbound(port: int, uuid_str: str, public_key: str, private_key: str, short_id: str, server_name: str = "www.microsoft.com") -> Dict:
     """Generate Xray VLESS + Reality inbound config."""
+    # Tag must be unique across all inbounds in one config.
+    # Two cascade connections from different EU servers can share the same port
+    # on the RU server → use uuid prefix to guarantee uniqueness.
+    tag = f"vless-in-{port}-{uuid_str[:8]}" if uuid_str else f"vless-in-{port}"
     return {
-        "tag": f"vless-in-{port}",
+        "tag": tag,
         "listen": "0.0.0.0",
         "port": port,
         "protocol": "vless",

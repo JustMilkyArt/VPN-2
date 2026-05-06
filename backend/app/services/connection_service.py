@@ -570,9 +570,11 @@ def redeploy_connection(db: Session, conn: Connection) -> Tuple[bool, str]:
     if not eu_server:
         return False, "EU сервер не найден"
 
-    ru_server = None
-    if conn.ru_server_id:
-        ru_server = db.query(Server).filter(Server.id == conn.ru_server_id).first()
+    # Сохраняем только id — SQLAlchemy-объекты нельзя передавать в другой поток
+    # (сессия уже закрыта к моменту выполнения потока → "not bound to a Session")
+    conn_id    = conn.id
+    eu_srv_id  = eu_server.id
+    ru_srv_id  = conn.ru_server_id  # None для direct
 
     # Сбрасываем лог и статус перед повторным деплоем
     conn.setup_log = ""
@@ -582,15 +584,15 @@ def redeploy_connection(db: Session, conn: Connection) -> Tuple[bool, str]:
     db.commit()
 
     def _run():
-        from app.database import SessionLocal
+        from app.db.database import SessionLocal
         thread_db = SessionLocal()
         try:
-            thread_conn = thread_db.query(Connection).filter(Connection.id == conn.id).first()
-            thread_eu   = thread_db.query(Server).filter(Server.id == eu_server.id).first()
-            thread_ru   = thread_db.query(Server).filter(Server.id == ru_server.id).first() if ru_server else None
+            thread_conn = thread_db.query(Connection).filter(Connection.id == conn_id).first()
+            thread_eu   = thread_db.query(Server).filter(Server.id == eu_srv_id).first()
+            thread_ru   = thread_db.query(Server).filter(Server.id == ru_srv_id).first() if ru_srv_id else None
             _deploy_one(thread_db, thread_conn, thread_eu, thread_ru)
         except Exception as e:
-            logger.error("redeploy_connection error for conn %s: %s", conn.id, e)
+            logger.error("redeploy_connection error for conn %s: %s", conn_id, e)
         finally:
             thread_db.close()
 
