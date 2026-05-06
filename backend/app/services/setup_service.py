@@ -624,17 +624,18 @@ echo "[+] Caddy done: $CADDY_VER"
         _update_setup(db, server,
             log_line=f"[2] ✅ Установка компонентов: {ok_count}/3 успешно")
 
-        # ── 2.5 WARP (только RU, последовательно — зависит от сетевого стека) ──
-        if not is_eu:
-            _update_setup(db, server, log_line="[2.5] Установка WARP...")
-            from app.services.deploy_service import install_warp
-            ok, msg = install_warp(server)
-            if ok:
-                server.warp_installed = True
-                db.add(server); db.commit()
-                _update_setup(db, server, log_line="[2.5] ✅ WARP установлен")
-            else:
-                _update_setup(db, server, log_line=f"[2.5] ❌ WARP: {msg}")
+        # ── 2.5 WARP (все серверы: RU и EU) ────────────────────────────────────
+        # WARP на EU: fallback для ресурсов, заблокированных на EU-выходе.
+        # WARP на RU: fallback когда EU-сервер недоступен (каскад).
+        _update_setup(db, server, log_line="[2.5] Установка WARP...")
+        from app.services.deploy_service import install_warp
+        ok, msg = install_warp(server)
+        if ok:
+            server.warp_installed = True
+            db.add(server); db.commit()
+            _update_setup(db, server, log_line="[2.5] ✅ WARP установлен")
+        else:
+            _update_setup(db, server, log_line=f"[2.5] ⚠️ WARP: {msg} (не критично)")
 
     except Exception as e:
         _update_setup(db, server, log_line=f"[2] ⚠️ Установка стека упала: {e}")

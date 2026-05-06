@@ -317,6 +317,67 @@ def install_warp(server: Server) -> Tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
+def toggle_warp_service(server, enabled: bool):
+    """Enable or disable WARP service on server without reinstalling.
+    
+    enabled=True  -> starts warp-svc, runs warp-cli connect
+    enabled=False -> runs warp-cli disconnect, stops warp-svc
+    """
+    try:
+        with SSHClient(server) as ssh:
+            if enabled:
+                script = """
+systemctl start warp-svc 2>/dev/null || true
+sleep 2
+warp-cli --accept-tos connect 2>/dev/null || true
+sleep 1
+STATUS=$(warp-cli status 2>/dev/null || echo "unknown")
+echo "WARP_STATUS:$STATUS"
+"""
+            else:
+                script = """
+warp-cli --accept-tos disconnect 2>/dev/null || true
+sleep 1
+systemctl stop warp-svc 2>/dev/null || true
+STATUS=$(systemctl is-active warp-svc 2>/dev/null || echo "inactive")
+echo "WARP_STATUS:$STATUS"
+"""
+            code, out, err = ssh.exec(script, timeout=30)
+            action = "enabled" if enabled else "disabled"
+            return True, f"WARP {action}. {out.strip()}"
+    except Exception as e:
+        return False, str(e)
+
+
+def get_warp_status(server):
+    """Get current WARP service status on server.
+    Returns dict: {installed, running, connected, version}
+    """
+    try:
+        with SSHClient(server) as ssh:
+            code, out, err = ssh.exec(
+                "systemctl is-active warp-svc 2>/dev/null; "
+                "warp-cli status 2>/dev/null | head -3; "
+                "warp-cli --version 2>/dev/null | head -1",
+                timeout=15
+            )
+            lines = out.strip().splitlines()
+            svc_active = lines[0].strip() == "active" if lines else False
+            status_lines = " ".join(lines[1:]) if len(lines) > 1 else ""
+            connected = "Connected" in status_lines or "connected" in status_lines
+            version = lines[-1].strip() if lines else None
+            return {
+                "installed": True,
+                "running": svc_active,
+                "connected": connected,
+                "status_text": status_lines[:100],
+                "version": version,
+            }
+    except Exception as e:
+        return {"installed": False, "running": False, "connected": False, "error": str(e)}
+
+
+
 
 def generate_reality_keys(server: Server) -> Tuple[Optional[str], Optional[str]]:
     """Generate Reality X25519 keypair on server using xray binary."""
@@ -657,11 +718,15 @@ def deploy_vless_reality_connection(
                 # WARP на RU
                 warp_outbound = None
                 _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
-                if warp_status.strip() == "active":
+                warp_svc_active = warp_status.strip() == "active"
+                warp_enabled_flag = getattr(connection, 'warp_enabled', True)
+                if warp_svc_active and warp_enabled_flag:
                     warp_outbound = gen_xray_warp_outbound()
                     _raw_log(connection, db, "  WARP fallback: активен")
+                elif warp_svc_active and not warp_enabled_flag:
+                    _raw_log(connection, db, "  WARP fallback: WARP сервис активен, но флаг warp_enabled=False (отключён)")
                 else:
-                    _raw_log(connection, db, "  WARP fallback: не активен")
+                    _raw_log(connection, db, "  WARP fallback: не активен (сервис не установлен)")
 
                 config_str = build_ru_xray_config(
                     inbounds, eu_outbound=eu_outbound, warp_outbound=warp_outbound
@@ -703,14 +768,25 @@ def deploy_vless_reality_connection(
 
                 warp_outbound = None
                 _, warp_status, _ = ssh.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
-                if warp_status.strip() == "active":
+                warp_svc_active = warp_status.strip() == "active"
+                warp_enabled_flag = getattr(connection, 'warp_enabled', True)
+                if warp_svc_active and warp_enabled_flag:
                     warp_outbound = gen_xray_warp_outbound()
-                    _raw_log(connection, db, "  WARP fallback: активен")
+                    _raw_log(connection, db, "  WARP fallback: активен (сервис active, флаг включён)")
+                elif warp_svc_active and not warp_enabled_flag:
+                    _raw_log(connection, db, "  WARP fallback: WARP сервис активен, но флаг warp_enabled=False")
                 else:
-                    _raw_log(connection, db, "  WARP fallback: не активен (не установлен на EU)")
+                    _raw_log(connection, db, "  WARP fallback: не активен (сервис не запущен на EU)")
 
-                config_str = build_eu_xray_config(inbounds, warp_outbound=warp_outbound)
-                _raw_log(connection, db, f"  DIRECT: трафик выходит напрямую через {eu_server.ip}")
+                split_tunnel = getattr(connection, 'split_tunnel_enabled', True)
+                config_str = build_eu_xray_config(
+                    inbounds,
+                    warp_outbound=warp_outbound,
+                    split_tunnel_enabled=split_tunnel,
+                )
+                _raw_log(connection, db,
+                    f"  DIRECT: трафик выходит напрямую через {eu_server.ip} "
+                    f"(split_tunnel={split_tunnel}, warp={'активен' if warp_outbound else 'нет'})")
 
             S(4, "ok", f"Конфиг собран: {len(inbounds)} inbound(s), режим {mode}")
 
@@ -926,9 +1002,13 @@ def deploy_naiveproxy_connection(
             warp_outbound = None
             with SSHClient(ru_server) as ssh_ru:
                 _, out_w, _ = ssh_ru.exec("systemctl is-active warp-svc 2>/dev/null || echo inactive")
-                if out_w.strip() == "active":
+                warp_svc_np = out_w.strip() == "active"
+                warp_enabled_np = getattr(connection, 'warp_enabled', True)
+                if warp_svc_np and warp_enabled_np:
                     warp_outbound = gen_xray_warp_outbound()
                     _raw_log(connection, db, "  WARP fallback: активен")
+                elif warp_svc_np and not warp_enabled_np:
+                    _raw_log(connection, db, "  WARP fallback: WARP сервис активен, но флаг warp_enabled=False")
                 else:
                     _raw_log(connection, db, "  WARP fallback: не активен")
 
@@ -1444,7 +1524,7 @@ def delete_connection_from_server(db: Session, connection: Connection, server: S
                     server_name=conn.reality_server_name or "www.microsoft.com"
                 ))
 
-        config_str = build_eu_xray_config(inbounds, warp_outbound=None)
+        config_str = build_eu_xray_config(inbounds, warp_outbound=None, split_tunnel_enabled=True)
 
         with SSHClient(server) as ssh:
             ssh.upload_file(config_str, "/usr/local/etc/xray/config.json")

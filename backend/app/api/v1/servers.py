@@ -530,6 +530,44 @@ def get_setup_status(
     }
 
 
+
+
+class WarpToggleRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/{server_id}/warp/toggle", summary="Enable or disable WARP on server")
+def toggle_warp(
+    server_id: int,
+    req: WarpToggleRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Включить или выключить WARP-сервис на сервере без переустановки."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if not server.warp_installed:
+        raise HTTPException(status_code=400, detail="WARP не установлен на сервере")
+    ok, msg = deploy_service.toggle_warp_service(server, req.enabled)
+    return {"success": ok, "message": msg, "enabled": req.enabled}
+
+
+@router.get("/{server_id}/warp/status", summary="Get WARP runtime status on server")
+def get_warp_status(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Получить текущий статус WARP-сервиса на сервере."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if not server.warp_installed:
+        return {"installed": False, "running": False, "connected": False}
+    status = deploy_service.get_warp_status(server)
+    return status
+
 @router.post("/{server_id}/setup/retry", summary="Retry automated server setup")
 def retry_setup(
     server_id: int,

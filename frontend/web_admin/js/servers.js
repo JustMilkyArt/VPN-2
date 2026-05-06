@@ -761,7 +761,7 @@ function _renderParamsTab() {
       ${row('Xray-core',   ver(server.xray_installed,        server.xray_version,   'Xray'))}
       ${row('AmneziaWG',   ver(server.awg_installed,         server.awg_version,    'AWG'))}
       ${row('NaiveProxy',  ver(server.naiveproxy_installed,  server.caddy_version,  'naive'))}
-      ${!isEU ? row('WARP', ver(server.warp_installed, server.warp_version, 'WARP')) : ''}
+      ${row('WARP', ver(server.warp_installed, server.warp_version, 'WARP'))}
       ${row('Timezone', server.server_timezone || '—')}
     </div>
   </section>
@@ -870,7 +870,7 @@ async function showServerDetail(serverId) {
       ${renderServiceBadge('Xray-core', server.xray_installed)}
       ${renderServiceBadge('NaiveProxy', server.naiveproxy_installed)}
       ${renderServiceBadge('AmneziaWG', server.awg_installed)}
-      ${(server.role || '').toUpperCase() !== 'EU' ? renderServiceBadge('WARP', server.warp_installed) : ''}
+      ${renderServiceBadge('WARP', server.warp_installed)}
     </div>
   </div>
 
@@ -1145,14 +1145,15 @@ async function applySecSetting(setting, enabled) {
 function _updateStackTab(server) {
   const isEU = (server.role || '').toUpperCase() === 'EU';
 
-  // Для EU скрываем строку WARP
+  // WARP теперь устанавливается на все серверы (EU и RU)
+  // EU серверы получают WARP как fallback для заблокированных ресурсов
   const warpRow = document.getElementById('stack-row-warp');
-  if (warpRow) warpRow.style.display = isEU ? 'none' : '';
+  if (warpRow) warpRow.style.display = ''; // показываем всегда
 
   const services = [
     { key: 'xray',  label: 'Xray-core',               installed: server.xray_installed,         version: server.xray_version   },
     { key: 'awg',   label: 'AmneziaWG',               installed: server.awg_installed,          version: server.awg_version    },
-    ...(!isEU ? [{ key: 'warp', label: 'WARP',        installed: server.warp_installed,         version: server.warp_version   }] : []),
+    { key: 'warp', label: 'WARP',        installed: server.warp_installed,         version: server.warp_version   },
     { key: 'naive', label: 'NaiveProxy (caddy-naive)', installed: server.naiveproxy_installed,  version: server.caddy_version  },
   ];
   // svcMap: key -> API service name (for install/uninstall), restartMap: key -> systemd unit
@@ -1176,15 +1177,36 @@ function _updateStackTab(server) {
     }
     if (btns) {
       if (installed) {
-        btns.innerHTML = `
-          <button onclick="stackRestartService('${restartMap[key]}', ${serverId})"
-            class="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-800 rounded-lg text-xs text-yellow-300 transition" title="Рестарт">
-            <i class="fas fa-rotate-right"></i>
-          </button>
-          <button onclick="stackUninstallService('${svcMap[key]}', '${label}', ${serverId})"
-            class="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 border border-red-800 rounded-lg text-xs text-red-300 transition" title="Удалить">
-            <i class="fas fa-trash"></i>
-          </button>`;
+        // WARP получает специальный toggle enable/disable + кнопки restart/uninstall
+        if (key === 'warp') {
+          btns.innerHTML = `
+            <button onclick="toggleWarpServer(${serverId}, true)"
+              class="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-800 rounded-lg text-xs text-green-300 transition" title="Включить WARP">
+              <i class="fas fa-play"></i>
+            </button>
+            <button onclick="toggleWarpServer(${serverId}, false)"
+              class="px-2 py-1 bg-orange-600/20 hover:bg-orange-600/40 border border-orange-800 rounded-lg text-xs text-orange-300 transition" title="Выключить WARP">
+              <i class="fas fa-stop"></i>
+            </button>
+            <button onclick="stackRestartService('${restartMap[key]}', ${serverId})"
+              class="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-800 rounded-lg text-xs text-yellow-300 transition" title="Рестарт">
+              <i class="fas fa-rotate-right"></i>
+            </button>
+            <button onclick="stackUninstallService('${svcMap[key]}', '${label}', ${serverId})"
+              class="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 border border-red-800 rounded-lg text-xs text-red-300 transition" title="Удалить">
+              <i class="fas fa-trash"></i>
+            </button>`;
+        } else {
+          btns.innerHTML = `
+            <button onclick="stackRestartService('${restartMap[key]}', ${serverId})"
+              class="px-2 py-1 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-800 rounded-lg text-xs text-yellow-300 transition" title="Рестарт">
+              <i class="fas fa-rotate-right"></i>
+            </button>
+            <button onclick="stackUninstallService('${svcMap[key]}', '${label}', ${serverId})"
+              class="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 border border-red-800 rounded-lg text-xs text-red-300 transition" title="Удалить">
+              <i class="fas fa-trash"></i>
+            </button>`;
+        }
       } else {
         btns.innerHTML = `
           <button onclick="stackInstallService('${svcMap[key]}', '${label}', ${serverId})"
@@ -1403,6 +1425,52 @@ async function destroyAllStack() {
   }
 }
 
+
+async function toggleWarpServer(serverId, enabled) {
+  const output = document.getElementById('stack-output');
+  if (output) {
+    output.classList.remove('hidden');
+    output.textContent = enabled ? 'Включаю WARP...' : 'Выключаю WARP...';
+  }
+
+  const res = await api.post(`/api/v1/servers/${serverId}/warp/toggle`, { enabled });
+  if (res.ok) {
+    const msg = res.data.message || (enabled ? 'WARP включён' : 'WARP выключен');
+    if (output) output.textContent = msg;
+    toast(enabled ? '✓ WARP включён' : '✓ WARP выключен', 'success');
+    // Обновляем live-статус
+    setTimeout(() => loadWarpStatus(serverId), 1500);
+  } else {
+    if (output) output.textContent = `Ошибка: ${res.error}`;
+    toast(`Ошибка WARP: ${res.error}`, 'error');
+  }
+}
+
+async function loadWarpStatus(serverId) {
+  const statusEl = document.getElementById('stack-status-warp');
+  if (!statusEl) return;
+  statusEl.textContent = 'Проверяю...';
+
+  const res = await api.get(`/api/v1/servers/${serverId}/warp/status`);
+  if (res.ok) {
+    const d = res.data;
+    if (!d.installed) {
+      statusEl.textContent = 'Не установлен';
+    } else if (d.running && d.connected) {
+      statusEl.textContent = 'Активен ✓';
+      statusEl.style.color = '#4ade80';
+    } else if (d.running && !d.connected) {
+      statusEl.textContent = 'Запущен (не подключён)';
+      statusEl.style.color = '#fb923c';
+    } else {
+      statusEl.textContent = 'Остановлен';
+      statusEl.style.color = '#9ca3af';
+    }
+    const dot = document.getElementById('stack-icon-warp');
+    if (dot) dot.className = `w-2 h-2 rounded-full flex-shrink-0 ${(d.running && d.connected) ? 'bg-green-500' : d.running ? 'bg-yellow-500' : 'bg-gray-600'}`;
+  }
+}
+
 // ── Params tab helpers ──
 
 async function saveServerParams() {
@@ -1502,6 +1570,8 @@ window.deleteServerFromSettings   = deleteServerFromSettings;
 window.stackInstallService        = stackInstallService;
 window.stackUninstallService      = stackUninstallService;
 window.stackRestartService        = stackRestartService;
+window.toggleWarpServer           = toggleWarpServer;
+window.loadWarpStatus             = loadWarpStatus;
 window.destroyAllStack            = destroyAllStack;
 window.saveServerParams           = saveServerParams;
 window.togglePasswordVisibility   = togglePasswordVisibility;

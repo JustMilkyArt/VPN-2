@@ -248,19 +248,54 @@ def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, war
     return json.dumps(config, indent=2)
 
 
-def build_eu_xray_config(inbounds: list, warp_outbound: Optional[Dict] = None) -> str:
+def build_eu_xray_config(
+    inbounds: list,
+    warp_outbound: Optional[Dict] = None,
+    split_tunnel_enabled: bool = True,
+) -> str:
     """Build Xray config for EU (exit/direct) server.
 
     EU server is the final exit node — all traffic leaves to the internet here.
-    Routing rules:
-      - private IPs and RU geoip/geosite → direct (split tunneling)
-      - everything else → direct (EU exit to internet)
+    Routing rules (split_tunnel_enabled=True):
+      - private IPs → direct  (LAN never through VPN)
+      - geoip:ru / geosite:category-ru → direct  (RU traffic bypasses VPN)
+      - everything else → direct or warp (EU exit to internet)
     WARP outbound is included when available for optional use.
     """
     outbounds = []
     if warp_outbound:
         outbounds.append(warp_outbound)
     outbounds.append(gen_xray_freedom_outbound())
+
+    routing_rules = [
+        # Private ranges → always direct
+        {
+            "type": "field",
+            "ip": ["geoip:private"],
+            "outboundTag": "direct"
+        },
+    ]
+
+    if split_tunnel_enabled:
+        # Split tunneling: Russian IPs/domains bypass VPN and exit directly on EU node
+        # (effectively the same as being unrouted — EU node reaches RU directly)
+        routing_rules.append({
+            "type": "field",
+            "ip": ["geoip:ru"],
+            "outboundTag": "direct"
+        })
+        routing_rules.append({
+            "type": "field",
+            "domain": ["geosite:category-ru"],
+            "outboundTag": "direct"
+        })
+
+    # All other traffic exits to internet via EU node
+    routing_rules.append({
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+    })
 
     config = {
         "log": {
@@ -276,20 +311,7 @@ def build_eu_xray_config(inbounds: list, warp_outbound: Optional[Dict] = None) -
         },
         "routing": {
             "domainStrategy": "IPIfNonMatch",
-            "rules": [
-                # Private ranges → direct
-                {
-                    "type": "field",
-                    "ip": ["geoip:private"],
-                    "outboundTag": "direct"
-                },
-                # All other traffic exits to internet via EU node
-                {
-                    "type": "field",
-                    "network": "tcp,udp",
-                    "outboundTag": "direct"
-                }
-            ]
+            "rules": routing_rules
         }
     }
 
@@ -406,30 +428,43 @@ def build_naiveproxy_client_config(server: str, port: int, password: str) -> str
 # in Russia, stable, high traffic (makes forged TLS less suspicious).
 # ─────────────────────────────────────────────────────────────────────────────
 REALITY_SNI_LIST = [
-    # Microsoft family — recommended: TLS 1.3, H2, global CDN, not blocked in RU
-    {"domain": "www.microsoft.com",         "note": "Microsoft (рекомендуется)",       "best": True},
-    {"domain": "login.microsoftonline.com", "note": "Microsoft Azure AD",              "best": True},
+    # Microsoft — TLS 1.3, H2, global CDN, not blocked in RU
+    {"domain": "www.microsoft.com",         "note": "Microsoft (рекомендуется)",         "best": True},
+    {"domain": "login.microsoftonline.com", "note": "Microsoft Azure AD",                "best": True},
+    {"domain": "teams.microsoft.com",       "note": "Microsoft Teams",                   "best": True},
+    {"domain": "azure.microsoft.com",       "note": "Microsoft Azure",                   "best": True},
     # Apple — TLS 1.3, H2, high traffic
-    {"domain": "www.apple.com",             "note": "Apple",                           "best": True},
-    {"domain": "cdn.apple.com",             "note": "Apple CDN",                       "best": False},
-    # Amazon / AWS — huge CDN, TLS 1.3
-    {"domain": "www.amazon.com",            "note": "Amazon",                          "best": False},
-    {"domain": "aws.amazon.com",            "note": "AWS",                             "best": False},
-    # Cloudflare — TLS 1.3, H2, H3/QUIC, very high traffic
-    {"domain": "www.cloudflare.com",        "note": "Cloudflare",                      "best": False},
-    {"domain": "1.1.1.1",                   "note": "Cloudflare DNS (IP)",             "best": False},
-    # Mozilla — open source, trusted
-    {"domain": "addons.mozilla.org",        "note": "Mozilla Add-ons",                 "best": False},
-    # Swift.org — Apple-owned, good TLS posture
-    {"domain": "www.swift.org",             "note": "Swift.org",                       "best": False},
-    # GitHub / Fastly CDN
-    {"domain": "github.com",                "note": "GitHub",                          "best": False},
-    # DigitalOcean
-    {"domain": "www.digitalocean.com",      "note": "DigitalOcean",                    "best": False},
-    # Telegram — familiar to Russian users, not blocked
-    {"domain": "telegram.org",              "note": "Telegram",                        "best": False},
-    # Discord CDN
-    {"domain": "discord.com",               "note": "Discord",                         "best": False},
+    {"domain": "www.apple.com",             "note": "Apple",                             "best": True},
+    {"domain": "cdn.apple.com",             "note": "Apple CDN",                         "best": False},
+    {"domain": "itunes.apple.com",          "note": "Apple iTunes",                      "best": False},
+    # Amazon / AWS
+    {"domain": "www.amazon.com",            "note": "Amazon",                            "best": False},
+    {"domain": "aws.amazon.com",            "note": "Amazon AWS",                        "best": False},
+    {"domain": "d1.awsstatic.com",          "note": "Amazon CloudFront CDN",             "best": False},
+    # Google — TLS 1.3, H2/H3, massive traffic (careful: some IPs blocked in RU)
+    {"domain": "www.google.com",            "note": "Google (осторожно, частично блок)", "best": False},
+    {"domain": "dl.google.com",             "note": "Google Downloads CDN",              "best": False},
+    # Cloudflare
+    {"domain": "www.cloudflare.com",        "note": "Cloudflare",                        "best": False},
+    {"domain": "1.1.1.1",                   "note": "Cloudflare DNS (IP)",               "best": False},
+    {"domain": "speed.cloudflare.com",      "note": "Cloudflare Speed Test",             "best": False},
+    # Mozilla
+    {"domain": "addons.mozilla.org",        "note": "Mozilla Add-ons",                   "best": False},
+    {"domain": "cdn.mozilla.net",           "note": "Mozilla CDN",                       "best": False},
+    # GitHub / Fastly
+    {"domain": "github.com",               "note": "GitHub",                             "best": False},
+    {"domain": "objects.githubusercontent.com", "note": "GitHub CDN",                    "best": False},
+    # Swift / DigitalOcean / Linode
+    {"domain": "www.swift.org",             "note": "Swift.org (Apple)",                 "best": False},
+    {"domain": "www.digitalocean.com",      "note": "DigitalOcean",                      "best": False},
+    {"domain": "www.linode.com",            "note": "Linode (Akamai)",                   "best": False},
+    # Telegram / Discord
+    {"domain": "telegram.org",              "note": "Telegram",                          "best": False},
+    {"domain": "discord.com",               "note": "Discord",                           "best": False},
+    # Fastly CDN — used by many big sites
+    {"domain": "www.fastly.com",            "note": "Fastly CDN",                        "best": False},
+    # Twitch — TLS 1.3, H2
+    {"domain": "www.twitch.tv",             "note": "Twitch",                            "best": False},
 ]
 
 REALITY_SNI_DEFAULT = "www.microsoft.com"

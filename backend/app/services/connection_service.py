@@ -226,7 +226,8 @@ def create_connections_batch(
 
     def _make(proto: Protocol, ctype: ConnectionType, eu_srv: Server, ru_srv: Optional[Server]):
         srv_for_port = eu_srv  # порт назначается на EU сервере
-        port = assign_free_port(db, srv_for_port.id, protocol=proto)
+        ctype_str = ctype.value if hasattr(ctype, 'value') else str(ctype)
+        port = assign_free_port(db, srv_for_port.id, protocol=proto, connection_type=ctype_str)
         conn = Connection(
             server_id       = eu_srv.id,
             ru_server_id    = ru_srv.id if ru_srv else None,
@@ -237,6 +238,7 @@ def create_connections_batch(
             setup_status    = "pending",
             setup_log       = "",
             split_tunnel_enabled = True,
+            warp_enabled    = True,
         )
         # предзаполняем параметры по умолчанию
         if proto == Protocol.VLESS_REALITY:

@@ -7,11 +7,25 @@
 
 // ─── LOAD & RENDER LIST ──────────────────────────────────────────────────────
 
+// Load SNI list from API and cache it globally
+async function _loadSniList() {
+  if (window._sniListCache && window._sniListCache.length > 0) return; // already loaded
+  try {
+    const res = await api.get('/connections/sni-list');
+    if (res.ok && Array.isArray(res.data)) {
+      window._sniListCache = res.data;
+    }
+  } catch(e) {
+    console.warn('SNI list load failed:', e);
+  }
+}
+
 async function loadConnectionsGrouped() {
   const listEl  = document.getElementById('connections-list');
   const emptyEl = document.getElementById('connections-empty');
   listEl.innerHTML = `<div class="flex justify-center py-10"><span class="spinner"></span></div>`;
 
+  await _loadSniList(); // ensure SNI list is cached before rendering
   const res = await api.get('/connections/grouped');
   if (!res.ok) {
     listEl.innerHTML = `<div class="text-center text-red-400 py-8">
@@ -1000,6 +1014,7 @@ function _paramsVless(conn) {
   ${_paramRow('Public Key', 'reality_public_key', conn.reality_public_key, conn.id, 'text')}
   ${_paramRow('Short ID', 'reality_short_id', conn.reality_short_id, conn.id, 'text')}
   ${_paramRow('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')}
+  ${_paramRow('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')}
 </div>`;
 }
 
@@ -1016,7 +1031,16 @@ function _paramsAwg(conn) {
   ${_paramRow('H2',  'awg_h2', conn.awg_h2, conn.id, 'number')}
   ${_paramRow('H3',  'awg_h3', conn.awg_h3, conn.id, 'number')}
   ${_paramRow('H4',  'awg_h4', conn.awg_h4, conn.id, 'number')}
-  ${_paramRow('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')}
+  <div class="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
+    <span class="text-xs text-gray-500 w-32 flex-shrink-0">Split-tunnel RU</span>
+    <div class="flex items-center gap-2 flex-1 min-w-0">
+      <label class="toggle-switch opacity-50 cursor-not-allowed" title="Недоступно для WireGuard — сплит-туннелинг работает через AllowedIPs или на уровне Xray на сервере">
+        <input type="checkbox" disabled ${conn.split_tunnel_enabled ? 'checked' : ''}>
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="text-[10px] text-gray-600 italic">Через Xray (server-side). Для WG клиентских правил используй sing-box/NekoBox.</span>
+    </div>
+  </div>
 </div>`;
 }
 
@@ -1028,6 +1052,7 @@ function _paramsNaive(conn) {
   ${_paramRow('Password', 'password',  conn.password,  conn.id, 'text')}
   ${_paramRow('Port',     'port',      conn.port,      conn.id, 'number')}
   ${_paramRow('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')}
+  ${_paramRow('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')}
 </div>`;
 }
 
@@ -1398,6 +1423,7 @@ document.addEventListener('click', (e) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 window.loadConnectionsGrouped   = loadConnectionsGrouped;
+window._loadSniList             = _loadSniList;
 window.showAddConnectionModal   = showAddConnectionModal;
 window.wizToggleType            = wizToggleType;
 window.wizGoStep2               = wizGoStep2;
