@@ -341,16 +341,30 @@ echo "[+] AmneziaWG installed"
 """
 
 
-def install_warp(server: Server) -> Tuple[bool, str]:
-    """Install Cloudflare WARP on server. Returns (success, version_or_error)."""
+def install_warp(server: Server, db: Session = None) -> Tuple[bool, str]:
+    """Install Cloudflare WARP on server. Returns (success, version_or_error).
+
+    For RU-role servers: Cloudflare API is blocked in Russia at TLS level.
+    We use a redsocks + iptables approach via an SSH tunnel through the first
+    available EU server to route warp-svc registration traffic.
+    """
+    is_ru = getattr(server, 'role', None) == ServerRole.RU or \
+            (str(getattr(server, 'role', '')).upper() == 'RU')
+
+    if is_ru:
+        return _install_warp_ru(server, db)
+    else:
+        return _install_warp_eu(server)
+
+
+def _install_warp_eu(server: Server) -> Tuple[bool, str]:
+    """Standard WARP install for EU servers (direct Cloudflare API access)."""
     try:
         with SSHClient(server) as ssh:
-            logger.info(f"Installing WARP on {server.ip}")
+            logger.info(f"Installing WARP (EU) on {server.ip}")
             code, out, err = ssh.exec(WARP_INSTALL_SCRIPT, timeout=240)
-            # Non-zero exit is non-fatal: warp-svc may still be active
             if code != 0:
                 logger.warning(f"WARP install script exit={code} on {server.ip}: {(err or out)[:200]}")
-            # Fetch version regardless of exit code
             _, ver_out, _ = ssh.exec(
                 "warp-cli --version 2>/dev/null | head -1 || echo ''", timeout=10
             )
@@ -358,6 +372,305 @@ def install_warp(server: Server) -> Tuple[bool, str]:
             logger.info(f"WARP on {server.ip}: {version}")
             return True, version
     except Exception as e:
+        return False, str(e)
+
+
+def _install_warp_ru(server: Server, db: Session = None) -> Tuple[bool, str]:
+    """WARP install for RU servers via redsocks tunnel through EU server.
+
+    Strategy:
+    1. Install WARP package normally (apt install works fine — blocks only API calls)
+    2. Find an EU server with SSH access
+    3. On RU server: set up redsocks + iptables to route TCP 443 through SOCKS5
+       tunnel (SSH -D to EU server via admin server)
+    4. Register WARP while tunnel is active
+    5. Remove redsocks/iptables after registration
+    """
+    logger.info(f"Installing WARP (RU via proxy) on {server.ip}")
+
+    # ── Find EU server for tunneling ────────────────────────────────────────
+    eu_server = None
+    if db is not None:
+        from app.models.server import ServerRole as SR
+        eu_servers = db.query(Server).filter(
+            Server.role == SR.EU,
+            Server.is_active == True,
+        ).all()
+        for s in eu_servers:
+            if s.ssh_port_actual or s.ssh_port:
+                eu_server = s
+                break
+
+    if eu_server is None:
+        logger.warning(f"No EU server found for RU WARP tunnel — trying direct install")
+        return _install_warp_eu(server)
+
+    # Decrypt EU server SSH key
+    try:
+        from app.services.setup_service import decrypt_value
+        eu_key_pem = decrypt_value(eu_server.ssh_private_key_enc) if eu_server.ssh_private_key_enc else None
+    except Exception:
+        eu_key_pem = None
+
+    eu_ssh_port = eu_server.ssh_port_actual or eu_server.ssh_port or 22
+    eu_ssh_user = eu_server.ssh_user_actual or eu_server.ssh_user or "root"
+
+    WARP_RU_SCRIPT = r"""#!/bin/bash
+set -e
+echo "[*] Installing Cloudflare WARP on RU server via proxy tunnel..."
+_SUDO=""
+[ "$(id -u)" != "0" ] && _SUDO="sudo -n"
+
+$_SUDO apt-get install -y -qq curl lsb-release expect redsocks
+
+# Add Cloudflare GPG key and repo (this part works fine — no API calls)
+curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+    | $_SUDO gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+    | $_SUDO tee /etc/apt/sources.list.d/cloudflare-client.list > /dev/null
+$_SUDO apt-get update -qq
+$_SUDO apt-get install -y -qq cloudflare-warp
+
+echo "[+] WARP package installed"
+echo "[+] WARP version: $(warp-cli --version 2>&1 || echo unknown)"
+
+# Start warp-svc (needed even without registration)
+$_SUDO systemctl enable warp-svc
+$_SUDO systemctl start warp-svc || true
+
+for i in $(seq 1 15); do
+    systemctl is-active warp-svc >/dev/null 2>&1 && break
+    sleep 1
+done
+echo "[+] warp-svc: $(systemctl is-active warp-svc)"
+echo "[+] WARP_PKG_INSTALLED"
+"""
+
+    # Script to register WARP via redsocks proxy (run after tunnel is set up)
+    WARP_RU_REGISTER_SCRIPT = r"""#!/bin/bash
+PROXY_PORT=18080
+
+# ── Configure redsocks ───────────────────────────────────────────────────────
+cat > /etc/redsocks.conf << 'RDSOCKS'
+base {
+    log_debug = off;
+    log_info = on;
+    log = "file:/tmp/redsocks.log";
+    daemon = on;
+    redirector = iptables;
+}
+redsocks {
+    local_ip = 127.0.0.1;
+    local_port = 12345;
+    ip = 127.0.0.1;
+    port = PROXY_PORT_PLACEHOLDER;
+    type = socks5;
+}
+RDSOCKS
+sed -i "s/PROXY_PORT_PLACEHOLDER/$PROXY_PORT/" /etc/redsocks.conf
+
+systemctl stop redsocks 2>/dev/null || true
+pkill -f redsocks 2>/dev/null || true
+sleep 1
+
+redsocks -c /etc/redsocks.conf
+sleep 2
+echo "[+] redsocks started"
+
+# ── iptables: redirect warp-svc TCP output through redsocks ────────────────
+# warp-svc runs as root — we intercept its outbound TCP 443 traffic
+iptables -t nat -N WARP_PROXY 2>/dev/null || iptables -t nat -F WARP_PROXY
+iptables -t nat -A WARP_PROXY -d 127.0.0.0/8 -j RETURN
+iptables -t nat -A WARP_PROXY -d 10.0.0.0/8 -j RETURN
+iptables -t nat -A WARP_PROXY -d 172.16.0.0/12 -j RETURN
+iptables -t nat -A WARP_PROXY -d 192.168.0.0/16 -j RETURN
+iptables -t nat -A WARP_PROXY -p tcp --dport 443 -j REDIRECT --to-ports 12345
+iptables -t nat -A WARP_PROXY -p tcp --dport 80  -j REDIRECT --to-ports 12345
+# Apply to OUTPUT chain for warp-svc (runs as root uid 0)
+iptables -t nat -D OUTPUT -m owner --uid-owner 0 -j WARP_PROXY 2>/dev/null || true
+iptables -t nat -I OUTPUT 1 -m owner --uid-owner 0 -j WARP_PROXY
+echo "[+] iptables rules applied"
+
+# ── Wait for proxy to be usable ──────────────────────────────────────────────
+sleep 2
+
+# ── Clean old registration and re-register ──────────────────────────────────
+systemctl stop warp-svc 2>/dev/null || true
+rm -rf /var/lib/cloudflare-warp/ 2>/dev/null || true
+rm -f /run/cloudflare-warp/warp.sock 2>/dev/null || true
+sleep 1
+
+systemctl start warp-svc
+for i in $(seq 1 20); do
+    systemctl is-active warp-svc >/dev/null 2>&1 && break
+    sleep 1
+done
+echo "[+] warp-svc: $(systemctl is-active warp-svc)"
+sleep 3
+
+# Delete old registration
+warp-cli --accept-tos registration delete 2>/dev/null || true
+sleep 2
+
+# Register via expect (auto-accepts ToS)
+_warp_expect_cmd() {
+    expect -c "
+        set timeout 60
+        spawn warp-cli $*
+        expect {
+            {y/N}    { send \"y\r\"; exp_continue }
+            {Success} { }
+            {success} { }
+            timeout   { exit 1 }
+            eof       { }
+        }
+    " 2>&1 || warp-cli --accept-tos $* 2>&1 || true
+}
+
+echo "[*] Registering WARP..."
+_warp_expect_cmd "registration new"
+sleep 3
+
+# Check registration status
+REG_STATUS=$(warp-cli status 2>&1 || echo "unknown")
+echo "[+] Post-register status: $REG_STATUS"
+
+# If registered — configure proxy mode
+if echo "$REG_STATUS" | grep -qiE "Connected|Disconnected|Registration"; then
+    _warp_expect_cmd "mode proxy"
+    sleep 1
+    _warp_expect_cmd "proxy port 40000"
+    sleep 1
+    _warp_expect_cmd "connect"
+    sleep 5
+fi
+
+# ── Remove iptables rules (cleanup) ─────────────────────────────────────────
+iptables -t nat -D OUTPUT -m owner --uid-owner 0 -j WARP_PROXY 2>/dev/null || true
+iptables -t nat -F WARP_PROXY 2>/dev/null || true
+iptables -t nat -X WARP_PROXY 2>/dev/null || true
+pkill -f redsocks 2>/dev/null || true
+echo "[+] Proxy tunnel cleaned up"
+
+FINAL_STATUS=$(warp-cli status 2>&1 || echo "unknown")
+echo "[+] FINAL WARP status: $FINAL_STATUS"
+echo "[+] WARP version: $(warp-cli --version 2>&1 || echo unknown)"
+echo "[+] warp-svc: $(systemctl is-active warp-svc)"
+echo "[+] WARP_REGISTER_DONE"
+"""
+
+    try:
+        # Step 1: Install WARP package
+        with SSHClient(server) as ssh:
+            code, out, err = ssh.exec(WARP_RU_SCRIPT, timeout=300)
+            if "[+] WARP_PKG_INSTALLED" not in out:
+                logger.warning(f"WARP package install may have failed on {server.ip}: {out[-300:]}")
+
+            # Step 2: Set up SOCKS5 tunnel from admin→EU, forwarding to RU server
+            # We need a SOCKS5 proxy on RU server pointing at EU server
+            # Approach: use SSH -D (dynamic SOCKS5) from RU server to EU via admin
+            # But RU cannot reach EU directly — so we build the tunnel differently:
+            # Admin server → SSH -D 18080 → EU server, then expose 18080 to RU via
+            # a local SSH -L on RU side.
+            #
+            # Simpler approach that works: on RU server, SSH -D 18080 directly
+            # to EU server (RU→EU SSH should work since we're blocking CF API, not SSH)
+
+            eu_key_b64 = ""
+            if eu_key_pem:
+                import base64
+                eu_key_b64 = base64.b64encode(eu_key_pem.encode()).decode()
+
+            TUNNEL_AND_REGISTER = f"""#!/bin/bash
+set -e
+EU_IP="{eu_server.ip}"
+EU_PORT="{eu_ssh_port}"
+EU_USER="{eu_ssh_user}"
+SOCKS_PORT=18080
+
+# Write EU SSH key
+mkdir -p /tmp/warp_tunnel
+EU_KEY_B64="{eu_key_b64}"
+if [ -n "$EU_KEY_B64" ]; then
+    echo "$EU_KEY_B64" | base64 -d > /tmp/warp_tunnel/eu_key.pem
+    chmod 600 /tmp/warp_tunnel/eu_key.pem
+    SSH_KEY_OPT="-i /tmp/warp_tunnel/eu_key.pem"
+else
+    SSH_KEY_OPT=""
+fi
+
+# Kill old tunnel
+pkill -f "ssh.*$SOCKS_PORT" 2>/dev/null || true
+sleep 1
+
+# Start SSH SOCKS5 tunnel: RU → EU
+ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 \\
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \\
+    $SSH_KEY_OPT \\
+    -D 127.0.0.1:$SOCKS_PORT \\
+    -N -f \\
+    -p $EU_PORT "$EU_USER@$EU_IP" 2>/tmp/warp_tunnel/ssh.log
+sleep 2
+
+# Verify tunnel is up
+if ! ss -tlnp | grep -q ":$SOCKS_PORT"; then
+    echo "[!] SSH tunnel failed to start, checking log:"
+    cat /tmp/warp_tunnel/ssh.log || true
+    echo "[!] Trying without key..."
+    # Try admin server key (if it was placed there during setup)
+    for KEY in /tmp/ssh_key_fin.pem /tmp/ssh_key_swe.pem /root/.ssh/id_ed25519; do
+        [ -f "$KEY" ] || continue
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \\
+            -i "$KEY" -D 127.0.0.1:$SOCKS_PORT -N -f \\
+            -p $EU_PORT "$EU_USER@$EU_IP" 2>/dev/null && break || true
+        sleep 1
+        ss -tlnp | grep -q ":$SOCKS_PORT" && break || true
+    done
+fi
+
+if ss -tlnp | grep -q ":$SOCKS_PORT"; then
+    echo "[+] SOCKS5 tunnel ready on port $SOCKS_PORT"
+    echo "[+] TUNNEL_UP"
+else
+    echo "[!] TUNNEL_FAILED — aborting proxy-based registration"
+    exit 1
+fi
+"""
+            code2, out2, err2 = ssh.exec(TUNNEL_AND_REGISTER, timeout=60)
+            tunnel_ok = "[+] TUNNEL_UP" in out2
+
+            if not tunnel_ok:
+                logger.warning(
+                    f"WARP RU: SSH tunnel to EU failed on {server.ip}. "
+                    f"WARP installed but not registered. Output: {out2[-300:]}"
+                )
+                # Return partial success — WARP is installed, just not registered
+                _, ver_out, _ = ssh.exec("warp-cli --version 2>/dev/null | head -1 || echo ''", timeout=10)
+                version = (ver_out or "").strip() or "installed (not registered)"
+                return True, version
+
+            # Step 3: Register WARP via redsocks tunnel
+            logger.info(f"WARP RU: tunnel up, registering on {server.ip}")
+            code3, out3, err3 = ssh.exec(WARP_RU_REGISTER_SCRIPT, timeout=180)
+
+            if "[+] WARP_REGISTER_DONE" not in out3:
+                logger.warning(f"WARP RU registration may have failed: {out3[-400:]}")
+
+            _, ver_out, _ = ssh.exec("warp-cli --version 2>/dev/null | head -1 || echo ''", timeout=10)
+            _, status_out, _ = ssh.exec("warp-cli status 2>/dev/null | head -2 || echo ''", timeout=10)
+            version = (ver_out or "").strip() or "installed"
+            connected = "Connected" in (status_out or "") or "Disconnected" in (status_out or "")
+            if not connected:
+                logger.warning(f"WARP RU {server.ip}: status={status_out.strip()[:100]}")
+
+            # Cleanup tunnel key
+            ssh.exec("rm -rf /tmp/warp_tunnel 2>/dev/null || true")
+
+            logger.info(f"WARP RU on {server.ip}: {version} | {status_out.strip()[:80]}")
+            return True, version
+
+    except Exception as e:
+        logger.error(f"WARP RU install error on {server.ip}: {e}")
         return False, str(e)
 
 def toggle_warp_service(server, enabled: bool):
@@ -1167,6 +1480,227 @@ def _get_next_client_ip(db: Session, server_id: int) -> str:
 # AmneziaWG DEPLOYMENT
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _deploy_awg_on_target(
+    db: Session,
+    connection: Connection,
+    target_server: Server,
+    S,
+    endpoint_ip: str,
+) -> Tuple[bool, str]:
+    """
+    Core AWG deployment on a target server (EU for direct, RU for cascade).
+    Installs AWG if needed, generates keys, builds/uploads config, brings up interface.
+    Returns (ok, error_msg_or_empty).
+    endpoint_ip — the IP the client will connect to (may differ from target_server.ip).
+    """
+    with SSHClient(target_server) as ssh:
+        _ensure_server_ready(ssh, connection.port, proto="udp")
+        S(1, "ok", f"Сервер {target_server.ip} готов, UDP порт {connection.port} открыт")
+
+        # Step 2: Check / install AWG
+        S(2, "running", "Проверка AmneziaWG")
+        _, check_out, _ = ssh.exec(
+            "which awg 2>/dev/null && echo AWG_OK || "
+            "(which wg 2>/dev/null && echo WG_OK || echo NOT_FOUND)"
+        )
+        if "NOT_FOUND" in check_out:
+            S(2, "running", "AmneziaWG не найден — устанавливаю...")
+            code2, _, err2 = ssh.exec(AWG_INSTALL_SCRIPT, timeout=300)
+            if code2 != 0:
+                S(2, "error", f"Установка провалилась: {err2[:200]}")
+                return False, f"AmneziaWG install failed: {err2}"
+            S(2, "ok", "AmneziaWG установлен")
+        elif "AWG_OK" in check_out:
+            S(2, "ok", "AmneziaWG уже установлен (awg)")
+        else:
+            S(2, "ok", "WireGuard установлен (wg, AWG-compatible)")
+
+        # Step 3: Generate keypairs
+        S(3, "running", "Генерация ключей (сервер + клиент + PSK)")
+        # Reuse server keypair if one already exists for this server
+        existing_server_conn = db.query(Connection).filter(
+            Connection.server_id == target_server.id,
+            Connection.protocol == Protocol.AMNEZIA_WG,
+            Connection.wg_private_key.isnot(None),
+            Connection.id != connection.id,
+        ).first()
+
+        if existing_server_conn and existing_server_conn.wg_private_key:
+            server_priv = existing_server_conn.wg_private_key
+            server_pub  = existing_server_conn.wg_public_key
+            _raw_log(connection, db, "  Серверный keypair: переиспользован из существующего подключения")
+        else:
+            server_priv, server_pub = _wg_genkey_on_server(ssh)
+            _raw_log(connection, db, "  Серверный keypair: сгенерирован новый")
+
+        client_priv, client_pub = _wg_genkey_on_server(ssh)
+        psk = _wg_preshared_on_server(ssh)
+
+        connection.wg_private_key        = server_priv
+        connection.wg_public_key         = server_pub
+        connection.wg_preshared_key      = psk
+        connection.wg_client_private_key = client_priv
+        connection.wg_client_public_key  = client_pub
+        connection.awg_junk_packet_count    = connection.awg_junk_packet_count    or 4
+        connection.awg_junk_packet_min_size = connection.awg_junk_packet_min_size or 40
+        connection.awg_junk_packet_max_size = connection.awg_junk_packet_max_size or 70
+
+        # Step 4: Build server config with lock to avoid iface# race
+        S(4, "running", "Сборка серверного конфига wgN.conf")
+        _, net_iface_out, _ = ssh.exec(
+            "ip route | grep '^default' | awk '{print $5}' | head -1"
+        )
+        net_iface = net_iface_out.strip() or "eth0"
+
+        with _get_awg_server_lock(target_server.id):
+            # Cleanup stale .conf files with no live interface
+            _, live_ifaces_out, _ = ssh.exec(
+                "ip link show | grep -oE 'wg[0-9]+' || echo NONE"
+            )
+            live_ifaces = set(live_ifaces_out.split()) - {"NONE"}
+            _, conf_list_out, _ = ssh.exec(
+                "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | grep -oE 'wg[0-9]+' || echo NONE"
+            )
+            for conf_iface in conf_list_out.split():
+                conf_iface = conf_iface.strip()
+                if conf_iface.startswith('wg') and conf_iface[2:].isdigit():
+                    if conf_iface not in live_ifaces:
+                        ssh.exec(f"rm -f /etc/amnezia/amneziawg/{conf_iface}.conf 2>/dev/null || true")
+                        _raw_log(connection, db, f"  Удалён мусорный конфиг {conf_iface}.conf")
+
+            # Pick next free iface number
+            _, existing_ifaces_out, _ = ssh.exec(
+                "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | "
+                "grep -oE 'wg[0-9]+' | sort -V || echo NONE"
+            )
+            used_nums = set()
+            for part in existing_ifaces_out.split():
+                part = part.strip()
+                if part.startswith('wg') and part[2:].isdigit():
+                    used_nums.add(int(part[2:]))
+            iface_num = 0
+            while iface_num in used_nums:
+                iface_num += 1
+            iface_name = f"wg{iface_num}"
+            conf_path  = f"/etc/amnezia/amneziawg/{iface_name}.conf"
+
+            server_subnet = f"10.8.{iface_num}.1/24"
+            client_ip     = f"10.8.{iface_num}.2"
+            connection.wg_client_ip = client_ip
+
+            clients_list = [{"pub_key": client_pub, "preshared_key": psk, "client_ip": client_ip}]
+
+            _raw_log(connection, db,
+                f"  Интерфейс: {iface_name} (занятые: {sorted(used_nums)}), "
+                f"subnet: {server_subnet}, client_ip: {client_ip}")
+
+            ssh.exec("mkdir -p /etc/amnezia/amneziawg")
+            server_conf = gen_awg_server_config(
+                server_private_key=server_priv,
+                server_ip=server_subnet,
+                listen_port=connection.port,
+                net_interface=net_iface,
+                clients=clients_list,
+                junk_packet_count=connection.awg_junk_packet_count,
+                junk_packet_min_size=connection.awg_junk_packet_min_size,
+                junk_packet_max_size=connection.awg_junk_packet_max_size,
+            )
+            ssh.upload_file(server_conf, conf_path)
+
+        S(4, "ok", f"Конфиг загружен: {conf_path} (iface={iface_name}, subnet={server_subnet})")
+
+        # Step 5: Bring up AWG interface
+        S(5, "running", f"Запуск интерфейса {iface_name}")
+        svc = f"awg-quick@{iface_name}"
+
+        _, cat_conf, _ = ssh.exec(f"cat {conf_path} 2>/dev/null | head -30 || echo CONF_MISSING")
+        if "CONF_MISSING" in cat_conf or "[Interface]" not in cat_conf:
+            S(5, "error", f"Конфиг {conf_path} не найден или пуст")
+            return False, f"AWG config missing at {conf_path}"
+
+        ssh.exec("modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true")
+        ssh.exec(f"systemctl stop {svc} 2>/dev/null || true")
+        ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || wg-quick down {iface_name} 2>/dev/null || true")
+        ssh.exec(f"ip link delete {iface_name} 2>/dev/null || true")
+
+        tmp_stripped = f"/tmp/awg_stripped_{iface_name}.conf"
+        _, strip_out, strip_err = ssh.exec(
+            f"awg-quick strip {conf_path} 2>/dev/null > {tmp_stripped} && echo OK || echo STRIP_FAILED"
+        )
+        strip_ok = "STRIP_FAILED" not in (strip_out or "") and "STRIP_FAILED" not in (strip_err or "")
+
+        if strip_ok:
+            ssh.exec(f"ip link add {iface_name} type amneziawg 2>/dev/null || true")
+            _, setconf_out, _ = ssh.exec(
+                f"awg setconf {iface_name} {tmp_stripped} 2>&1 || echo SETCONF_FAILED"
+            )
+            if "SETCONF_FAILED" in (setconf_out or ""):
+                _raw_log(connection, db, f"  awg setconf FAILED: {setconf_out[:150]}")
+            else:
+                _raw_log(connection, db, "  awg setconf OK")
+            ssh.exec(f"ip -4 address add {server_subnet} dev {iface_name} 2>/dev/null || true")
+            ssh.exec(f"ip link set mtu 1420 up dev {iface_name} 2>/dev/null || true")
+            ssh.exec(
+                f"iptables -A FORWARD -i {iface_name} -j ACCEPT 2>/dev/null || true; "
+                f"iptables -A FORWARD -o {iface_name} -j ACCEPT 2>/dev/null || true; "
+                f"iptables -t nat -A POSTROUTING -o {net_iface} -j MASQUERADE 2>/dev/null || true"
+            )
+            ssh.exec(f"rm -f {tmp_stripped}")
+            _raw_log(connection, db, "  Manual awg bring-up: OK")
+        else:
+            _raw_log(connection, db, "  awg-quick strip failed, falling back to systemctl")
+            ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
+            ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
+            code3, out3, _ = ssh.exec(f"systemctl start {svc} 2>&1 || echo SYSTEMD_START_FAILED")
+            if "SYSTEMD_START_FAILED" in (out3 or ""):
+                _raw_log(connection, db, f"  systemctl start {svc} FAILED: {(out3 or '')[:150]}")
+
+        ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
+        ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
+
+        # Step 6: Verify
+        S(6, "running", f"Верификация интерфейса {iface_name}")
+        ssh.exec("sleep 2")
+        _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
+
+        if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
+            _, up_out, _ = ssh.exec(f"awg-quick up {conf_path} 2>&1 || true")
+            _raw_log(connection, db, f"  last-attempt awg-quick up: {up_out.strip()[:150]}")
+            ssh.exec("sleep 2")
+            _, iface_out2, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
+            if "NO_INTERFACE" in iface_out2 or iface_name not in iface_out2:
+                _, start_err, _ = ssh.exec(
+                    f"journalctl -u awg-quick@{iface_name} -n 20 --no-pager 2>/dev/null; "
+                    f"cat {conf_path} 2>/dev/null | head -15"
+                )
+                S(6, "error", f"Интерфейс {iface_name} не поднялся. Лог: {start_err[:300]}")
+                return False, f"AWG interface {iface_name} did not come up"
+            iface_out = iface_out2
+
+        S(5, "ok", f"Интерфейс {iface_name} поднят")
+
+        _, udp_out, _ = ssh.exec(
+            f"ss -ulnp 2>/dev/null | grep ':{connection.port}' || echo NOT_LISTENING"
+        )
+        if "NOT_LISTENING" in udp_out:
+            S(6, "error", f"UDP порт {connection.port} НЕ слушается")
+            return False, f"AWG interface up but UDP {connection.port} not listening"
+        _raw_log(connection, db, f"  OK: UDP {connection.port} слушается")
+
+        _, nat_out, _ = ssh.exec(
+            "iptables -t nat -L POSTROUTING -n 2>/dev/null | grep MASQUERADE || echo NO_MASQ"
+        )
+        if "NO_MASQ" in nat_out:
+            _raw_log(connection, db, "  WARN: NAT MASQUERADE не найден — трафик клиентов не маршрутизируется")
+        else:
+            _raw_log(connection, db, "  OK: NAT MASQUERADE присутствует")
+
+        S(6, "ok", f"AWG {iface_name}: UDP {connection.port} OK, NAT {'OK' if 'NO_MASQ' not in nat_out else 'WARN'}")
+        return True, iface_name
+
+    return False, "unexpected exit"
+
+
 def deploy_amnezia_wg_connection(
     db: Session,
     connection: Connection,
@@ -1174,338 +1708,72 @@ def deploy_amnezia_wg_connection(
     ru_server: Optional[Server] = None,
     is_cascade: bool = False,
 ) -> Tuple[bool, str]:
-    """Install AmneziaWG and deploy a WireGuard peer on server.
-    Steps:
-      1 - Подключение и подготовка сервера (UDP)
-      2 - Проверка / установка AmneziaWG
-      3 - Генерация ключей (сервер + клиент + PSK)
-      4 - Сборка серверного конфига wgN.conf
-      5 - Запуск awg-quick@wgN
-      6 - Верификация интерфейса
-      7 - Генерация клиентского конфига и client link
+    """Deploy AmneziaWG connection.
+
+    DIRECT:  AWG tunnel endpoint = EU server (server).
+             Client connects to EU directly via AmneziaWG.
+
+    CASCADE: AWG tunnel endpoint = RU server (ru_server).
+             Client → RU (AWG) → EU (VLESS outbound) → Internet.
+             AWG is deployed on the RU server; the client config
+             points to ru_server.ip as the endpoint.
     """
     S = lambda n, st, m: _step_log(connection, db, n, st, m)
     try:
-        S(1, "running", f"Подключение к серверу {server.ip} (UDP:{connection.port})")
-        with SSHClient(server) as ssh:
-            _ensure_server_ready(ssh, connection.port, proto="udp")
-            S(1, "ok", f"Сервер {server.ip} готов, UDP порт {connection.port} открыт")
+        if is_cascade:
+            if not ru_server:
+                S(1, "error", "CASCADE: ru_server не передан")
+                return False, "CASCADE: ru_server не передан"
+            target_server = ru_server
+            endpoint_ip   = ru_server.ip
+            S(1, "running",
+              f"CASCADE: деплой AWG на RU сервере {ru_server.ip}, "
+              f"UDP:{connection.port}")
+        else:
+            target_server = server
+            endpoint_ip   = server.ip
+            S(1, "running",
+              f"DIRECT: деплой AWG на EU сервере {server.ip}, "
+              f"UDP:{connection.port}")
 
-            # Step 2: Check / install AWG
-            S(2, "running", "Проверка AmneziaWG")
-            _, check_out, _ = ssh.exec(
-                "which awg 2>/dev/null && echo AWG_OK || "
-                "(which wg 2>/dev/null && echo WG_OK || echo NOT_FOUND)"
-            )
-            if "NOT_FOUND" in check_out:
-                S(2, "running", "AmneziaWG не найден — устанавливаю...")
-                code2, _, err2 = ssh.exec(AWG_INSTALL_SCRIPT, timeout=300)
-                if code2 != 0:
-                    S(2, "error", f"Установка провалилась: {err2[:200]}")
-                    return False, f"AmneziaWG install failed: {err2}"
-                S(2, "ok", "AmneziaWG установлен")
-            elif "AWG_OK" in check_out:
-                S(2, "ok", "AmneziaWG уже установлен (awg)")
-            else:
-                S(2, "ok", "WireGuard установлен (wg, AWG-compatible)")
+        ok, result = _deploy_awg_on_target(db, connection, target_server, S, endpoint_ip)
+        if not ok:
+            return False, result
+        iface_name = result  # returned iface name on success
 
-            # Step 3: Generate keypairs
-            S(3, "running", "Генерация ключей (сервер + клиент + PSK)")
-            existing_server_conn = db.query(Connection).filter(
-                Connection.server_id == server.id,
-                Connection.protocol == Protocol.AMNEZIA_WG,
-                Connection.wg_private_key.isnot(None),
-                Connection.id != connection.id,
-            ).first()
+        # Step 7: Generate client config and link
+        S(7, "running", "Генерация клиентского конфига и client link")
+        _srv_name = (server.display_name or server.name or server.ip)
+        if is_cascade and ru_server:
+            _srv_name = ru_server.display_name or ru_server.name or ru_server.ip
+        _ctype = connection.connection_type if isinstance(connection.connection_type, str) \
+            else (connection.connection_type.value if connection.connection_type else "direct")
+        _awg_tag = f"{_srv_name} | AWG ({_ctype})"
 
-            if existing_server_conn and existing_server_conn.wg_private_key:
-                server_priv = existing_server_conn.wg_private_key
-                server_pub  = existing_server_conn.wg_public_key
-                _raw_log(connection, db, "  Серверный keypair: переиспользован из существующего подключения")
-            else:
-                server_priv, server_pub = _wg_genkey_on_server(ssh)
-                _raw_log(connection, db, "  Серверный keypair: сгенерирован новый")
-
-            client_priv, client_pub = _wg_genkey_on_server(ssh)
-            psk       = _wg_preshared_on_server(ssh)
-            client_ip = _get_next_client_ip(db, server.id)
-
-            connection.wg_private_key        = server_priv
-            connection.wg_public_key         = server_pub
-            connection.wg_preshared_key      = psk
-            connection.wg_client_private_key = client_priv
-            connection.wg_client_public_key  = client_pub
-            connection.wg_client_ip          = client_ip
-            connection.awg_junk_packet_count    = connection.awg_junk_packet_count    or 4
-            connection.awg_junk_packet_min_size = connection.awg_junk_packet_min_size or 40
-            connection.awg_junk_packet_max_size = connection.awg_junk_packet_max_size or 70
-            S(3, "ok", f"Ключи готовы, client IP назначен: {client_ip}")
-
-            # Step 4: Build server config
-            S(4, "running", "Сборка серверного конфига wgN.conf")
-            clients_list = [{"pub_key": client_pub, "preshared_key": psk, "client_ip": client_ip}]
-
-            other_awg = db.query(Connection).filter(
-                Connection.server_id == server.id,
-                Connection.id != connection.id,
-                Connection.protocol == Protocol.AMNEZIA_WG,
-                Connection.is_active == True,
-                Connection.wg_client_public_key.isnot(None),
-            ).all()
-            for c in other_awg:
-                if c.wg_client_public_key and c.wg_client_ip:
-                    clients_list.append({
-                        "pub_key": c.wg_client_public_key,
-                        "preshared_key": c.wg_preshared_key or "",
-                        "client_ip": c.wg_client_ip,
-                    })
-
-            _, net_iface_out, _ = ssh.exec(
-                "ip route | grep '^default' | awk '{print $5}' | head -1"
-            )
-            net_iface = net_iface_out.strip() or "eth0"
-
-            # Acquire per-server lock: prevents two concurrent AWG deploys
-            # from picking the same wgN number (race condition → Address already in use).
-            with _get_awg_server_lock(server.id):
-
-                # Cleanup stale .conf files (no live interface) INSIDE the lock
-                # so concurrent deploys don't both delete and then both pick wg2.
-                _, live_ifaces_out, _ = ssh.exec(
-                    "ip link show | grep -oE 'wg[0-9]+' || echo NONE"
-                )
-                live_ifaces = set(live_ifaces_out.split()) - {"NONE"}
-                _, conf_list_out, _ = ssh.exec(
-                    "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | grep -oE 'wg[0-9]+' || echo NONE"
-                )
-                for conf_iface in conf_list_out.split():
-                    conf_iface = conf_iface.strip()
-                    if conf_iface.startswith('wg') and conf_iface[2:].isdigit():
-                        if conf_iface not in live_ifaces:
-                            ssh.exec(f"rm -f /etc/amnezia/amneziawg/{conf_iface}.conf 2>/dev/null || true")
-                            _raw_log(connection, db, f"  Удалён мусорный конфиг {conf_iface}.conf (интерфейс не поднят)")
-
-                # Determine iface_num FIRST so each interface gets unique subnet.
-                _, existing_ifaces_out, _ = ssh.exec(
-                    "ls /etc/amnezia/amneziawg/*.conf 2>/dev/null | "
-                    "grep -oE 'wg[0-9]+' | sort -V || echo NONE"
-                )
-                used_nums = set()
-                for part in existing_ifaces_out.split():
-                    part = part.strip()
-                    if part.startswith('wg') and part[2:].isdigit():
-                        used_nums.add(int(part[2:]))
-                iface_num = 0
-                while iface_num in used_nums:
-                    iface_num += 1
-                iface_name = f"wg{iface_num}"
-                conf_path  = f"/etc/amnezia/amneziawg/{iface_name}.conf"
-
-                # Each interface gets its own /24: wg0→10.8.0.0/24, wg1→10.8.1.0/24, etc.
-                server_subnet = f"10.8.{iface_num}.1/24"
-                client_ip = f"10.8.{iface_num}.2"
-                connection.wg_client_ip = client_ip
-                clients_list[0]["client_ip"] = client_ip
-
-                _raw_log(connection, db,
-                    f"  Интерфейс: {iface_name} (занятые: {sorted(used_nums)}), "
-                    f"subnet: {server_subnet}, client_ip: {client_ip}")
-
-                # Upload config INSIDE the lock — next concurrent deploy will see
-                # this .conf and skip iface_num, preventing collision.
-                ssh.exec("mkdir -p /etc/amnezia/amneziawg")
-                server_conf = gen_awg_server_config(
-                    server_private_key=server_priv,
-                    server_ip=server_subnet,
-                    listen_port=connection.port,
-                    net_interface=net_iface,
-                    clients=clients_list,
-                    junk_packet_count=connection.awg_junk_packet_count,
-                    junk_packet_min_size=connection.awg_junk_packet_min_size,
-                    junk_packet_max_size=connection.awg_junk_packet_max_size,
-                )
-                ssh.upload_file(server_conf, conf_path)
-                # Lock released here — other deploys can now safely pick next iface_num
-
-            S(4, "ok", f"Конфиг загружен: {conf_path} ({len(clients_list)} peer(s), iface={iface_name}, subnet={server_subnet}, net={net_iface})")
-
-            # Step 5: Start awg-quick service
-            S(5, "running", f"Запуск сервиса awg-quick@{iface_name}")
-            svc = f"awg-quick@{iface_name}"
-
-            # Validate config before starting
-            _, cat_conf, _ = ssh.exec(f"cat {conf_path} 2>/dev/null | head -30 || echo CONF_MISSING")
-            if "CONF_MISSING" in cat_conf or "[Interface]" not in cat_conf:
-                S(5, "error", f"Конфиг {conf_path} не найден или пуст")
-                return False, f"AWG config missing at {conf_path}"
-            _raw_log(connection, db, f"  Config preview: {cat_conf[:200].strip()}")
-
-            # Ensure amneziawg kernel module is loaded
-            ssh.exec("modprobe amneziawg 2>/dev/null || modprobe wireguard 2>/dev/null || true")
-
-            # Bring down any existing interface first
-            ssh.exec(f"systemctl stop {svc} 2>/dev/null || true")
-            ssh.exec(f"awg-quick down {iface_name} 2>/dev/null || wg-quick down {iface_name} 2>/dev/null || true")
-            ssh.exec(f"ip link delete {iface_name} 2>/dev/null || true")
-
-            # awg-quick uses process substitution (awg setconf wg0 /dev/fd/63) which
-            # fails over SSH+sudo because /dev/fd/63 is not accessible in the remote
-            # shell.  We work around this by manually performing the same steps that
-            # awg-quick would do, but passing the stripped config via a temp file.
-            #
-            # Steps mirror what awg-quick up does internally:
-            #  1. ip link add wgN type amneziawg
-            #  2. awg setconf wgN <stripped-conf-file>
-            #  3. ip -4 address add <server_ip> dev wgN
-            #  4. ip link set mtu 1420 up dev wgN
-            #  5. Run PostUp rules from the config (iptables)
-            #  6. Enable + start the systemd unit so it survives reboots
-
-            # Extract stripped config (no Address/PostUp/PostDown lines) for awg setconf
-            tmp_stripped = f"/tmp/awg_stripped_{iface_name}.conf"
-            _, strip_out, strip_err = ssh.exec(
-                f"awg-quick strip {conf_path} 2>/dev/null > {tmp_stripped} && echo OK || echo STRIP_FAILED"
-            )
-            strip_ok = "STRIP_FAILED" not in (strip_out or "") and "STRIP_FAILED" not in (strip_err or "")
-
-            if strip_ok:
-                # Manual bring-up sequence (avoids /dev/fd process substitution)
-                ssh.exec(f"ip link add {iface_name} type amneziawg 2>/dev/null || true")
-                _, setconf_out, setconf_err = ssh.exec(
-                    f"awg setconf {iface_name} {tmp_stripped} 2>&1 || echo SETCONF_FAILED"
-                )
-                if "SETCONF_FAILED" in (setconf_out or ""):
-                    _raw_log(connection, db, f"  awg setconf FAILED: {setconf_out[:150]}")
-                else:
-                    _raw_log(connection, db, f"  awg setconf OK")
-                ssh.exec(f"ip -4 address add {server_subnet} dev {iface_name} 2>/dev/null || true")
-                ssh.exec(f"ip link set mtu 1420 up dev {iface_name} 2>/dev/null || true")
-                # Apply PostUp rules (iptables FORWARD + MASQUERADE)
-                ssh.exec(
-                    f"iptables -A FORWARD -i {iface_name} -j ACCEPT 2>/dev/null || true; "
-                    f"iptables -A FORWARD -o {iface_name} -j ACCEPT 2>/dev/null || true; "
-                    f"iptables -t nat -A POSTROUTING -o {net_iface} -j MASQUERADE 2>/dev/null || true"
-                )
-                ssh.exec(f"rm -f {tmp_stripped}")
-                _raw_log(connection, db, f"  Manual awg bring-up: ip link + awg setconf + PostUp applied")
-            else:
-                # Fallback: try systemctl (may fail due to /dev/fd, but worth trying)
-                _raw_log(connection, db, f"  awg-quick strip failed, falling back to systemctl")
-                ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
-                ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
-                code3, out3, _ = ssh.exec(f"systemctl start {svc} 2>&1 || echo SYSTEMD_START_FAILED")
-                if code3 == 0 and "SYSTEMD_START_FAILED" not in (out3 or ""):
-                    _raw_log(connection, db, f"  systemctl start {svc}: OK")
-                else:
-                    _raw_log(connection, db, f"  systemctl start {svc} FAILED: {(out3 or '')[:150]}")
-
-            # Register the interface in systemd for reboot persistence
-            ssh.exec(f"systemctl daemon-reload 2>/dev/null || true")
-            ssh.exec(f"systemctl enable {svc} 2>/dev/null || true")
-
-            # Step 6: Verify interface
-            # awg-quick is a oneshot service — the interface must be verified with
-            # `ip link show`, NOT `systemctl is-active` (which will show inactive/dead
-            # after the oneshot exits, even when the tunnel is up).
-            S(6, "running", f"Верификация интерфейса {iface_name}")
-
-            # Give kernel 2s to fully set up the interface
-            ssh.exec("sleep 2")
-            _, iface_out, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
-
-            if "NO_INTERFACE" in iface_out or iface_name not in iface_out:
-                # Last attempt: awg-quick up directly (idempotent — ignores 'already exists')
-                _, up_out, _ = ssh.exec(
-                    f"awg-quick up {conf_path} 2>&1 || true"
-                )
-                _raw_log(connection, db, f"  last-attempt awg-quick up: {up_out.strip()[:150]}")
-                ssh.exec("sleep 2")
-                _, iface_out2, _ = ssh.exec(f"ip link show {iface_name} 2>/dev/null || echo NO_INTERFACE")
-                if "NO_INTERFACE" in iface_out2 or iface_name not in iface_out2:
-                    _, start_err, _ = ssh.exec(
-                        f"journalctl -u awg-quick@{iface_name} -n 30 --no-pager 2>/dev/null; "
-                        f"echo '---'; "
-                        f"cat {conf_path} 2>/dev/null | head -20; "
-                        f"echo '---'; "
-                        f"ls /etc/amnezia/amneziawg/ 2>/dev/null || echo no_dir"
-                    )
-                    S(5, "error", f"awg-quick@{iface_name} не запустился")
-                    S(6, "error", f"Интерфейс {iface_name} не поднялся. Лог: {start_err[:300]}")
-                    return False, f"AWG interface {iface_name} did not come up. log={start_err[:400]}"
-                iface_out = iface_out2
-
-            iface_state = "UP" if ("UP" in iface_out or "UNKNOWN" in iface_out) else "unknown"
-            S(5, "ok", f"Сервис awg-quick@{iface_name} запущен (проверено через ip link)")
-            S(6, "ok", f"Интерфейс {iface_name} активен (state: {iface_state})")
-
-            # 6a: verify UDP port is actually listening
-            _, udp_out, _ = ssh.exec(
-                f"ss -ulnp 2>/dev/null | grep ':{connection.port}' || echo NOT_LISTENING"
-            )
-            if "NOT_LISTENING" in udp_out:
-                S(6, "error",
-                  f"UDP порт {connection.port} НЕ слушается — интерфейс поднят, "
-                  f"но AWG не принимает пакеты. Проверь ListenPort в конфиге.")
-                return False, f"AWG interface up but UDP {connection.port} not listening"
-            _raw_log(connection, db, f"  OK: UDP {connection.port} слушается ({udp_out.strip()[:80]})")
-
-            # 6b: awg show — peer list and handshake status
-            _, awg_show, _ = ssh.exec(
-                f"awg show {iface_name} 2>/dev/null || echo AWG_SHOW_FAILED"
-            )
-            if "AWG_SHOW_FAILED" in awg_show:
-                _raw_log(connection, db, "  WARN: awg show не сработал (возможно, команда awg недоступна)")
-            else:
-                lines = [l.strip() for l in awg_show.splitlines() if l.strip()]
-                _raw_log(connection, db, "  awg show " + iface_name + ":")
-                for l in lines[:15]:          # не более 15 строк в лог
-                    _raw_log(connection, db, "    " + l)
-
-            # 6c: NAT / iptables check — PostUp rules must be in place
-            _, nat_out, _ = ssh.exec(
-                "iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep MASQUERADE || echo NO_MASQ"
-            )
-            if "NO_MASQ" in nat_out:
-                S(6, "error",
-                  f"MASQUERADE правило не найдено в iptables — клиентский трафик не будет маршрутизироваться. "
-                  f"Добавь PostUp/PostDown в {conf_path}")
-                # non-fatal: the interface is up, but connectivity will fail
-                _raw_log(connection, db,
-                  "  WARN: NAT MASQUERADE отсутствует. "
-                  "Клиент подключится к интерфейсу, но Интернет работать не будет. "
-                  "PostUp/PostDown правила не применились.")
-            else:
-                _raw_log(connection, db,
-                  f"  OK: NAT MASQUERADE присутствует — {nat_out.strip()[:120]}")
-
-            S(6, "ok",
-              f"Интерфейс {iface_name} проверен: UDP {connection.port} слушается, "
-              f"awg show выполнен, NAT {'OK' if 'NO_MASQ' not in nat_out else 'WARN: нет MASQUERADE'}")
-
-            # Step 7: Generate client config and link
-            S(7, "running", "Генерация клиентского конфига и client link")
-            _srv_name = server.display_name or server.name or server.ip
-            _ctype    = connection.connection_type if isinstance(connection.connection_type, str) \
-                else (connection.connection_type.value if connection.connection_type else "direct")
-            _awg_tag  = f"{_srv_name} | AWG ({_ctype})"
-            client_conf = gen_awg_client_config(
-                client_private_key=client_priv,
-                client_ip=client_ip,
-                server_public_key=server_pub,
-                preshared_key=psk,
-                server_endpoint=f"{server.ip}:{connection.port}",
-                dns="1.1.1.1, 8.8.8.8",
-                junk_packet_count=connection.awg_junk_packet_count,
-                junk_packet_min_size=connection.awg_junk_packet_min_size,
-                junk_packet_max_size=connection.awg_junk_packet_max_size,
-                name=_awg_tag,
-            )
-            connection.config_json  = client_conf
-            connection.config_text  = client_conf
-            connection.client_link  = f"awg://peer?pub={server_pub}&endpoint={server.ip}:{connection.port}#{_awg_tag}"
-            db.commit()
-            S(7, "ok", f"AmneziaWG задеплоен успешно ✅  endpoint={server.ip}:{connection.port}")
-            return True, "AmneziaWG deployed"
+        client_conf = gen_awg_client_config(
+            client_private_key=connection.wg_client_private_key,
+            client_ip=connection.wg_client_ip,
+            server_public_key=connection.wg_public_key,
+            preshared_key=connection.wg_preshared_key,
+            server_endpoint=f"{endpoint_ip}:{connection.port}",
+            dns="1.1.1.1, 8.8.8.8",
+            junk_packet_count=connection.awg_junk_packet_count,
+            junk_packet_min_size=connection.awg_junk_packet_min_size,
+            junk_packet_max_size=connection.awg_junk_packet_max_size,
+            name=_awg_tag,
+        )
+        connection.config_json = client_conf
+        connection.config_text = client_conf
+        connection.client_link = (
+            f"awg://peer?pub={connection.wg_public_key}"
+            f"&endpoint={endpoint_ip}:{connection.port}#{_awg_tag}"
+        )
+        db.commit()
+        mode = "CASCADE" if is_cascade else "DIRECT"
+        S(7, "ok",
+          f"AmneziaWG {mode} задеплоен ✅  endpoint={endpoint_ip}:{connection.port}, "
+          f"iface={iface_name}")
+        return True, f"AmneziaWG {mode} deployed"
 
     except Exception as e:
         logger.error(f"AmneziaWG deploy error: {e}")

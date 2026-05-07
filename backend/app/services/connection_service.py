@@ -206,9 +206,16 @@ def create_connections_batch(
     create_cascade: bool,
 ) -> List[int]:
     """
-    Создаёт записи Connection (по одной на каждый протокол × тип)
-    со статусом setup_status='pending', затем запускает фоновый поток.
-    Возвращает список id созданных Connection.
+    Создаёт записи Connection — ровно по ОДНОЙ на каждый протокол × тип.
+
+    Итого:
+      - только direct (без RU):       3 подключения (VLESS, AWG, NaiveProxy)
+      - только cascade (с RU):        3 подключения
+      - direct + cascade (с RU):      6 подключений
+
+    Дубли (2 порта на один протокол) недопустимы.
+    Перед созданием проверяем, не существует ли уже подключение
+    с тем же eu_server_id + protocol + connection_type — если есть, пропускаем.
     """
     eu_server = db.query(Server).filter(Server.id == eu_server_id).first()
     if not eu_server:
@@ -224,25 +231,36 @@ def create_connections_batch(
 
     created_ids = []
 
+    def _already_exists(proto: Protocol, ctype: ConnectionType) -> bool:
+        """True if an active connection with same EU server + protocol + type exists."""
+        existing = db.query(Connection).filter(
+            Connection.server_id       == eu_server_id,
+            Connection.protocol        == proto,
+            Connection.connection_type == ctype,
+            Connection.is_active       == True,
+        ).first()
+        return existing is not None
+
     def _make(proto: Protocol, ctype: ConnectionType, eu_srv: Server, ru_srv: Optional[Server]):
-        srv_for_port = eu_srv  # порт назначается на EU сервере
         ctype_str = ctype.value if hasattr(ctype, 'value') else str(ctype)
+        # AWG cascade port must be assigned on RU server (that's where the tunnel lives)
+        srv_for_port = ru_srv if (ctype == ConnectionType.CASCADE and ru_srv and proto == Protocol.AMNEZIA_WG) else eu_srv
         port = assign_free_port(db, srv_for_port.id, protocol=proto, connection_type=ctype_str)
         conn = Connection(
-            server_id       = eu_srv.id,
-            ru_server_id    = ru_srv.id if ru_srv else None,
-            connection_type = ctype,
-            protocol        = proto,
-            port            = port,
-            status          = ConnectionStatus.DEPLOYING,
-            setup_status    = "pending",
-            setup_log       = "",
+            server_id            = eu_srv.id,
+            ru_server_id         = ru_srv.id if ru_srv else None,
+            connection_type      = ctype,
+            protocol             = proto,
+            port                 = port,
+            status               = ConnectionStatus.DEPLOYING,
+            setup_status         = "pending",
+            setup_log            = "",
             split_tunnel_enabled = True,
-            warp_enabled    = True,
+            warp_enabled         = True,
         )
-        # предзаполняем параметры по умолчанию
+        # Default parameters per protocol
         if proto == Protocol.VLESS_REALITY:
-            conn.uuid = generate_uuid()
+            conn.uuid                = generate_uuid()
             conn.reality_server_name = "www.microsoft.com"
             conn.reality_fingerprint = "chrome"
         elif proto == Protocol.AMNEZIA_WG:
@@ -261,17 +279,30 @@ def create_connections_batch(
 
     if create_direct:
         for proto in PROTOCOLS_ALL:
+            if _already_exists(proto, ConnectionType.DIRECT):
+                logger.info(f"Skipping duplicate DIRECT {proto} for EU server {eu_server_id}")
+                continue
             cid = _make(proto, ConnectionType.DIRECT, eu_server, None)
             created_ids.append(cid)
 
     if create_cascade and ru_server:
         for proto in PROTOCOLS_ALL:
+            if _already_exists(proto, ConnectionType.CASCADE):
+                logger.info(f"Skipping duplicate CASCADE {proto} for EU server {eu_server_id}")
+                continue
             cid = _make(proto, ConnectionType.CASCADE, eu_server, ru_server)
             created_ids.append(cid)
 
     db.commit()
 
-    # запускаем фоновый деплой
+    if not created_ids:
+        logger.warning(
+            f"create_connections_batch: no new connections created for EU={eu_server_id} "
+            f"(all already exist). Returning empty list."
+        )
+        return []
+
+    # Start background deployment
     t = threading.Thread(
         target=_run_batch_deploy,
         args=(created_ids, eu_server_id, ru_server_id),

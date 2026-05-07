@@ -629,7 +629,7 @@ echo "[+] Caddy done: $CADDY_VER"
         # WARP на RU: fallback когда EU-сервер недоступен (каскад).
         _update_setup(db, server, log_line="[2.5] Установка WARP...")
         from app.services.deploy_service import install_warp
-        ok, msg = install_warp(server)
+        ok, msg = install_warp(server, db=db)
         if ok:
             server.warp_installed = True
             # msg теперь содержит версию (e.g. "warp-cli 2026.3.846.0")
