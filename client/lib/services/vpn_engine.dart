@@ -1,4 +1,12 @@
-// VPN Engine — manages xray.exe / amneziawg tunnel service / naive.exe subprocesses
+// VPN Engine — manages VPN subprocesses on Windows
+//
+// Architecture:
+//   VLESS/Trojan  → xray.exe (SOCKS5 on 10808) + tun2socks.exe (TUN adapter)
+//   NaiveProxy    → naive.exe (SOCKS5 on 10808) + tun2socks.exe (TUN adapter)
+//   AmneziaWG     → amneziawg.exe /installtunnelservice (Windows tunnel service)
+//
+// tun2socks creates a virtual TUN network adapter and routes ALL OS traffic
+// through the local SOCKS5 proxy — works for every app, browser, game, etc.
 
 import 'dart:async';
 import 'dart:io';
@@ -16,10 +24,15 @@ class VpnEngine {
   VpnEngine._();
   static final VpnEngine instance = VpnEngine._();
 
-  Process? _process;
+  Process? _proxyProcess;    // xray.exe or naive.exe
+  Process? _tun2socksProcess; // tun2socks.exe
   EngineType? _activeEngine;
   String? _tempConfigPath;
   String? _awgTunnelName;
+
+  static const _tunName = 'MilkyVPN-TUN';
+  static const _tunAddr = '198.18.0.1';   // virtual TUN IP (RFC 5737 test range)
+  static const _tunGw   = '198.18.0.2';   // gateway inside TUN
 
   final ValueNotifier<VpnStatus> status =
       ValueNotifier(VpnStatus.disconnected);
@@ -44,13 +57,13 @@ class VpnEngine {
       switch (conn.protocol) {
         case Protocol.vlessReality:
         case Protocol.trojan:
-          await _startXray(conn, engineDir);
+          await _startXrayWithTun(conn, engineDir);
           break;
         case Protocol.amneziaWg:
           await _startAwg(conn, engineDir);
           break;
         case Protocol.naiveProxy:
-          await _startNaive(conn, engineDir);
+          await _startNaiveWithTun(conn, engineDir);
           break;
         case Protocol.unknown:
           throw VpnEngineException('Unsupported protocol: ${conn.protocol}');
@@ -58,6 +71,8 @@ class VpnEngine {
     } catch (e) {
       status.value = VpnStatus.error;
       lastError.value = e.toString().replaceFirst('VpnEngineException: ', '');
+      // Clean up any partial start
+      await _killAllProcesses();
       rethrow;
     }
   }
@@ -67,79 +82,62 @@ class VpnEngine {
   Future<void> disconnect() async {
     if (status.value == VpnStatus.disconnected) return;
     status.value = VpnStatus.disconnecting;
-    await _stopCurrentProcess();
+    await _killAllProcesses();
     await _cleanupTempConfig();
     status.value = VpnStatus.disconnected;
   }
 
-  // ── XRAY (VLESS+Reality, Trojan) ──────────────────────────────────────────
+  // ── XRAY + tun2socks ──────────────────────────────────────────────────────
 
-  Future<void> _startXray(VpnConnection conn, String engineDir) async {
+  Future<void> _startXrayWithTun(VpnConnection conn, String engineDir) async {
     final xrayPath = p.join(engineDir, AppConstants.xrayExe);
     if (!File(xrayPath).existsSync()) {
       throw VpnEngineException('xray.exe not found. Run setup again.');
     }
 
-    // Pass engineDir so xray finds geoip.dat / geosite.dat
-    final config = _buildXrayClientConfig(conn, engineDir);
+    // Write xray config
+    final config = _buildXrayClientConfig(conn);
     final configPath = await _writeTempConfig(
         AppConstants.xrayConfigFile, jsonEncode(config));
     _tempConfigPath = configPath;
 
-    // Collect stderr from the very start for diagnostics
-    final stderrBuffer = StringBuffer();
+    final stderrBuf = StringBuffer();
 
-    _process = await Process.start(
+    // Start xray
+    _proxyProcess = await Process.start(
       xrayPath,
       ['run', '-config', configPath],
+      workingDirectory: engineDir, // so xray finds geoip.dat / geosite.dat
       runInShell: false,
-      // Run in the engineDir so xray finds geo files relative to itself
-      workingDirectory: engineDir,
     );
     _activeEngine = EngineType.xray;
+    _proxyProcess!.stderr.transform(utf8.decoder).listen((s) => stderrBuf.write(s));
+    _proxyProcess!.stdout.transform(utf8.decoder).listen((s) => stderrBuf.write(s));
 
-    _process!.stderr.transform(utf8.decoder).listen((s) => stderrBuffer.write(s));
-    _process!.stdout.transform(utf8.decoder).listen((s) => stderrBuffer.write(s));
-
-    // Wait 1.5s and see if process is still alive
+    // Give xray 1.5s to start
     await Future.delayed(const Duration(milliseconds: 1500));
+    await _checkProcessAlive(_proxyProcess!, 'xray.exe', stderrBuf);
 
-    bool crashed = false;
-    String crashErr = '';
+    // Remember server IP so we can add a direct route for it (avoid loop)
+    _vpnServerIp = conn.serverIp;
 
-    try {
-      final code = await _process!.exitCode
-          .timeout(const Duration(milliseconds: 50));
-      // If we got here — process already exited (crashed)
-      crashed = true;
-      crashErr = stderrBuffer.toString().trim();
-      throw VpnEngineException(
-          'xray.exe crashed (exit $code)${crashErr.isNotEmpty ? ':\n$crashErr' : ''}');
-    } on TimeoutException {
-      // Good — still running
-    }
+    // Start tun2socks to route all traffic through xray's SOCKS5
+    await _startTun2socks(engineDir);
 
-    if (crashed) return;
-
-    await _setSystemProxy(enabled: true);
     status.value = VpnStatus.connected;
 
-    // Monitor background exit
-    _process!.exitCode.then((code) {
+    // Monitor xray
+    _proxyProcess!.exitCode.then((code) {
       if (status.value == VpnStatus.connected) {
-        final err = stderrBuffer.toString().trim();
-        final tail = err.length > 300 ? err.substring(err.length - 300) : err;
+        final tail = _tail(stderrBuf.toString(), 300);
         status.value = VpnStatus.error;
-        lastError.value =
-            'VPN process exited (code $code)${tail.isNotEmpty ? ':\n$tail' : ''}';
+        lastError.value = 'xray завершился (код $code)${tail.isNotEmpty ? ":\n$tail" : ""}';
+        _killAllProcesses();
       }
     });
   }
 
-  /// Build xray client config.
-  /// [engineDir] is used to set assetLocation so xray finds geoip/geosite.
-  Map<String, dynamic> _buildXrayClientConfig(
-      VpnConnection conn, String engineDir) {
+  Map<String, dynamic> _buildXrayClientConfig(VpnConnection conn) {
     final outbound = <String, dynamic>{};
 
     if (conn.protocol == Protocol.vlessReality) {
@@ -189,7 +187,6 @@ class VpnEngine {
     }
 
     return {
-      // Tell xray where to look for geoip.dat / geosite.dat
       'log': {'loglevel': 'warning'},
       'inbounds': [
         {
@@ -199,22 +196,21 @@ class VpnEngine {
           'protocol': 'socks',
           'settings': {'auth': 'noauth', 'udp': true},
         },
-        {
-          'tag': 'http-in',
-          'listen': '127.0.0.1',
-          'port': AppConstants.xraySocksPort + 1,
-          'protocol': 'http',
-        },
       ],
       'outbounds': [
         {...outbound, 'tag': 'proxy'},
         {'tag': 'direct', 'protocol': 'freedom'},
-        {'tag': 'block', 'protocol': 'blackhole'},
       ],
       'routing': {
         'domainStrategy': 'IPIfNonMatch',
         'rules': [
-          // Private IPs go direct (LAN, loopback)
+          // Don't proxy the VPN server itself (avoid loop)
+          {
+            'type': 'field',
+            'ip': [conn.serverIp],
+            'outboundTag': 'direct',
+          },
+          // Private IPs go direct
           {
             'type': 'field',
             'ip': ['geoip:private'],
@@ -231,68 +227,172 @@ class VpnEngine {
     };
   }
 
+  // ── NaiveProxy + tun2socks ────────────────────────────────────────────────
+
+  Future<void> _startNaiveWithTun(VpnConnection conn, String engineDir) async {
+    final naivePath = p.join(engineDir, AppConstants.naiveExe);
+    if (!File(naivePath).existsSync()) {
+      throw VpnEngineException('naive.exe not found. Run setup again.');
+    }
+
+    // Use config_json from backend (has correct proxy URL + credentials)
+    String configContent;
+    if (conn.configJson != null && conn.configJson!.trim().startsWith('{')) {
+      try {
+        final cfg = jsonDecode(conn.configJson!) as Map<String, dynamic>;
+        cfg['listen'] = 'socks://127.0.0.1:${AppConstants.xraySocksPort}';
+        configContent = jsonEncode(cfg);
+      } catch (_) {
+        configContent = conn.configJson!;
+      }
+    } else {
+      final user = conn.password != null ? 'admin:${conn.password}' : 'admin';
+      configContent = jsonEncode({
+        'listen': 'socks://127.0.0.1:${AppConstants.xraySocksPort}',
+        'proxy': 'https://$user@${conn.serverIp}:${conn.port}',
+        'log': '',
+      });
+    }
+
+    final configPath = await _writeTempConfig(
+        AppConstants.naiveConfigFile, configContent);
+    _tempConfigPath = configPath;
+
+    final outputBuf = StringBuffer();
+
+    _proxyProcess = await Process.start(
+      naivePath,
+      ['--config=$configPath'],
+      runInShell: false,
+    );
+    _activeEngine = EngineType.naive;
+    _proxyProcess!.stderr.transform(utf8.decoder).listen((s) => outputBuf.write(s));
+    _proxyProcess!.stdout.transform(utf8.decoder).listen((s) => outputBuf.write(s));
+
+    await Future.delayed(const Duration(milliseconds: 1000));
+    await _checkProcessAlive(_proxyProcess!, 'naive.exe', outputBuf);
+
+    // Remember server IP for direct route (avoid loop)
+    _vpnServerIp = conn.serverIp;
+
+    // Start tun2socks
+    await _startTun2socks(engineDir);
+
+    status.value = VpnStatus.connected;
+
+    _proxyProcess!.exitCode.then((code) {
+      if (status.value == VpnStatus.connected) {
+        final tail = _tail(outputBuf.toString(), 300);
+        status.value = VpnStatus.error;
+        lastError.value = 'naive завершился (код $code)${tail.isNotEmpty ? ":\n$tail" : ""}';
+        _killAllProcesses();
+      }
+    });
+  }
+
+  // ── tun2socks ─────────────────────────────────────────────────────────────
+  //
+  // tun2socks creates a virtual TUN adapter and forwards all traffic to
+  // the local SOCKS5 proxy (xray or naive).
+  //
+  // After starting tun2socks we:
+  //   1. Add default route via TUN gateway (all traffic → TUN)
+  //   2. Add specific route for VPN server via original gateway (avoid loop)
+
+  Future<void> _startTun2socks(String engineDir) async {
+    final tun2socksPath = p.join(engineDir, 'tun2socks.exe');
+    if (!File(tun2socksPath).existsSync()) {
+      throw VpnEngineException('tun2socks.exe not found. Run setup again.');
+    }
+
+    final t2sBuf = StringBuffer();
+
+    _tun2socksProcess = await Process.start(
+      tun2socksPath,
+      [
+        '-device', 'tun://$_tunName',
+        '-proxy', 'socks5://127.0.0.1:${AppConstants.xraySocksPort}',
+        '-interface', '', // use default interface
+        '-loglevel', 'warning',
+      ],
+      runInShell: false,
+    );
+
+    _tun2socksProcess!.stderr.transform(utf8.decoder).listen((s) => t2sBuf.write(s));
+    _tun2socksProcess!.stdout.transform(utf8.decoder).listen((s) => t2sBuf.write(s));
+
+    // Wait for TUN adapter to come up
+    await Future.delayed(const Duration(seconds: 2));
+    await _checkProcessAlive(_tun2socksProcess!, 'tun2socks.exe', t2sBuf);
+
+    // Set up routing: all traffic via TUN, but VPN server goes direct
+    await _setupRoutes(add: true);
+
+    // Monitor tun2socks
+    _tun2socksProcess!.exitCode.then((code) {
+      if (status.value == VpnStatus.connected) {
+        status.value = VpnStatus.error;
+        lastError.value = 'tun2socks завершился неожиданно (код $code)';
+        _killAllProcesses();
+      }
+    });
+  }
+
   // ── AWG (AmneziaWG) — Windows Tunnel Service ──────────────────────────────
   //
-  // amneziawg-windows-client installs amneziawg.exe which supports:
-  //   amneziawg.exe /installtunnel <config.conf>
-  //   amneziawg.exe /removetunnel  <tunnel_name>
+  // amneziawg.exe /installtunnelservice CONFIG_PATH  — install & start tunnel
+  // amneziawg.exe /uninstalltunnelservice TUNNEL_NAME — stop & remove tunnel
   //
-  // Default install path: C:\Program Files\AmneziaWG\amneziawg.exe
+  // AWG manages its own routing (AllowedIPs = 0.0.0.0/0), no tun2socks needed.
 
-  static const _awgInstallPath =
-      r'C:\Program Files\AmneziaWG\amneziawg.exe';
+  static const _awgExePath = r'C:\Program Files\AmneziaWG\amneziawg.exe';
 
   Future<void> _startAwg(VpnConnection conn, String engineDir) async {
+    if (!File(_awgExePath).existsSync()) {
+      throw VpnEngineException(
+          'AmneziaWG не установлен.\n'
+          'Скачайте MSI: https://github.com/amnezia-vpn/amneziawg-windows-client/releases\n'
+          '(файл amneziawg-amd64-2.0.0.msi)');
+    }
+
     final confText = conn.configJson ?? _buildAwgConfig(conn);
-    final tunnelName = 'MilkyVPN_${conn.id}';
+    final tunnelName = 'MilkyVPN${conn.id}'; // no underscore — simpler service name
     _awgTunnelName = tunnelName;
 
-    // Write config to app support dir (no spaces in path)
+    // Write config — path must have no spaces
     final appDir = await getApplicationSupportDirectory();
     final confFile = File(p.join(appDir.path, '$tunnelName.conf'));
     await confFile.writeAsString(confText);
     _tempConfigPath = confFile.path;
 
-    if (File(_awgInstallPath).existsSync()) {
-      await _startAwgViaTunnel(confFile.path, tunnelName);
-    } else {
-      throw VpnEngineException(
-          'AmneziaWG не установлен на компьютере.\n'
-          'Скачайте и установите: https://github.com/amnezia-vpn/amneziawg-windows-client/releases\n'
-          'После установки перезапустите MilkyVPN.');
-    }
-  }
+    // Remove stale tunnel first (ignore errors)
+    await Process.run(_awgExePath, ['/uninstalltunnelservice', tunnelName]);
+    await Future.delayed(const Duration(milliseconds: 800));
 
-  Future<void> _startAwgViaTunnel(String confPath, String tunnelName) async {
-    // Remove stale tunnel if exists
-    try {
-      await Process.run(_awgInstallPath, ['/removetunnel', tunnelName]);
-      await Future.delayed(const Duration(milliseconds: 500));
-    } catch (_) {}
-
-    // Install tunnel as Windows service
+    // Install tunnel service
     final result = await Process.run(
-      _awgInstallPath,
-      ['/installtunnel', confPath],
+      _awgExePath,
+      ['/installtunnelservice', confFile.path],
     );
 
     if (result.exitCode != 0) {
       final err = '${result.stdout}\n${result.stderr}'.trim();
-      throw VpnEngineException(
-          'AWG tunnel install failed (exit ${result.exitCode}): $err');
+      throw VpnEngineException('AWG install failed (exit ${result.exitCode}): $err');
     }
 
     // Wait for service to start
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 3));
 
-    // Verify running
+    // Verify service is running
     final sc = await Process.run(
       'sc', ['query', 'AmneziaWGTunnel\$$tunnelName'],
       runInShell: true,
     );
     final scOut = sc.stdout.toString();
     if (!scOut.contains('RUNNING') && !scOut.contains('START_PENDING')) {
-      throw VpnEngineException('AWG tunnel не запустился: $scOut');
+      // Try to get more info from event log
+      throw VpnEngineException('AWG tunnel не запустился.\n'
+          'Убедитесь что AmneziaWG установлен корректно.\nSC: $scOut');
     }
 
     _activeEngine = EngineType.awg;
@@ -302,8 +402,7 @@ class VpnEngine {
 
   void _monitorAwgTunnel(String tunnelName) {
     Future.delayed(const Duration(seconds: 5), () async {
-      if (status.value != VpnStatus.connected ||
-          _activeEngine != EngineType.awg) return;
+      if (status.value != VpnStatus.connected || _activeEngine != EngineType.awg) return;
       try {
         final r = await Process.run(
           'sc', ['query', 'AmneziaWGTunnel\$$tunnelName'],
@@ -313,6 +412,7 @@ class VpnEngine {
             status.value == VpnStatus.connected) {
           status.value = VpnStatus.error;
           lastError.value = 'AWG туннель остановился неожиданно';
+          _killAllProcesses();
           return;
         }
       } catch (_) {}
@@ -331,9 +431,7 @@ class VpnEngine {
         'Jc = ${conn.awgJunkPacketCount ?? 4}\n'
         'Jmin = ${conn.awgJunkPacketMinSize ?? 40}\n'
         'Jmax = ${conn.awgJunkPacketMaxSize ?? 70}\n'
-        'S1 = $s1\n'
-        'S2 = $s2\n'
-        'H1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n\n'
+        'S1 = $s1\nS2 = $s2\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n\n'
         '[Peer]\n'
         'PublicKey = ${conn.wgPublicKey ?? ''}\n'
         'PresharedKey = ${conn.wgPresharedKey ?? ''}\n'
@@ -342,124 +440,87 @@ class VpnEngine {
         'PersistentKeepalive = 25\n';
   }
 
-  // ── NaiveProxy ────────────────────────────────────────────────────────────
-  //
-  // naive.exe runs as local SOCKS5 proxy on port xraySocksPort.
-  // config_json from backend already has the correct proxy URL with credentials.
-  // System proxy is set via WinINet registry + winhttp for broad app coverage.
+  // ── Routing helpers ───────────────────────────────────────────────────────
 
-  Future<void> _startNaive(VpnConnection conn, String engineDir) async {
-    final naivePath = p.join(engineDir, AppConstants.naiveExe);
-    if (!File(naivePath).existsSync()) {
-      throw VpnEngineException('naive.exe not found. Run setup again.');
-    }
+  String? _originalGateway;
+  String? _vpnServerIp;
 
-    // Use config_json from backend (already has correct proxy URL + credentials).
-    // Only override the listen port to match our constant.
-    String configContent;
-    if (conn.configJson != null && conn.configJson!.trim().startsWith('{')) {
-      try {
-        final cfg = jsonDecode(conn.configJson!) as Map<String, dynamic>;
-        cfg['listen'] = 'socks://127.0.0.1:${AppConstants.xraySocksPort}';
-        configContent = jsonEncode(cfg);
-      } catch (_) {
-        configContent = conn.configJson!;
-      }
-    } else {
-      // Fallback: build from individual fields
-      final user = conn.password != null ? 'admin:${conn.password}' : 'admin';
-      configContent = jsonEncode({
-        'listen': 'socks://127.0.0.1:${AppConstants.xraySocksPort}',
-        'proxy': 'https://$user@${conn.serverIp}:${conn.port}',
-        'log': '',
-      });
-    }
-
-    final configPath = await _writeTempConfig(
-        AppConstants.naiveConfigFile, configContent);
-    _tempConfigPath = configPath;
-
-    final outputBuffer = StringBuffer();
-
-    _process = await Process.start(
-      naivePath,
-      ['--config=$configPath'],
-      runInShell: false,
-    );
-    _activeEngine = EngineType.naive;
-
-    _process!.stderr.transform(utf8.decoder).listen((s) => outputBuffer.write(s));
-    _process!.stdout.transform(utf8.decoder).listen((s) => outputBuffer.write(s));
-
-    // Wait 1s and check process is still alive
-    await Future.delayed(const Duration(milliseconds: 1000));
-
-    try {
-      final code = await _process!.exitCode
-          .timeout(const Duration(milliseconds: 50));
-      final err = outputBuffer.toString().trim();
-      throw VpnEngineException(
-          'naive.exe crashed (exit $code)${err.isNotEmpty ? ':\n$err' : ''}');
-    } on TimeoutException {
-      // Still running — good
-    }
-
-    await _setSystemProxy(enabled: true);
-    status.value = VpnStatus.connected;
-
-    _process!.exitCode.then((code) {
-      if (status.value == VpnStatus.connected) {
-        final err = outputBuffer.toString().trim();
-        final tail = err.length > 300 ? err.substring(err.length - 300) : err;
-        status.value = VpnStatus.error;
-        lastError.value =
-            'naive exited (code $code)${tail.isNotEmpty ? ':\n$tail' : ''}';
-      }
-    });
-  }
-
-  // ── System proxy ──────────────────────────────────────────────────────────
-
-  Future<void> _setSystemProxy({required bool enabled}) async {
+  Future<void> _setupRoutes({required bool add}) async {
     if (!Platform.isWindows) return;
     try {
-      if (enabled) {
-        final proxyAddr = '127.0.0.1:${AppConstants.xraySocksPort}';
-        // WinINet (Chrome/Edge/IE)
-        await Process.run('reg', [
-          'add',
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
-          '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', '1', '/f',
-        ]);
-        await Process.run('reg', [
-          'add',
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
-          '/v', 'ProxyServer', '/t', 'REG_SZ',
-          '/d', 'socks=$proxyAddr', '/f',
-        ]);
-        await Process.run('reg', [
-          'add',
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
-          '/v', 'ProxyOverride', '/t', 'REG_SZ',
-          '/d', 'localhost;127.*;10.*;172.16.*;192.168.*;<local>', '/f',
-        ]);
-        // System-wide winhttp
-        await Process.run('netsh', [
-          'winhttp', 'set', 'proxy', proxyAddr,
-          'bypass-list=localhost;127.*;10.*;172.16.*;192.168.*',
-        ]);
+      if (add) {
+        // Get current default gateway before changing routes
+        final gwResult = await Process.run(
+          'powershell', ['-Command',
+            '(Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1).NextHop'
+          ],
+          runInShell: false,
+        );
+        _originalGateway = gwResult.stdout.toString().trim();
+
+        // Get TUN adapter index
+        await Future.delayed(const Duration(milliseconds: 500));
+        final idxResult = await Process.run(
+          'powershell', ['-Command',
+            '(Get-NetAdapter | Where-Object {$_.Name -like "*$_tunName*"} | Select-Object -First 1).ifIndex'
+          ],
+          runInShell: false,
+        );
+        final tunIdx = idxResult.stdout.toString().trim();
+
+        if (tunIdx.isNotEmpty && _originalGateway != null && _originalGateway!.isNotEmpty) {
+          // Route VPN server IP through original gateway (prevent loop)
+          if (_vpnServerIp != null) {
+            await Process.run('route', [
+              'add', _vpnServerIp!, 'mask', '255.255.255.255', _originalGateway!,
+            ], runInShell: true);
+          }
+          // Assign IP to TUN adapter
+          await Process.run('netsh', [
+            'interface', 'ip', 'set', 'address',
+            'name=$_tunName', 'static', _tunAddr, '255.255.255.0', _tunGw,
+          ], runInShell: true);
+          // Route all traffic through TUN
+          await Process.run('route', [
+            'add', '0.0.0.0', 'mask', '0.0.0.0', _tunGw, 'metric', '5',
+          ], runInShell: true);
+        }
       } else {
-        await Process.run('reg', [
-          'add',
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
-          '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', '0', '/f',
-        ]);
-        await Process.run('netsh', ['winhttp', 'reset', 'proxy']);
+        // Remove routes on disconnect
+        await Process.run('route', ['delete', '0.0.0.0', 'mask', '0.0.0.0', _tunGw],
+            runInShell: true);
+        if (_vpnServerIp != null && _originalGateway != null) {
+          await Process.run('route', ['delete', _vpnServerIp!, 'mask', '255.255.255.255'],
+              runInShell: true);
+        }
+        _originalGateway = null;
+        _vpnServerIp = null;
       }
-    } catch (_) {}
+    } catch (e) {
+      // Non-fatal — log but continue
+      debugPrint('Route setup error: $e');
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  Future<void> _checkProcessAlive(
+      Process proc, String name, StringBuffer buf) async {
+    try {
+      final code = await proc.exitCode
+          .timeout(const Duration(milliseconds: 50));
+      final err = _tail(buf.toString(), 500);
+      throw VpnEngineException(
+          '$name crashed (exit $code)${err.isNotEmpty ? ":\n$err" : ""}');
+    } on TimeoutException {
+      // Still running — good
+    }
+  }
+
+  String _tail(String s, int maxLen) {
+    s = s.trim();
+    return s.length > maxLen ? s.substring(s.length - maxLen) : s;
+  }
 
   Future<String> _engineDir() async {
     return await EngineDownloader.instance.enginesDir;
@@ -472,30 +533,45 @@ class VpnEngine {
     return file.path;
   }
 
-  Future<void> _stopCurrentProcess() async {
+  Future<void> _killAllProcesses() async {
+    // Remove AWG tunnel service
     if (_activeEngine == EngineType.awg && _awgTunnelName != null) {
       try {
-        if (File(_awgInstallPath).existsSync()) {
-          await Process.run(_awgInstallPath, ['/removetunnel', _awgTunnelName!]);
+        if (File(_awgExePath).existsSync()) {
+          await Process.run(_awgExePath, ['/uninstalltunnelservice', _awgTunnelName!]);
         }
       } catch (_) {}
       _awgTunnelName = null;
-    } else if (_process != null) {
+    }
+
+    // Kill tun2socks
+    if (_tun2socksProcess != null) {
       try {
-        _process!.kill(ProcessSignal.sigterm);
-        await _process!.exitCode
-            .timeout(const Duration(seconds: 3))
+        _tun2socksProcess!.kill();
+        await _tun2socksProcess!.exitCode
+            .timeout(const Duration(seconds: 2))
             .catchError((_) => -1);
-        _process!.kill(ProcessSignal.sigkill);
       } catch (_) {}
+      _tun2socksProcess = null;
     }
 
-    _process = null;
+    // Kill proxy process
+    if (_proxyProcess != null) {
+      try {
+        _proxyProcess!.kill();
+        await _proxyProcess!.exitCode
+            .timeout(const Duration(seconds: 2))
+            .catchError((_) => -1);
+      } catch (_) {}
+      _proxyProcess = null;
+    }
+
+    // Remove routes
+    if (_activeEngine != EngineType.awg) {
+      await _setupRoutes(add: false);
+    }
+
     _activeEngine = null;
-
-    if (Platform.isWindows) {
-      await _setSystemProxy(enabled: false);
-    }
   }
 
   Future<void> _cleanupTempConfig() async {
@@ -511,7 +587,7 @@ class VpnEngine {
 
 class VpnEngineException implements Exception {
   final String message;
-  VpnEngineException(message) : message = message.toString();
+  VpnEngineException(this.message);
   @override
   String toString() => 'VpnEngineException: $message';
 }

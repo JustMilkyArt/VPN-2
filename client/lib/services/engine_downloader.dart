@@ -1,5 +1,5 @@
 // Engine downloader — downloads VPN binaries on first launch
-// Downloads: xray.exe + wintun.dll (from Xray zip), naive.exe, awg.exe (from amneziawg-tools)
+// Downloads: xray.exe + wintun.dll + geoip/geosite (Xray zip), naive.exe, tun2socks.exe
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -13,14 +13,14 @@ class EngineDownloader {
   static final EngineDownloader instance = EngineDownloader._();
 
   // Download URLs (verified working as of May 2026)
-  // Xray zip also contains wintun.dll — no separate WinTUN download needed
+  // Xray zip also contains wintun.dll + geoip.dat + geosite.dat
   static const _xrayUrl =
       'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip';
   static const _naiveUrl =
       'https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip';
-  // awg-tools zip contains windows-amneziawg-tools/x64/awg.exe
-  static const _awgUrl =
-      'https://github.com/amnezia-vpn/amneziawg-tools/releases/download/v1.0.20260223/windows-amneziawg-tools.zip';
+  // tun2socks — routes all OS traffic through SOCKS5 proxy via TUN adapter
+  static const _tun2socksUrl =
+      'https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip';
 
   final ValueNotifier<DownloadState> state =
       ValueNotifier(DownloadState.idle);
@@ -41,7 +41,7 @@ class EngineDownloader {
   // Check if all required binaries exist
   Future<bool> areEnginesReady() async {
     final dir = await enginesDir;
-    final required = ['xray.exe', 'naive.exe', 'wintun.dll'];
+    final required = ['xray.exe', 'naive.exe', 'wintun.dll', 'tun2socks.exe'];
     for (final name in required) {
       if (!File(p.join(dir, name)).existsSync()) return false;
     }
@@ -114,18 +114,17 @@ class EngineDownloader {
         progress.value = 0.70;
       }
 
-      // 3. AWG (awg.exe from amneziawg-tools/x64/)
-      if (!File(p.join(dir, 'awg.exe')).existsSync()) {
+      // 3. tun2socks — routes all traffic through SOCKS5 via TUN adapter
+      if (!File(p.join(dir, 'tun2socks.exe')).existsSync()) {
         await _downloadAndExtract(
-          label: 'AmneziaWG',
-          url: _awgUrl,
+          label: 'tun2socks',
+          url: _tun2socksUrl,
           destDir: dir,
           extract: (archive, destDir) {
             for (final f in archive) {
-              // windows-amneziawg-tools/x64/awg.exe
-              if (f.name.toLowerCase().contains('x64') &&
-                  f.name.toLowerCase().endsWith('awg.exe')) {
-                _extractFile(f, destDir, 'awg.exe');
+              if (f.name.toLowerCase().endsWith('tun2socks.exe') ||
+                  f.name.toLowerCase() == 'tun2socks-windows-amd64.exe') {
+                _extractFile(f, destDir, 'tun2socks.exe');
                 break;
               }
             }
@@ -134,7 +133,7 @@ class EngineDownloader {
           progressRange: 0.30,
         );
       } else {
-        statusText.value = 'AmneziaWG: already present';
+        statusText.value = 'tun2socks: already present';
         progress.value = 1.0;
       }
 
