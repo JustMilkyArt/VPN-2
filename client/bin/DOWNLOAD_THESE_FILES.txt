@@ -1,4 +1,0 @@
-DOWNLOAD xray.exe from https://github.com/XTLS/Xray-core/releases (Xray-windows-64.zip)
-DOWNLOAD wintun.dll from https://www.wintun.net (wintun-0.14.1.zip -> amd64/wintun.dll)
-DOWNLOAD tun2socks.exe from https://github.com/xjasonlyu/tun2socks/releases (tun2socks-windows-amd64.exe -> rename to tun2socks.exe)
-DOWNLOAD naive.exe from https://github.com/klzgrad/naiveproxy/releases (naiveproxy-vXXX-win-x64.zip -> naive.exe)
