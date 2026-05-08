@@ -462,7 +462,7 @@ class VpnEngine {
         await Future.delayed(const Duration(milliseconds: 500));
         final idxResult = await Process.run(
           'powershell', ['-Command',
-            '(Get-NetAdapter | Where-Object {$_.Name -like "*$_tunName*"} | Select-Object -First 1).ifIndex'
+            r'(Get-NetAdapter | Where-Object {$_.Name -like "*' + _tunName + r'*"} | Select-Object -First 1).ifIndex'
           ],
           runInShell: false,
         );
