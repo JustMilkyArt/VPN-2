@@ -1,17 +1,17 @@
-# VPN Client Installer
-# PowerShell 5+ / Windows Forms
+# VPN Client Installer - no elevation required for GUI
+# WinForms runs in normal session; MSI self-elevates when needed
 
 $ErrorActionPreference = 'Stop'
 $LOG = "$env:USERPROFILE\vpnclient_setup.log"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function L($m) {
-    $line = "[$(Get-Date -f 'HH:mm:ss')] $m"
-    Add-Content $LOG $line -EA SilentlyContinue
+    Add-Content $LOG "[$(Get-Date -f 'HH:mm:ss')] $m" -EA SilentlyContinue
 }
 
 L "=== installer.ps1 started ==="
 L "PS: $($PSVersionTable.PSVersion)  User: $env:USERNAME"
+L "IsAdmin: $([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrator')"
 
 $INSTALL = "$env:LOCALAPPDATA\VPNClient"
 $BIN     = "$INSTALL\bin"
@@ -33,10 +33,10 @@ $SOURCES = @(
     "ui/__init__.py","ui/main_window.py"
 )
 $BINS = @(
-    @{N="Xray-core";  U="https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-windows-64.zip";                                                               E="xray.exe";                    D="$BIN\xray.exe"},
-    @{N="WinTUN";     U="https://www.wintun.net/builds/wintun-0.14.1.zip";                                                                                                 E="wintun/bin/amd64/wintun.dll"; D="$BIN\wintun.dll"},
-    @{N="tun2socks";  U="https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-windows-amd64.zip";                                                    E="tun2socks-windows-amd64.exe"; D="$BIN\tun2socks.exe"},
-    @{N="NaiveProxy"; U="https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip"; E="naive.exe";               D="$BIN\naive.exe"}
+    @{N="Xray-core";  U="https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-windows-64.zip";                                                           E="xray.exe";                    D="$BIN\xray.exe"},
+    @{N="WinTUN";     U="https://www.wintun.net/builds/wintun-0.14.1.zip";                                                                                             E="wintun/bin/amd64/wintun.dll"; D="$BIN\wintun.dll"},
+    @{N="tun2socks";  U="https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-windows-amd64.zip";                                                E="tun2socks-windows-amd64.exe"; D="$BIN\tun2socks.exe"},
+    @{N="NaiveProxy";  U="https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip"; E="naive.exe";          D="$BIN\naive.exe"}
 )
 $TOTAL = $SOURCES.Count + $BINS.Count + 5
 
@@ -44,7 +44,7 @@ function DL($url, $dest) {
     $dir = Split-Path $dest
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $wc = New-Object Net.WebClient
-    $wc.Headers.Add("User-Agent","VPNClient/5")
+    $wc.Headers.Add("User-Agent","VPNClient/6")
     $wc.DownloadFile($url, $dest)
     $wc.Dispose()
 }
@@ -61,140 +61,145 @@ function UZE($zip, $entry, $dest) {
     $z.Dispose()
 }
 
-# --- Build GUI ---
+# --- Load WinForms in current (non-elevated) thread ---
 L "Loading WinForms..."
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[Windows.Forms.Application]::EnableVisualStyles()
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+L "WinForms loaded OK"
 
-$form = New-Object Windows.Forms.Form
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$form = New-Object System.Windows.Forms.Form
 $form.Text            = "VPN Client - Setup"
-$form.Size            = New-Object Drawing.Size(480, 520)
+$form.Width           = 480
+$form.Height          = 520
 $form.StartPosition   = "CenterScreen"
-$form.BackColor       = [Drawing.Color]::FromArgb(18, 20, 28)
-$form.ForeColor       = [Drawing.Color]::White
+$form.BackColor       = [System.Drawing.Color]::FromArgb(18, 20, 28)
+$form.ForeColor       = [System.Drawing.Color]::White
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox     = $false
-$form.Font            = New-Object Drawing.Font("Segoe UI", 9)
+$form.Font            = New-Object System.Drawing.Font("Segoe UI", 9)
 
 # Title
-$t = New-Object Windows.Forms.Label
+$t = New-Object System.Windows.Forms.Label
 $t.Text      = "VPN Client"
-$t.Font      = New-Object Drawing.Font("Segoe UI", 17, [Drawing.FontStyle]::Bold)
-$t.ForeColor = [Drawing.Color]::White
-$t.BackColor = [Drawing.Color]::Transparent
-$t.Size      = New-Object Drawing.Size(440, 34)
-$t.Location  = New-Object Drawing.Point(20, 18)
+$t.Font      = New-Object System.Drawing.Font("Segoe UI", 17, [System.Drawing.FontStyle]::Bold)
+$t.ForeColor = [System.Drawing.Color]::White
+$t.BackColor = [System.Drawing.Color]::Transparent
+$t.Width     = 440; $t.Height = 34
+$t.Left      = 20;  $t.Top   = 18
 $t.TextAlign = "MiddleCenter"
 $form.Controls.Add($t)
 
 # Subtitle
-$sub = New-Object Windows.Forms.Label
+$sub = New-Object System.Windows.Forms.Label
 $sub.Text      = "VLESS Reality  |  AmneziaWG  |  NaiveProxy"
-$sub.Font      = New-Object Drawing.Font("Segoe UI", 8)
-$sub.ForeColor = [Drawing.Color]::FromArgb(120, 130, 150)
-$sub.BackColor = [Drawing.Color]::Transparent
-$sub.Size      = New-Object Drawing.Size(440, 18)
-$sub.Location  = New-Object Drawing.Point(20, 56)
+$sub.Font      = New-Object System.Drawing.Font("Segoe UI", 8)
+$sub.ForeColor = [System.Drawing.Color]::FromArgb(120, 130, 150)
+$sub.BackColor = [System.Drawing.Color]::Transparent
+$sub.Width     = 440; $sub.Height = 18
+$sub.Left      = 20;  $sub.Top   = 56
 $sub.TextAlign = "MiddleCenter"
 $form.Controls.Add($sub)
 
 # Status card
-$card = New-Object Windows.Forms.Panel
-$card.Size      = New-Object Drawing.Size(440, 72)
-$card.Location  = New-Object Drawing.Point(20, 84)
-$card.BackColor = [Drawing.Color]::FromArgb(26, 30, 42)
+$card = New-Object System.Windows.Forms.Panel
+$card.Width = 440; $card.Height = 72
+$card.Left  = 20;  $card.Top   = 84
+$card.BackColor = [System.Drawing.Color]::FromArgb(26, 30, 42)
 $form.Controls.Add($card)
 
-$lblS = New-Object Windows.Forms.Label
+$lblS = New-Object System.Windows.Forms.Label
 $lblS.Text      = "Preparing..."
-$lblS.Font      = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
-$lblS.ForeColor = [Drawing.Color]::White
-$lblS.BackColor = [Drawing.Color]::Transparent
-$lblS.Size      = New-Object Drawing.Size(400, 22)
-$lblS.Location  = New-Object Drawing.Point(16, 8)
+$lblS.Font      = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$lblS.ForeColor = [System.Drawing.Color]::White
+$lblS.BackColor = [System.Drawing.Color]::Transparent
+$lblS.Width     = 400; $lblS.Height = 22
+$lblS.Left      = 16;  $lblS.Top   = 8
 $card.Controls.Add($lblS)
 
-$lblD = New-Object Windows.Forms.Label
+$lblD = New-Object System.Windows.Forms.Label
 $lblD.Text      = "Initializing..."
-$lblD.Font      = New-Object Drawing.Font("Segoe UI", 8)
-$lblD.ForeColor = [Drawing.Color]::FromArgb(120, 130, 150)
-$lblD.BackColor = [Drawing.Color]::Transparent
-$lblD.Size      = New-Object Drawing.Size(400, 18)
-$lblD.Location  = New-Object Drawing.Point(16, 32)
+$lblD.Font      = New-Object System.Drawing.Font("Segoe UI", 8)
+$lblD.ForeColor = [System.Drawing.Color]::FromArgb(120, 130, 150)
+$lblD.BackColor = [System.Drawing.Color]::Transparent
+$lblD.Width     = 400; $lblD.Height = 18
+$lblD.Left      = 16;  $lblD.Top   = 32
 $card.Controls.Add($lblD)
 
-$pb = New-Object Windows.Forms.ProgressBar
-$pb.Size     = New-Object Drawing.Size(400, 10)
-$pb.Location = New-Object Drawing.Point(16, 54)
-$pb.Maximum  = 100
-$pb.Value    = 0
-$pb.Style    = "Continuous"
+$pb = New-Object System.Windows.Forms.ProgressBar
+$pb.Width = 400; $pb.Height = 10
+$pb.Left  = 16;  $pb.Top   = 54
+$pb.Maximum = 100; $pb.Value = 0
+$pb.Style = "Continuous"
 $card.Controls.Add($pb)
 
 # Step dots
 $stepNames = @("Code","Python","Deps","VPN","AWG")
 $dots = @()
 for ($i = 0; $i -lt 5; $i++) {
-    $d = New-Object Windows.Forms.Label
+    $d = New-Object System.Windows.Forms.Label
     $d.Text      = "o"
-    $d.Font      = New-Object Drawing.Font("Segoe UI", 11)
-    $d.Size      = New-Object Drawing.Size(88, 22)
-    $d.Location  = New-Object Drawing.Point(20 + $i*88, 170)
+    $d.Font      = New-Object System.Drawing.Font("Segoe UI", 11)
+    $d.Width     = 88; $d.Height = 22
+    $d.Left      = 20 + $i*88; $d.Top = 170
     $d.TextAlign = "MiddleCenter"
-    $d.BackColor = [Drawing.Color]::Transparent
-    $d.ForeColor = [Drawing.Color]::FromArgb(80, 90, 110)
+    $d.BackColor = [System.Drawing.Color]::Transparent
+    $d.ForeColor = [System.Drawing.Color]::FromArgb(80, 90, 110)
     $form.Controls.Add($d)
     $dots += $d
 
-    $n2 = New-Object Windows.Forms.Label
+    $n2 = New-Object System.Windows.Forms.Label
     $n2.Text      = $stepNames[$i]
-    $n2.Font      = New-Object Drawing.Font("Segoe UI", 7)
-    $n2.Size      = New-Object Drawing.Size(88, 16)
-    $n2.Location  = New-Object Drawing.Point(20 + $i*88, 192)
+    $n2.Font      = New-Object System.Drawing.Font("Segoe UI", 7)
+    $n2.Width     = 88; $n2.Height = 16
+    $n2.Left      = 20 + $i*88; $n2.Top = 192
     $n2.TextAlign = "MiddleCenter"
-    $n2.BackColor = [Drawing.Color]::Transparent
-    $n2.ForeColor = [Drawing.Color]::FromArgb(80, 90, 110)
+    $n2.BackColor = [System.Drawing.Color]::Transparent
+    $n2.ForeColor = [System.Drawing.Color]::FromArgb(80, 90, 110)
     $form.Controls.Add($n2)
 }
 
 # Log box
-$rtb = New-Object Windows.Forms.RichTextBox
-$rtb.Size        = New-Object Drawing.Size(440, 210)
-$rtb.Location    = New-Object Drawing.Point(20, 218)
-$rtb.BackColor   = [Drawing.Color]::FromArgb(12, 14, 20)
-$rtb.ForeColor   = [Drawing.Color]::FromArgb(50, 200, 80)
-$rtb.Font        = New-Object Drawing.Font("Consolas", 8)
+$rtb = New-Object System.Windows.Forms.RichTextBox
+$rtb.Width    = 440; $rtb.Height = 210
+$rtb.Left     = 20;  $rtb.Top   = 218
+$rtb.BackColor   = [System.Drawing.Color]::FromArgb(12, 14, 20)
+$rtb.ForeColor   = [System.Drawing.Color]::FromArgb(50, 200, 80)
+$rtb.Font        = New-Object System.Drawing.Font("Consolas", 8)
 $rtb.ReadOnly    = $true
 $rtb.BorderStyle = "None"
 $rtb.ScrollBars  = "Vertical"
 $form.Controls.Add($rtb)
 
 # Button
-$btn = New-Object Windows.Forms.Button
-$btn.Text      = "Open VPN Client"
-$btn.Font      = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
-$btn.Size      = New-Object Drawing.Size(440, 42)
-$btn.Location  = New-Object Drawing.Point(20, 442)
-$btn.BackColor = [Drawing.Color]::FromArgb(99, 90, 240)
-$btn.ForeColor = [Drawing.Color]::White
+$btn = New-Object System.Windows.Forms.Button
+$btn.Text    = "Open VPN Client"
+$btn.Font    = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btn.Width   = 440; $btn.Height = 42
+$btn.Left    = 20;  $btn.Top   = 442
+$btn.BackColor = [System.Drawing.Color]::FromArgb(99, 90, 240)
+$btn.ForeColor = [System.Drawing.Color]::White
 $btn.FlatStyle = "Flat"
 $btn.FlatAppearance.BorderSize = 0
 $btn.Enabled   = $false
-$btn.Cursor    = [Windows.Forms.Cursors]::Hand
+$btn.Cursor    = [System.Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btn)
 
 L "Form built OK"
 
-# --- Helpers called from background thread ---
-function UI([scriptblock]$sb) { $form.Invoke([Action]$sb) | Out-Null }
-
-function SS($title, $detail) {
-    UI { $lblS.Text = $title; $lblD.Text = $detail }
+# --- Helpers ---
+function UI([scriptblock]$sb) {
+    $form.Invoke([System.Action]$sb) | Out-Null
 }
+function SS($title, $detail) { UI { $lblS.Text = $title; $lblD.Text = $detail } }
+$RED   = [System.Drawing.Color]::FromArgb(239, 68, 68)
+$GREEN = [System.Drawing.Color]::FromArgb(50, 200, 80)
+$AMB   = [System.Drawing.Color]::FromArgb(245, 158, 11)
+
 function AL($msg, $col) {
     L $msg
-    if (-not $col) { $col = [Drawing.Color]::FromArgb(50,200,80) }
+    if (-not $col) { $col = $GREEN }
     UI {
         $rtb.SelectionStart  = $rtb.TextLength
         $rtb.SelectionLength = 0
@@ -208,15 +213,12 @@ function SP($done) {
     UI { $pb.Value = [Math]::Min($pct, 100) }
 }
 function STEP($i, $s) {
-    $sym = if ($s -eq "done") { "*" } elseif ($s -eq "err") { "!" } else { ">" }
-    $col = if ($s -eq "done") { [Drawing.Color]::FromArgb(34,197,94) } `
-      elseif ($s -eq "err")  { [Drawing.Color]::FromArgb(239,68,68) } `
-      else                   { [Drawing.Color]::FromArgb(245,158,11) }
+    $sym = @{ act=">" ; done="*" ; err="!" }[$s]
+    $col = @{ act=$AMB; done=[System.Drawing.Color]::FromArgb(34,197,94); err=$RED }[$s]
     UI { $dots[$i].Text = $sym; $dots[$i].ForeColor = $col }
 }
-$RED = [Drawing.Color]::FromArgb(239, 68, 68)
 
-# --- Launch button ---
+# --- Button ---
 $btn.Add_Click({
     $exe = if (Test-Path $PYWEXE) { $PYWEXE } else { $PYEXE }
     Start-Process $exe -ArgumentList "`"$MAINPY`"" -WorkingDirectory $INSTALL
@@ -228,12 +230,11 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
     try {
         $n = 0
 
-        # Step 1: Source code
-        STEP 0 "act"; SS "Downloading source code..." "GitHub"
+        STEP 0 "act"; SS "Downloading source..." "GitHub"
         AL "=== Source code ==="
         New-Item -ItemType Directory -Force -Path $INSTALL | Out-Null
         foreach ($f in $SOURCES) {
-            $dst = "$INSTALL\$($f -replace '/','\\')"
+            $dst = "$INSTALL\$($f -replace '/','\')"
             $dir = Split-Path $dst
             if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
             try   { DL "$GHRAW/$f" $dst; AL "  OK $f" }
@@ -242,14 +243,13 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
         }
         STEP 0 "done"
 
-        # Step 2: Python
-        STEP 1 "act"; SS "Python 3.12..." "Downloading portable"
-        AL "=== Python 3.12 ==="
+        STEP 1 "act"; SS "Python 3.12..." "Downloading"
+        AL "=== Python ==="
         if (Test-Path $PYEXE) {
             AL "  OK already installed"
         } else {
             $pz = "$env:TEMP\py312.zip"
-            DL $PYZIP $pz
+            AL "  Downloading Python 3.12..."; DL $PYZIP $pz
             AL "  Extracting..."
             New-Item -ItemType Directory -Force -Path $PYDIR | Out-Null
             Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -257,25 +257,21 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
             Remove-Item $pz -Force -EA SilentlyContinue
             $pth = Get-ChildItem $PYDIR -Filter "*._pth" | Select-Object -First 1
             if ($pth) {
-                (Get-Content $pth.FullName) -replace '#import site','import site' |
-                    Set-Content $pth.FullName
+                (Get-Content $pth.FullName) -replace '#import site','import site' | Set-Content $pth.FullName
             }
             AL "  OK Python ready"
         }
         $n++; SP $n
 
-        # pip
         if (-not (Test-Path $PIPEXE)) {
             AL "  Installing pip..."
-            $gp = "$env:TEMP\get-pip.py"
-            DL $GETPIP $gp
+            $gp = "$env:TEMP\get-pip.py"; DL $GETPIP $gp
             & $PYEXE $gp "--quiet" 2>$null
             Remove-Item $gp -Force -EA SilentlyContinue
             AL "  OK pip"
         }
         $n++; SP $n
 
-        # Step 3: Deps
         STEP 2 "act"; SS "Dependencies..." "PyQt6 requests pyotp"
         AL "=== Dependencies ==="
         foreach ($dep in @("PyQt6","requests","pyotp")) {
@@ -285,7 +281,6 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
         }
         STEP 1 "done"; STEP 2 "done"; $n++; SP $n
 
-        # Step 4: VPN binaries
         STEP 3 "act"; AL "=== VPN binaries ==="
         New-Item -ItemType Directory -Force -Path $BIN | Out-Null
         foreach ($b in $BINS) {
@@ -306,21 +301,21 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
         }
         STEP 3 "done"
 
-        # Step 5: AmneziaWG
-        STEP 4 "act"; SS "AmneziaWG..." "Installing driver"
+        STEP 4 "act"; SS "AmneziaWG..." "Installing"
         AL "=== AmneziaWG ==="
         if (Test-Path "C:\Program Files\AmneziaWG\wireguard.exe") {
             AL "  OK already installed"; STEP 4 "done"
         } else {
             $msi = "$env:TEMP\awg.msi"
-            DL $AWGMSI $msi
-            AL "  Installing MSI..."
-            $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait -PassThru
+            AL "  Downloading..."; DL $AWGMSI $msi
+            AL "  Installing (UAC prompt will appear)..."
+            # MSI self-elevates - no need for runas on entire PS session
+            $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /quiet /norestart" -Verb RunAs -Wait -PassThru
             Remove-Item $msi -Force -EA SilentlyContinue
             if (Test-Path "C:\Program Files\AmneziaWG\wireguard.exe") {
                 AL "  OK AmneziaWG installed"; STEP 4 "done"
             } else {
-                AL "  FAIL msiexec exit $($p.ExitCode)" $RED; STEP 4 "err"
+                AL "  FAIL exit $($p.ExitCode)" $RED; STEP 4 "err"
             }
         }
         $n++; SP $n
@@ -331,19 +326,17 @@ $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
             $exe = if (Test-Path $PYWEXE) { $PYWEXE } else { $PYEXE }
             $ws  = New-Object -ComObject WScript.Shell
             $sc  = $ws.CreateShortcut($lnk)
-            $sc.TargetPath       = $exe
-            $sc.Arguments        = "`"$MAINPY`""
-            $sc.WorkingDirectory = $INSTALL
-            $sc.Save()
-            AL "  OK Desktop shortcut created"
+            $sc.TargetPath = $exe; $sc.Arguments = "`"$MAINPY`""
+            $sc.WorkingDirectory = $INSTALL; $sc.Save()
+            AL "  OK shortcut on Desktop"
         } catch { AL "  shortcut: $_" $RED }
 
-        SP $TOTAL; AL "=== Done! Press the button ==="
+        SP $TOTAL; AL "=== Done! ==="
         UI {
             $btn.Enabled    = $true
             $lblS.Text      = "Setup complete!"
-            $lblD.Text      = "Click the button to launch"
-            $lblS.ForeColor = [Drawing.Color]::FromArgb(34,197,94)
+            $lblD.Text      = "Click button to launch"
+            $lblS.ForeColor = [System.Drawing.Color]::FromArgb(34, 197, 94)
         }
 
     } catch {
@@ -356,5 +349,5 @@ $job.IsBackground = $true
 $form.Add_Shown({ $job.Start() })
 
 L "Showing form..."
-[Windows.Forms.Application]::Run($form)
+[System.Windows.Forms.Application]::Run($form)
 L "Form closed."
