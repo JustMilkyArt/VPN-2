@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.db
+*.db.bak
+*.bak
+*.log
+.wrangler/
+node_modules/
+dist/
