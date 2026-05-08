@@ -1,5 +1,5 @@
 // Engine downloader — downloads VPN binaries on first launch
-// Downloads: xray.exe, naive.exe, wintun.dll, awg-quick.exe (from AmneziaWG)
+// Downloads: xray.exe + wintun.dll (from Xray zip), naive.exe, awg.exe (from amneziawg-tools)
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -12,15 +12,15 @@ class EngineDownloader {
   EngineDownloader._();
   static final EngineDownloader instance = EngineDownloader._();
 
-  // Download URLs
+  // Download URLs (verified working as of May 2026)
+  // Xray zip also contains wintun.dll — no separate WinTUN download needed
   static const _xrayUrl =
-      'https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-windows-64.zip';
-  static const _wintunUrl =
-      'https://www.wintun.net/builds/wintun-0.14.1.zip';
+      'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip';
   static const _naiveUrl =
-      'https://github.com/klzgrad/naiveproxy/releases/download/v130.0.6723.91-3/naiveproxy-v130.0.6723.91-3-win-x64.zip';
+      'https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip';
+  // awg-tools zip contains windows-amneziawg-tools/x64/awg.exe
   static const _awgUrl =
-      'https://github.com/amnezia-vpn/amneziawg-go/releases/download/v0.2.12/awg-windows-amd64.zip';
+      'https://github.com/amnezia-vpn/amneziawg-tools/releases/download/v1.0.20260223/windows-amneziawg-tools.zip';
 
   final ValueNotifier<DownloadState> state =
       ValueNotifier(DownloadState.idle);
@@ -57,58 +57,33 @@ class EngineDownloader {
     try {
       final dir = await enginesDir;
 
-      // 1. Xray
-      if (!File(p.join(dir, 'xray.exe')).existsSync()) {
+      // 1. Xray + WinTUN (both are in the same Xray zip)
+      final xrayMissing = !File(p.join(dir, 'xray.exe')).existsSync();
+      final wintunMissing = !File(p.join(dir, 'wintun.dll')).existsSync();
+      if (xrayMissing || wintunMissing) {
         await _downloadAndExtract(
           label: 'Xray-core',
           url: _xrayUrl,
           destDir: dir,
           extract: (archive, destDir) {
             for (final f in archive) {
-              if (f.name.endsWith('xray.exe') && !f.name.contains('/')) {
+              if (xrayMissing && f.name == 'xray.exe') {
                 _extractFile(f, destDir, 'xray.exe');
-                break;
               }
-              // Some zips have it at root
-              if (f.name == 'xray.exe') {
-                _extractFile(f, destDir, 'xray.exe');
-                break;
+              if (wintunMissing && f.name == 'wintun.dll') {
+                _extractFile(f, destDir, 'wintun.dll');
               }
             }
           },
           progressBase: 0.0,
-          progressRange: 0.3,
+          progressRange: 0.35,
         );
       } else {
         statusText.value = 'Xray-core: already present';
-        progress.value = 0.3;
+        progress.value = 0.35;
       }
 
-      // 2. WinTUN
-      if (!File(p.join(dir, 'wintun.dll')).existsSync()) {
-        await _downloadAndExtract(
-          label: 'WinTUN',
-          url: _wintunUrl,
-          destDir: dir,
-          extract: (archive, destDir) {
-            for (final f in archive) {
-              // wintun/bin/amd64/wintun.dll
-              if (f.name.toLowerCase().contains('amd64') &&
-                  f.name.toLowerCase().endsWith('wintun.dll')) {
-                _extractFile(f, destDir, 'wintun.dll');
-                break;
-              }
-            }
-          },
-          progressBase: 0.3,
-          progressRange: 0.2,
-        );
-      } else {
-        statusText.value = 'WinTUN: already present';
-        progress.value = 0.5;
-      }
-
-      // 3. NaiveProxy
+      // 2. NaiveProxy
       if (!File(p.join(dir, 'naive.exe')).existsSync()) {
         await _downloadAndExtract(
           label: 'NaiveProxy',
@@ -123,30 +98,32 @@ class EngineDownloader {
               }
             }
           },
-          progressBase: 0.5,
-          progressRange: 0.25,
+          progressBase: 0.35,
+          progressRange: 0.35,
         );
       } else {
         statusText.value = 'NaiveProxy: already present';
-        progress.value = 0.75;
+        progress.value = 0.70;
       }
 
-      // 4. AWG (awg-quick.exe)
-      if (!File(p.join(dir, 'awg-quick.exe')).existsSync()) {
+      // 3. AWG (awg.exe from amneziawg-tools/x64/)
+      if (!File(p.join(dir, 'awg.exe')).existsSync()) {
         await _downloadAndExtract(
           label: 'AmneziaWG',
           url: _awgUrl,
           destDir: dir,
           extract: (archive, destDir) {
             for (final f in archive) {
-              if (f.name.toLowerCase().endsWith('.exe')) {
-                _extractFile(f, destDir, 'awg-quick.exe');
+              // windows-amneziawg-tools/x64/awg.exe
+              if (f.name.toLowerCase().contains('x64') &&
+                  f.name.toLowerCase().endsWith('awg.exe')) {
+                _extractFile(f, destDir, 'awg.exe');
                 break;
               }
             }
           },
-          progressBase: 0.75,
-          progressRange: 0.25,
+          progressBase: 0.70,
+          progressRange: 0.30,
         );
       } else {
         statusText.value = 'AmneziaWG: already present';

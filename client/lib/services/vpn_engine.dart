@@ -210,10 +210,14 @@ class VpnEngine {
   // ── AWG (AmneziaWG) ───────────────────────────────────────────────────────
 
   Future<void> _startAwg(VpnConnection conn, String engineDir) async {
-    final awgPath = p.join(engineDir, AppConstants.awgExe);
+    // Try awg.exe first (new name), fallback to awg-quick.exe (legacy)
+    String awgPath = p.join(engineDir, 'awg.exe');
+    if (!File(awgPath).existsSync()) {
+      awgPath = p.join(engineDir, AppConstants.awgExe);
+    }
     if (!File(awgPath).existsSync()) {
       throw VpnEngineException(
-          'awg-quick.exe not found. Please reinstall the app.');
+          'awg.exe not found. Please reinstall the app.');
     }
 
     // Use config_json from backend (already has the full .conf text)
@@ -361,7 +365,10 @@ PersistentKeepalive = 25
         if (_activeEngine == EngineType.awg && _tempConfigPath != null) {
           // AWG needs explicit 'down' command
           final engineDir = await _engineDir();
-          final awgPath = p.join(engineDir, AppConstants.awgExe);
+          String awgPath = p.join(engineDir, 'awg.exe');
+          if (!File(awgPath).existsSync()) {
+            awgPath = p.join(engineDir, AppConstants.awgExe);
+          }
           if (File(awgPath).existsSync()) {
             await Process.run(awgPath, ['down', _tempConfigPath!]);
           }
