@@ -57,10 +57,12 @@ class EngineDownloader {
     try {
       final dir = await enginesDir;
 
-      // 1. Xray + WinTUN (both are in the same Xray zip)
+      // 1. Xray + WinTUN + geo data (all in the same Xray zip)
       final xrayMissing = !File(p.join(dir, 'xray.exe')).existsSync();
       final wintunMissing = !File(p.join(dir, 'wintun.dll')).existsSync();
-      if (xrayMissing || wintunMissing) {
+      final geoipMissing = !File(p.join(dir, 'geoip.dat')).existsSync();
+      final geositeMissing = !File(p.join(dir, 'geosite.dat')).existsSync();
+      if (xrayMissing || wintunMissing || geoipMissing || geositeMissing) {
         await _downloadAndExtract(
           label: 'Xray-core',
           url: _xrayUrl,
@@ -72,6 +74,12 @@ class EngineDownloader {
               }
               if (wintunMissing && f.name == 'wintun.dll') {
                 _extractFile(f, destDir, 'wintun.dll');
+              }
+              if (geoipMissing && f.name == 'geoip.dat') {
+                _extractFile(f, destDir, 'geoip.dat');
+              }
+              if (geositeMissing && f.name == 'geosite.dat') {
+                _extractFile(f, destDir, 'geosite.dat');
               }
             }
           },
