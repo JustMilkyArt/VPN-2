@@ -136,7 +136,7 @@ $RED   = [System.Drawing.Color]::FromArgb(239,68,68)
 $GREEN = [System.Drawing.Color]::FromArgb(50,200,80)
 $AMBER = [System.Drawing.Color]::FromArgb(245,158,11)
 
-# All UI calls happen on the SAME thread — no Invoke, no threads
+# All UI calls happen on the SAME thread - no Invoke, no threads
 function Tick { [System.Windows.Forms.Application]::DoEvents() }
 
 function Log($msg, $col) {
@@ -196,9 +196,9 @@ $btn.Add_Click({
     $form.Close()
 })
 
-# Install runs on form Shown event — same UI thread, DoEvents keeps form alive
+# Install runs on form Shown event - same UI thread, DoEvents keeps form alive
 $form.Add_Shown({
-    L "Form shown — starting install"
+    L "Form shown - starting install"
     Tick
 
     try {
@@ -313,7 +313,7 @@ $form.Add_Shown({
         $lbD.Text = "Click button to launch"
         $lbS.ForeColor = [System.Drawing.Color]::FromArgb(34,197,94)
         $btn.Enabled = $true
-        L "Done — button enabled"
+        L "Done - button enabled"
         Tick
 
     } catch {
