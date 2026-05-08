@@ -39,11 +39,8 @@ class VpnEngine {
   final ValueNotifier<VpnStatus> status  = ValueNotifier(VpnStatus.disconnected);
   final ValueNotifier<String?> lastError = ValueNotifier(null);
 
-  // Path to amneziawg.exe (installed by MSI)
+  // Path to amneziawg.exe (installed by MSI during SetupScreen)
   static const _awgExePath = r'C:\Program Files\AmneziaWG\amneziawg.exe';
-  // MSI download URL for silent install
-  static const _awgMsiUrl =
-      'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi';
 
   bool get isConnected => status.value == VpnStatus.connected;
 
@@ -310,9 +307,11 @@ class VpnEngine {
   // ═══════════════════════════════════════════════════════
 
   Future<void> _startAwg(VpnConnection conn) async {
-    // Если AWG не установлен — ставим MSI тихо
+    // AWG должен быть установлен ещё на этапе SetupScreen
     if (!File(_awgExePath).existsSync()) {
-      await _installAwgMsi();
+      throw VpnEngineException(
+          'AmneziaWG не установлен.\n'
+          'Перезапустите приложение — установка произойдёт автоматически.');
     }
 
     // Конфиг: берём из БД или строим вручную
@@ -385,61 +384,6 @@ class VpnEngine {
       } catch (_) {}
       _monitorAwg(tunnelName); // рекурсивно
     });
-  }
-
-  /// Тихая установка AmneziaWG MSI
-  Future<void> _installAwgMsi() async {
-    status.value    = VpnStatus.connecting;
-    lastError.value = 'Устанавливаю AmneziaWG...';
-
-    // Скачиваем MSI во временную директорию
-    final tmpDir = Directory.systemTemp;
-    final msiPath = p.join(tmpDir.path, 'amneziawg-setup.msi');
-
-    try {
-      final client    = HttpClient();
-      final request   = await client.getUrl(Uri.parse(_awgMsiUrl));
-      final response  = await request.close();
-
-      if (response.statusCode != 200) {
-        throw VpnEngineException(
-            'Не удалось скачать AmneziaWG (HTTP ${response.statusCode}).\n'
-            'Проверьте подключение к интернету.');
-      }
-
-      final file = File(msiPath);
-      final sink = file.openWrite();
-      await response.pipe(sink);
-      await sink.close();
-      client.close();
-    } catch (e) {
-      throw VpnEngineException('Ошибка скачивания AmneziaWG: $e');
-    }
-
-    // Запускаем тихую установку MSI
-    final install = await Process.run(
-      'msiexec',
-      ['/i', msiPath, '/quiet', '/norestart', 'ALLUSERS=1'],
-      runInShell: false,
-    );
-
-    // Убираем временный файл
-    try { File(msiPath).deleteSync(); } catch (_) {}
-
-    if (install.exitCode != 0) {
-      throw VpnEngineException(
-          'Ошибка установки AmneziaWG (код ${install.exitCode}).\n'
-          '${install.stderr}'.trim());
-    }
-
-    // Небольшая задержка чтобы MSI завершил регистрацию
-    await Future.delayed(const Duration(seconds: 2));
-
-    if (!File(_awgExePath).existsSync()) {
-      throw VpnEngineException(
-          'AmneziaWG установлен, но amneziawg.exe не найден.\n'
-          'Перезапустите приложение.');
-    }
   }
 
   String _buildAwgConfig(VpnConnection conn) {

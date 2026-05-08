@@ -31,7 +31,9 @@ void main() async {
   }
 
   // Check if engines are ready (first launch detection)
-  final enginesReady = await EngineDownloader.instance.areEnginesReady();
+  // needsSetup = true if xray/naive missing OR amneziawg not installed
+  final dl = EngineDownloader.instance;
+  final enginesReady = await dl.areEnginesReady() && dl.isAwgInstalled;
 
   runApp(MyApp(needsSetup: !enginesReady));
 }
