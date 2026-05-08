@@ -1,0 +1,83 @@
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime
+from app.models.server import ServerRole, ServerStatus, SetupStatus
+
+
+class ServerBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    ip: str = Field(..., description="IP address or domain of the server")
+    country: str = Field(default="??", max_length=10)
+    role: ServerRole = ServerRole.EU
+    ssh_user: str = Field(default="root", max_length=100)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    domain: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ServerCreate(ServerBase):
+    ssh_key: Optional[str] = Field(None, description="Private SSH key (PEM format)")
+    ssh_password: Optional[str] = Field(None, description="SSH password (if no key)")
+    eu_server_id: Optional[int] = Field(None, description="Linked EU server ID (for RU servers)")
+
+
+class ServerUpdate(BaseModel):
+    name: Optional[str] = None
+    country: Optional[str] = None
+    role: Optional[ServerRole] = None
+    ssh_user: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_key: Optional[str] = None
+    ssh_password: Optional[str] = None
+    domain: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+    eu_server_id: Optional[int] = None
+
+
+class ServerRead(ServerBase):
+    id: int
+    status: ServerStatus
+    setup_status: SetupStatus
+    is_active: bool
+    xray_installed: bool
+    naiveproxy_installed: bool
+    awg_installed: bool
+    warp_installed: bool
+    eu_server_id: Optional[int] = None
+    ssh_private_key: Optional[str] = None  # авто-сгенерированный ключ (шаг 3)
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class ServerStatusUpdate(BaseModel):
+    is_active: bool
+
+
+class ServerInstallRequest(BaseModel):
+    install_xray: bool = True
+    install_naiveproxy: bool = False
+    install_awg: bool = False
+    install_warp: bool = False
+
+
+class ServerRebootRequest(BaseModel):
+    pass
+
+
+class ServerChangePasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=8, description="New SSH password")
+
+
+class ServerChangeSSHKeyRequest(BaseModel):
+    ssh_key: str = Field(..., description="New SSH private key (PEM format)")
+
+
+class ServerUninstallStackRequest(BaseModel):
+    uninstall_xray: bool = False
+    uninstall_naiveproxy: bool = False
+    uninstall_awg: bool = False
+    uninstall_warp: bool = False
