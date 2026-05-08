@@ -476,3 +476,163 @@ button.role-card.role-card-active {
   color: #a5b4fc;
   border-bottom-color: #6366f1;
 }
+
+/* Setup step dots */
+.setup-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #374151;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+/* ── Setup Progress Modal ─────────────────────────────── */
+.stp-dot {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; flex-shrink: 0;
+  border: 2px solid #374151;
+  background: #111827;
+  color: #6b7280;
+  transition: all 0.3s ease;
+  position: relative; z-index: 1;
+}
+.stp-dot.stp-pending { border-color: #374151; color: #4b5563; }
+.stp-dot.stp-running { border-color: #7c3aed; color: #a78bfa; background: #1e1040;
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.2); }
+.stp-dot.stp-ok      { border-color: #16a34a; color: #4ade80; background: #052e16; }
+.stp-dot.stp-error   { border-color: #dc2626; color: #f87171; background: #2a0a0a; }
+.stp-dot.stp-warn    { border-color: #d97706; color: #fbbf24; background: #1c1206; }
+
+.stp-spin { animation: stp-rotate 1s linear infinite; }
+@keyframes stp-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.stp-connector {
+  flex: 1; height: 2px; background: #1f2937;
+  transition: background 0.4s ease;
+  margin: 0 2px;
+}
+.stp-connector.done { background: #16a34a; }
+
+.stp-log-block {
+  background: #030712;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.stp-log-line {
+  color: #8b95a6;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+}
+.stp-log-line.ok    { color: #4ade80; }
+.stp-log-line.err   { color: #f87171; }
+.stp-log-line.warn  { color: #fbbf24; }
+.stp-log-line.wait  { color: #818cf8; }
+.stp-log-line.sub   { color: #6b7280; padding-left: 18px; font-size: 11px; }
+/* иконки в строках лога */
+/* stp-icon: emoji отображаются нативно, без дополнительных стилей */
+/* кнопка Отмена */
+#setup-btn-cancel {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: #f87171;
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
+}
+#setup-btn-cancel:hover {
+  background: rgba(239,68,68,0.12);
+  border-color: rgba(239,68,68,0.5);
+  color: #fca5a5;
+}
+
+/* пульсирующая точка для ⏳ */
+@keyframes stp-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+.stp-spin-dot { animation: stp-pulse 1.2s ease-in-out infinite; }
+
+/* ─── Connections v3 ──────────────────────────────────────────────────────── */
+
+/* Compact form input for params tab */
+.form-input-sm {
+  background-color: #111827;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 11px;
+  padding: 4px 8px;
+  height: 28px;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.form-input-sm:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+select.form-input-sm {
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 14px;
+  padding-right: 24px;
+  appearance: none;
+}
+
+/* Detail modal tabs */
+.detail-tab-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  margin-bottom: -1px;
+}
+.detail-tab-btn:hover {
+  color: #d1d5db;
+}
+
+/* Wizard type buttons */
+.wiz-type-btn {
+  text-align: center;
+  min-height: 100px;
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.wiz-type-btn:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Connection rows in grouped list */
+.conn-row {
+  cursor: default;
+}
+.conn-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+/* Deploy log body — dark terminal */
+#deploy-log-body {
+  background: #050a0f;
+  scroll-behavior: smooth;
+}
+#deploy-log-body:empty::after {
+  content: 'Ожидание...';
+  color: #374151;
+  font-size: 11px;
+  display: block;
+  padding: 8px 0;
+}
+

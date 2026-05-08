@@ -55,6 +55,10 @@ const api = {
         const isAuthEndpoint = path.startsWith('/auth/');
         if (!isAuthEndpoint) {
           this.clearToken();
+          // Закрываем все открытые модалы со спиннером перед показом логина
+          document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => {
+            m.classList.add('hidden');
+          });
           if (window.showLogin) window.showLogin();
         }
       }
@@ -228,6 +232,52 @@ const api = {
   async renewSubdomainSSL(domainId, subdomainId) {
     return this.request('POST', `/domains/${domainId}/subdomains/${subdomainId}/renew-ssl`);
   },
+
+
+  // ─── Generic HTTP helpers (used by connections.js v3) ─────────────────────
+  async get(path, opts = {}) {
+    return this.request('GET', path, null, opts);
+  },
+  async post(path, data = null, opts = {}) {
+    return this.request('POST', path, data, opts);
+  },
+  async patch(path, data = null, opts = {}) {
+    return this.request('PATCH', path, data, opts);
+  },
+  async delete(path, opts = {}) {
+    return this.request('DELETE', path, null, opts);
+  },
+
+  // ─── Connections v3 ────────────────────────────────────────────────────────
+  async getAvailableServers() {
+    return this.request('GET', '/connections/available-servers');
+  },
+  async createConnectionsBatch(data) {
+    return this.request('POST', '/connections/batch', data, { timeout: 10000 });
+  },
+  async getBatchStatus(ids) {
+    return this.request('GET', `/connections/batch-status?ids=${ids.join(',')}`);
+  },
+  async getConnection(id) {
+    return this.request('GET', `/connections/${id}`);
+  },
+  async patchConnectionParam(id, field, value) {
+    return this.request('PATCH', `/connections/${id}/param`, { field, value }, { timeout: 90000 });
+  },
+  async checkConnectionLive(id) {
+    return this.request('POST', `/connections/${id}/check`, null, { timeout: 30000 });
+  },
+
+  // ─── Server Setup ──────────────────────────────────────────────────────────
+  async startSetup(id) {
+    return this.request("POST", `/servers/${id}/setup`);
+  },
+  setupStream(id) {
+    const token = localStorage.getItem("auth_token");
+    return new EventSource(`/api/v1/servers/${id}/setup-stream?token=${token}`);
+  },
 };
 
 window.api = api;
+
+// setup methods (added)

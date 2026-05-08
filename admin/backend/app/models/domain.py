@@ -16,12 +16,12 @@ class DomainStatus(str, enum.Enum):
 
 class SubdomainType(str, enum.Enum):
     admin_panel    = "admin_panel"
-    swagger        = "swagger"
     client_site    = "client_site"
+    vpn            = "vpn"
+    none           = "none"
+    swagger        = "swagger"
     naiveproxy_eu  = "naiveproxy_eu"
     naiveproxy_ru  = "naiveproxy_ru"
-    vpn            = "vpn"       # legacy — сохранён для совместимости со старыми записями
-    none           = "none"
 
 
 class SubdomainStatus(str, enum.Enum):

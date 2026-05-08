@@ -1,13 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List
 
 from app.db.database import get_db
 from app.api.deps import get_current_user
 from app.models.admin_user import AdminUser
-from app.models.server import Server, ServerRole
+from app.models.server import Server
 from app.schemas.server import (
     ServerCreate, ServerUpdate, ServerRead, ServerInstallRequest,
     ServerChangePasswordRequest, ServerChangeSSHKeyRequest, ServerUninstallStackRequest
@@ -39,17 +38,8 @@ def create_server(
     db: Session = Depends(get_db),
     _: AdminUser = Depends(get_current_user)
 ):
-    """Создаёт сервер в БД. Автонастройка запускается через SSE /setup.
-    Для EU-серверов сразу запускает базовое hardening в фоне (fail2ban, ufw).
-    """
-    from app.models.server import SetupStatus
     server = server_service.create_server(db, server_data)
-    # НЕ запускаем автонастройку здесь — она идёт через SSE /setup
-    # Но для EU-серверов запускаем базовое hardening в фоне немедленно
-    # (защита сервера пока идёт полная автонастройка)
-    from app.models.server import ServerRole
-    if server.role == ServerRole.EU:
-        background_tasks.add_task(harden_server, server)
+    # harden_server убран — его задачи выполняет run_server_setup (шаг 3)
     return server
 
 
@@ -147,36 +137,6 @@ def server_stats(
     }
 
 
-@router.post("/{server_id}/stats", summary="Refresh and get connection statistics")
-def refresh_server_stats(
-    server_id: int,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    """Same as GET /stats but allows POST for explicit refresh triggers from frontend."""
-    from app.models.connection import Connection, ConnectionStatus
-    server = server_service.get_server(db, server_id)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-
-    all_conns = db.query(Connection).filter(Connection.server_id == server_id).all()
-    active = [c for c in all_conns if c.status == ConnectionStatus.ACTIVE]
-
-    proto_counts = {}
-    for c in active:
-        p = c.protocol or "unknown"
-        proto_counts[p] = proto_counts.get(p, 0) + 1
-
-    return {
-        "server_id": server_id,
-        "total": len(all_conns),
-        "active": len(active),
-        "inactive": len([c for c in all_conns if c.status == ConnectionStatus.INACTIVE]),
-        "error": len([c for c in all_conns if c.status == ConnectionStatus.ERROR]),
-        "protocols": proto_counts,
-    }
-
-
 @router.get("/{server_id}/info", summary="Get server system info")
 def server_info(
     server_id: int,
@@ -209,7 +169,7 @@ def install_stack(
             server.xray_installed = True
 
     if install_req.install_naiveproxy:
-        ok, msg = deploy_service.install_naiveproxy(server)
+        ok, msg = deploy_service.install_caddy_naive_binary(server)
         results["naiveproxy"] = {"success": ok, "message": msg}
         if ok:
             server.naiveproxy_installed = True
@@ -225,6 +185,9 @@ def install_stack(
         results["warp"] = {"success": ok, "message": msg}
         if ok:
             server.warp_installed = True
+            # Сохраняем версию (install_warp теперь возвращает version string)
+            if msg and msg != "WARP installed" and not msg.startswith("WARP install failed"):
+                server.warp_version = msg
 
     db.commit()
     return {"server_id": server_id, "results": results}
@@ -241,6 +204,31 @@ def restart_services(
         raise HTTPException(status_code=404, detail="Server not found")
 
     ok, msg = deploy_service.restart_services(server)
+    return {"success": ok, "message": msg}
+
+
+class RestartServiceRequest(BaseModel):
+    service: str  # e.g. "xray", "caddy-naive", "awg", "warp-svc"
+
+
+@router.post("/{server_id}/restart-service", summary="Restart a specific VPN service on server")
+def restart_single_service(
+    server_id: int,
+    body: RestartServiceRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    # Whitelist allowed service names for security
+    ALLOWED = {"xray", "caddy-naive", "awg", "amneziawg", "warp-svc", "warp", "fail2ban", "nginx"}
+    svc = body.service.strip()
+    if svc not in ALLOWED:
+        raise HTTPException(status_code=400, detail=f"Service '{svc}' not allowed. Allowed: {sorted(ALLOWED)}")
+
+    ok, msg = deploy_service.restart_single_service(server, svc)
     return {"success": ok, "message": msg}
 
 
@@ -353,6 +341,52 @@ def uninstall_stack_endpoint(
     return {"success": ok, "message": msg}
 
 
+
+
+@router.get("/{server_id}/ssh-key", summary="Get decrypted private SSH key")
+def get_ssh_key(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    # Пробуем получить ключ: сначала зашифрованный, потом plain
+    private_key = None
+    if server.ssh_private_key_enc:
+        try:
+            private_key = decrypt_value(server.ssh_private_key_enc)
+        except Exception:
+            pass
+    if not private_key and server.ssh_key:
+        private_key = server.ssh_key
+    if not private_key:
+        raise HTTPException(status_code=404, detail="SSH key not found")
+    return {"private_key": private_key}
+
+@router.get("/{server_id}/ssh-password", summary="Get decrypted SSH password")
+def get_ssh_password(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    password = None
+    if server.ssh_password_enc:
+        try:
+            password = decrypt_value(server.ssh_password_enc)
+        except Exception:
+            pass
+    if not password and server.ssh_password:
+        password = server.ssh_password
+    if not password:
+        raise HTTPException(status_code=404, detail="SSH password not found")
+    return {"password": password}
+
+
 @router.get("/{server_id}/security", summary="Get real security status from server")
 def get_security(
     server_id: int,
@@ -398,103 +432,6 @@ def harden_server_endpoint(
     return {"success": True, "message": "Hardening started in background"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SSE: Автонастройка сервера (прогресс-экран)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/{server_id}/setup", summary="SSE stream: auto-setup server (steps 1-7)")
-async def setup_server_sse(
-    server_id: int,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    """Server-Sent Events поток для прогресс-экрана автонастройки."""
-    from app.services.setup_service import run_server_setup
-    import json
-
-    server = server_service.get_server(db, server_id)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-
-    async def event_stream():
-        async for chunk in run_server_setup(db, server):
-            yield chunk
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-
-@router.post("/{server_id}/setup/retry", summary="SSE stream: retry setup from step 4")
-async def retry_setup_server_sse(
-    server_id: int,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    """Повтор автонастройки с шага 4 (стек и дальше)."""
-    from app.services.setup_service import retry_server_setup
-
-    server = server_service.get_server(db, server_id)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-
-    async def event_stream():
-        async for chunk in retry_server_setup(db, server):
-            yield chunk
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
-
-
-@router.post("/{server_id}/link-eu", summary="Link RU server to EU server")
-def link_eu_server(
-    server_id: int,
-    eu_server_id: int,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    """Привязывает RU-сервер к EU-серверу (drag-and-drop из UI)."""
-    server = server_service.get_server(db, server_id)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-    if server.role != ServerRole.RU:
-        raise HTTPException(status_code=400, detail="Only RU servers can be linked to EU")
-
-    eu = server_service.get_server(db, eu_server_id)
-    if not eu:
-        raise HTTPException(status_code=404, detail="EU server not found")
-    if eu.role != ServerRole.EU:
-        raise HTTPException(status_code=400, detail="Target server is not EU")
-
-    server.eu_server_id = eu_server_id
-    db.commit()
-    db.refresh(server)
-    return {"success": True, "message": f"RU сервер {server.name} привязан к EU {eu.name}"}
-
-
-@router.delete("/{server_id}/link-eu", summary="Unlink RU server from EU server")
-def unlink_eu_server(
-    server_id: int,
-    db: Session = Depends(get_db),
-    _: AdminUser = Depends(get_current_user)
-):
-    server = server_service.get_server(db, server_id)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-    server.eu_server_id = None
-    db.commit()
-    return {"success": True, "message": "Привязка к EU-серверу снята"}
-
-
-
 @router.post("/check-all-status", summary="Check status of all servers")
 def check_all_status(
     db: Session = Depends(get_db),
@@ -510,3 +447,146 @@ def check_all_status(
             "status": status_res
         }
     return results
+
+from fastapi.responses import StreamingResponse
+import json as _json
+import time as _time
+from app.services.setup_service import decrypt_value, run_server_setup
+
+
+@router.post("/{server_id}/setup", summary="Start automated server setup")
+def start_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if getattr(server, "setup_status", None) == "in_progress":
+        return {"success": False, "message": "Setup already in progress"}
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup started"}
+
+
+@router.get("/{server_id}/setup-stream", summary="SSE stream of setup progress")
+def setup_stream(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    def event_generator():
+        from app.db.database import SessionLocal
+        local_db = SessionLocal()
+        try:
+            last_log_len = 0
+            timeout = 600
+            start = _time.time()
+            while _time.time() - start < timeout:
+                local_db.expire_all()
+                srv = local_db.query(Server).filter(Server.id == server_id).first()
+                if not srv:
+                    yield "data: " + _json.dumps({"error": "Server not found"}) + "\n\n"
+                    break
+                log = srv.setup_log or ""
+                if len(log) > last_log_len:
+                    new_lines = log[last_log_len:].strip().splitlines()
+                    for line in new_lines:
+                        if line.strip():
+                            payload = {"type": "log", "line": line.strip(),
+                                       "step": srv.setup_step or "", "status": srv.setup_status or ""}
+                            yield "data: " + _json.dumps(payload) + "\n\n"
+                    last_log_len = len(log)
+                if srv.setup_status in ("done", "failed"):
+                    payload = {"type": "done", "status": srv.setup_status,
+                               "error": srv.setup_error or "", "step": srv.setup_step or ""}
+                    yield "data: " + _json.dumps(payload) + "\n\n"
+                    break
+                _time.sleep(1.5)
+        finally:
+            local_db.close()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/{server_id}/setup/status", summary="Get setup status (polling)")
+def get_setup_status(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Лёгкий polling-endpoint для JS: возвращает текущий статус настройки."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    log_raw = getattr(server, "setup_log", "") or ""
+    log_lines = [l.strip() for l in log_raw.splitlines() if l.strip()]
+
+    return {
+        "setup_status": getattr(server, "setup_status", None),
+        "setup_step":   getattr(server, "setup_step",   None),
+        "setup_error":  getattr(server, "setup_error",  None),
+        "log":          log_lines,
+    }
+
+
+
+
+class WarpToggleRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/{server_id}/warp/toggle", summary="Enable or disable WARP on server")
+def toggle_warp(
+    server_id: int,
+    req: WarpToggleRequest,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Включить или выключить WARP-сервис на сервере без переустановки."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if not server.warp_installed:
+        raise HTTPException(status_code=400, detail="WARP не установлен на сервере")
+    ok, msg = deploy_service.toggle_warp_service(server, req.enabled)
+    return {"success": ok, "message": msg, "enabled": req.enabled}
+
+
+@router.get("/{server_id}/warp/status", summary="Get WARP runtime status on server")
+def get_warp_status(
+    server_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Получить текущий статус WARP-сервиса на сервере."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    if not server.warp_installed:
+        return {"installed": False, "running": False, "connected": False}
+    status = deploy_service.get_warp_status(server)
+    return status
+
+@router.post("/{server_id}/setup/retry", summary="Retry automated server setup")
+def retry_setup(
+    server_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """Повторный запуск автонастройки (сбрасывает статус и запускает заново)."""
+    server = server_service.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    # Сбрасываем предыдущий статус
+    server.setup_status = None
+    server.setup_step   = None
+    server.setup_error  = None
+    server.setup_log    = None
+    db.commit()
+    background_tasks.add_task(run_server_setup, server_id)
+    return {"success": True, "message": "Setup restarted"}

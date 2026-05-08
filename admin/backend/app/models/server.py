@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -15,13 +15,8 @@ class ServerStatus(str, enum.Enum):
     OFFLINE = "offline"
     UNKNOWN = "unknown"
     DEPLOYING = "deploying"
-
-
-class SetupStatus(str, enum.Enum):
-    NOT_STARTED = "not_started"
-    IN_PROGRESS  = "in_progress"
-    DONE         = "done"
-    FAILED       = "failed"
+    SETTING_UP = "setting_up"
+    NOT_CONFIGURED = "not_configured"
 
 
 class Server(Base):
@@ -36,40 +31,59 @@ class Server(Base):
 
     ssh_user = Column(String(100), nullable=False, default="root")
     ssh_port = Column(Integer, nullable=False, default=22)
-    ssh_key = Column(Text, nullable=True)           # private key (PEM) — для входа из панели
-    ssh_private_key = Column(Text, nullable=True)   # авто-сгенерированный ключ (шаг 3)
-    ssh_password = Column(String(255), nullable=True)  # аварийный пароль (для консоли провайдера)
+    ssh_key = Column(Text, nullable=True)
+    ssh_password = Column(String(255), nullable=True)
 
     status = Column(String(20), nullable=False, default=ServerStatus.UNKNOWN)
-    setup_status = Column(String(20), nullable=False, default=SetupStatus.NOT_STARTED)
     is_active = Column(Boolean, nullable=False, default=True)
 
     xray_installed = Column(Boolean, default=False)
     naiveproxy_installed = Column(Boolean, default=False)
-    trojan_installed = Column(Boolean, default=False)
     awg_installed = Column(Boolean, default=False)
     warp_installed = Column(Boolean, default=False)
 
-    # Для RU-серверов: привязанный EU-сервер (exit node)
-    eu_server_id = Column(Integer, ForeignKey("servers.id", use_alter=True), nullable=True)
-
     domain = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
+
+    # ── Display info (для названий в клиентах) ─────────────────────
+    flag_emoji    = Column(String(10),  nullable=True)   # напр. 🇫🇮
+    display_name  = Column(String(100), nullable=True)   # напр. "FIN 1"
+
+    # ── Setup flow ──────────────────────────────────────────────────
+    setup_status = Column(String(20), nullable=True)   # pending|in_progress|done|failed
+    setup_step   = Column(String(50), nullable=True)   # step1..step5
+    setup_error  = Column(Text, nullable=True)
+    setup_log    = Column(Text, nullable=True)
+
+    # ── Server info (собирается после setup) ───────────────────────
+    server_timezone        = Column(String(100), nullable=True)
+    xray_version           = Column(String(50),  nullable=True)
+    caddy_version          = Column(String(50),  nullable=True)
+    awg_version            = Column(String(50),  nullable=True)
+    warp_version           = Column(String(50),  nullable=True)
+    xray_public_key        = Column(Text, nullable=True)
+    awg_server_public_key  = Column(Text, nullable=True)
+    awg_server_private_key = Column(Text, nullable=True)   # приватный ключ AWG-интерфейса сервера
+
+    # ── Зашифрованные credentials (флаги для фронта) ───────────────
+    ssh_private_key_enc = Column(Text, nullable=True)   # зашифрованный приватный ключ
+    ssh_password_enc    = Column(Text, nullable=True)   # зашифрованный пароль
+
+    # ── Актуальные SSH-параметры после харденинга ──────────────────
+    ssh_user_actual = Column(String(100), nullable=True)
+    ssh_port_actual = Column(Integer, nullable=True)
+
+    # ── Security flags (заполняются на шаге 4 настройки) ───────────
+    sec_fail2ban       = Column(Boolean, nullable=True)   # fail2ban активен
+    sec_ufw            = Column(Boolean, nullable=True)   # ufw активен
+    sec_password_login = Column(Boolean, nullable=True)   # True = пароль ВКЛЮЧЁН (плохо)
+    sec_ssh_key        = Column(Boolean, nullable=True)   # SSH-ключ сохранён
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     connections = relationship("Connection", back_populates="server", cascade="all, delete-orphan",
                                foreign_keys="Connection.server_id")
-
-    # Привязанный EU-сервер (для RU) — self-referential
-    eu_server = relationship(
-        "Server",
-        foreign_keys="[Server.eu_server_id]",
-        primaryjoin="Server.eu_server_id == Server.id",
-        remote_side="[Server.id]",
-        uselist=False,
-    )
 
     def __repr__(self):
         return f"<Server {self.name} ({self.ip}) [{self.role}] {self.status}>"

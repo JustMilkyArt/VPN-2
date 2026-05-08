@@ -54,16 +54,6 @@ server {
 }
 """
 
-# Common security headers block (вставляется во все HTTPS-шаблоны)
-_SECURITY_HEADERS = """
-    # Security headers
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
-"""
-
 # Nginx template for admin panel subdomain
 NGINX_ADMIN_TEMPLATE = """
 server {{
@@ -80,16 +70,6 @@ server {{
     ssl_certificate_key /etc/letsencrypt/live/{full_name}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 10m;
-
-    # Security headers
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
     # Frontend static files
     root /opt/vpn-admin/frontend/web_admin;
@@ -109,7 +89,7 @@ server {{
         proxy_read_timeout 120s;
     }}
 
-    # Block Swagger/docs from admin panel — has its own subdomain
+    # Block docs from outside
     location ~ ^/(docs|redoc|openapi.json) {{
         deny all;
         return 404;
@@ -121,62 +101,7 @@ server {{
 }}
 """
 
-# Nginx template for Swagger/API docs subdomain
-NGINX_SWAGGER_TEMPLATE = """
-server {{
-    listen 80;
-    server_name {full_name};
-    return 301 https://$host$request_uri;
-}}
-
-server {{
-    listen 443 ssl;
-    server_name {full_name};
-
-    ssl_certificate     /etc/letsencrypt/live/{full_name}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{full_name}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 10m;
-
-    # Security headers (без X-Frame-Options DENY — Swagger нужны фреймы)
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-
-    # Swagger UI
-    location ~ ^/(docs|redoc|openapi.json) {{
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-
-    # Backend API
-    location /api/ {{
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }}
-
-    location /health {{
-        proxy_pass http://127.0.0.1:8000/health;
-    }}
-
-    # Redirect root to docs
-    location = / {{
-        return 302 /docs;
-    }}
-}}
-"""
-
-# Nginx template for client site subdomain
+# Nginx template for client site subdomain (reserved for future)
 NGINX_CLIENT_TEMPLATE = """
 server {{
     listen 80;
@@ -192,18 +117,8 @@ server {{
     ssl_certificate_key /etc/letsencrypt/live/{full_name}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 10m;
 
-    # Security headers
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
-
-    root /var/www/{full_name};
+    root /opt/vpn-admin/frontend/web_admin;
     index index.html;
 
     location / {{
@@ -212,19 +127,33 @@ server {{
 }}
 """
 
-# Nginx template for NaiveProxy subdomain
-# Caddy управляет SSL сам — nginx только резервирует поддомен и блокирует прямой доступ
-NGINX_NAIVEPROXY_TEMPLATE = """
+# Nginx template for Swagger API docs subdomain
+NGINX_SWAGGER_TEMPLATE = """
 server {{
     listen 80;
     server_name {full_name};
     return 301 https://$host$request_uri;
 }}
 
-# NaiveProxy использует Caddy на порту 443 напрямую.
-# Этот конфиг только создаёт A-запись DNS и SSL через certbot.
-# После выпуска сертификата Caddy забирает управление портом 443.
+server {{
+    listen 443 ssl;
+    server_name {full_name};
+
+    ssl_certificate     /etc/letsencrypt/live/{full_name}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{full_name}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {{
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
 """
+
 
 
 def _append_log(subdomain: Subdomain, step: str, status: str, detail: str = ""):
@@ -266,24 +195,23 @@ async def run_subdomain_setup(subdomain_id: int):
 
         stype = subdomain.subdomain_type
 
-        # ── None subdomains — только резерв, без настройки ───────────────────
-        if stype == SubdomainType.none:
-            _append_log(subdomain, "Резервирование поддомена", "ok",
-                        "Поддомен зарегистрирован без настройки.")
+        # ── VPN / None subdomains ──────────────────────────────────────────────
+        if stype in (SubdomainType.vpn, SubdomainType.none,
+                     SubdomainType.naiveproxy_eu, SubdomainType.naiveproxy_ru):
+            _type_names = {
+                SubdomainType.vpn: "VPN-поддомен",
+                SubdomainType.none: "Поддомен",
+                SubdomainType.naiveproxy_eu: "NaiveProxy EU поддомен",
+                SubdomainType.naiveproxy_ru: "NaiveProxy RU поддомен",
+            }
+            _label = _type_names.get(stype, "Поддомен")
+            _append_log(subdomain, f"Резервирование: {_label}", "ok",
+                        "Поддомен зарегистрирован. A-запись настраивается при установке стека.")
             subdomain.status = SubdomainStatus.reserved
             _save(db, subdomain)
             return
 
-        # ── NaiveProxy / legacy VPN subdomains — только резерв ───────────────
-        # Caddy управляет портом 443 сам, nginx не нужен
-        if stype in (SubdomainType.naiveproxy_eu, SubdomainType.naiveproxy_ru, SubdomainType.vpn):
-            _append_log(subdomain, "Резервирование поддомена (NaiveProxy)", "ok",
-                        "A-запись DNS будет создана, SSL выпустит Caddy автоматически при запуске NaiveProxy.")
-            subdomain.status = SubdomainStatus.reserved
-            _save(db, subdomain)
-            return
-
-        # ── Admin panel / Client site ──────────────────────────────────────────
+        # ── Admin panel / Client site / Swagger ───────────────────────────────
         target_ip = subdomain.target_ip or ADMIN_SERVER_IP
         full_name = subdomain.full_name
 

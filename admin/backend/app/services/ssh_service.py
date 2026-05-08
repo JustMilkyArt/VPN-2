@@ -9,8 +9,25 @@ from typing import Optional, Tuple
 import paramiko
 from app.core.config import settings
 from app.models.server import Server
+try:
+    from app.services.setup_service import decrypt_value as _decrypt_value
+except Exception:
+    def _decrypt_value(v): return v  # fallback
 
 logger = logging.getLogger(__name__)
+
+def _load_private_key(pem: str) -> paramiko.PKey:
+    """Load private key from PEM string, trying Ed25519 → RSA → ECDSA."""
+    buf = io.StringIO(pem)
+    for cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            buf.seek(0)
+            return cls.from_private_key(buf)
+        except Exception:
+            continue
+    raise ValueError("Unsupported or invalid private key format")
+
+
 
 
 class SSHClient:
@@ -19,6 +36,7 @@ class SSHClient:
     def __init__(self, server: Server):
         self.server = server
         self.client: Optional[paramiko.SSHClient] = None
+        self._use_sudo: bool = False  # set to True if connected as non-root
 
     def __enter__(self) -> "SSHClient":
         self.client = paramiko.SSHClient()
@@ -33,16 +51,42 @@ class SSHClient:
             "auth_timeout": 30,
         }
 
-        # Приоритет: ssh_private_key (новый, после шага 3 setup) → ssh_key (оригинальный) → password
-        active_key = self.server.ssh_private_key or self.server.ssh_key
-        if active_key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(active_key))
+        # Определяем ключ: сначала plain ssh_key, потом зашифрованный ssh_private_key_enc
+        _raw_key = self.server.ssh_key
+        if not _raw_key and getattr(self.server, "ssh_private_key_enc", None):
+            try:
+                _raw_key = _decrypt_value(self.server.ssh_private_key_enc)
+            except Exception:
+                _raw_key = None
+        # Определяем пароль: сначала plain, потом зашифрованный
+        _raw_pass = self.server.ssh_password
+        if not _raw_pass and getattr(self.server, "ssh_password_enc", None):
+            try:
+                _raw_pass = _decrypt_value(self.server.ssh_password_enc)
+            except Exception:
+                _raw_pass = None
+
+        if _raw_key:
+            pkey = _load_private_key(_raw_key)
             connect_kwargs["pkey"] = pkey
-        elif self.server.ssh_password:
-            connect_kwargs["password"] = self.server.ssh_password
+        elif _raw_pass:
+            connect_kwargs["password"] = _raw_pass
 
         logger.info(f"Connecting to {self.server.ip}:{self.server.ssh_port} as {self.server.ssh_user}")
         self.client.connect(**connect_kwargs)
+
+        # Detect if we need sudo (non-root user with passwordless sudo)
+        try:
+            _, whoami_out, _ = self._raw_exec("id -u")
+            if whoami_out.strip() != "0":
+                # Not root — check if passwordless sudo is available
+                code_sudo, _, _ = self._raw_exec("sudo -n true 2>/dev/null")
+                self._use_sudo = (code_sudo == 0)
+                if self._use_sudo:
+                    logger.info(f"Non-root user {self.server.ssh_user}, auto-sudo enabled")
+        except Exception:
+            pass
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -50,32 +94,68 @@ class SSHClient:
             self.client.close()
         return False
 
-    def exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
-        """Execute command and return (exit_code, stdout, stderr)."""
+    def _raw_exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
+        """Execute command without sudo wrapping."""
         if not self.client:
             raise RuntimeError("SSH client not connected")
-        
         timeout = timeout or settings.SSH_COMMAND_TIMEOUT
-        logger.debug(f"Executing: {command[:100]}")
-        
         stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
-        
+        return exit_code, out, err
+
+    def exec(self, command: str, timeout: int = None) -> Tuple[int, str, str]:
+        """Execute command and return (exit_code, stdout, stderr).
+        Automatically wraps with 'sudo bash -c' if connected as non-root with passwordless sudo.
+        """
+        if not self.client:
+            raise RuntimeError("SSH client not connected")
+
+        timeout = timeout or settings.SSH_COMMAND_TIMEOUT
+
+        # Auto-wrap with sudo bash -c if needed (non-root user with passwordless sudo)
+        if self._use_sudo and not command.strip().startswith("sudo"):
+            import shlex
+            actual_command = f"sudo bash -c {shlex.quote(command)}"
+        else:
+            actual_command = command
+
+        logger.debug(f"Executing: {actual_command[:120]}")
+
+        stdin, stdout, stderr = self.client.exec_command(actual_command, timeout=timeout)
+        exit_code = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+
         if exit_code != 0:
             logger.warning(f"Command exited with {exit_code}: {err[:200]}")
-        
+
         return exit_code, out, err
 
     def upload_file(self, local_content: str, remote_path: str) -> None:
-        """Upload string content as a file to remote server."""
-        sftp = self.client.open_sftp()
-        try:
-            with sftp.open(remote_path, "w") as f:
-                f.write(local_content)
-        finally:
-            sftp.close()
+        """Upload string content as a file to remote server.
+        If non-root with sudo: uploads to /tmp first, then moves via sudo cp.
+        """
+        if self._use_sudo:
+            import posixpath, hashlib
+            tmp_name = "/tmp/_upload_" + hashlib.md5(remote_path.encode()).hexdigest()[:8]
+            sftp = self.client.open_sftp()
+            try:
+                with sftp.open(tmp_name, "w") as f:
+                    f.write(local_content)
+            finally:
+                sftp.close()
+            # Ensure parent directory exists and move file
+            parent = posixpath.dirname(remote_path)
+            self.exec(f"mkdir -p {parent} && cp {tmp_name} {remote_path} && rm -f {tmp_name}")
+        else:
+            sftp = self.client.open_sftp()
+            try:
+                with sftp.open(remote_path, "w") as f:
+                    f.write(local_content)
+            finally:
+                sftp.close()
 
     def upload_script(self, script_content: str, remote_path: str) -> None:
         """Upload script and make it executable."""
@@ -109,7 +189,7 @@ class SSHService:
             "auth_timeout": 30,
         }
         if self.key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.key))
+            pkey = _load_private_key(self.key)
             connect_kwargs["pkey"] = pkey
         elif self.password:
             connect_kwargs["password"] = self.password
@@ -154,7 +234,7 @@ def test_connection(server: Server) -> Tuple[bool, str]:
             return False, f"Command failed: {err}"
     except paramiko.AuthenticationException:
         return False, "Authentication failed - check SSH key or password"
-    except paramiko.NoValidConnectionsError as e:
+    except paramiko.ssh_exception.NoValidConnectionsError as e:
         return False, f"Cannot connect to {server.ip}:{server.ssh_port} - {e}"
     except Exception as e:
         return False, f"Connection error: {str(e)}"
@@ -229,7 +309,7 @@ def ping_with_latency(server: Server) -> Tuple[bool, str, Optional[float]]:
             return False, "SSH command failed", icmp_latency
     except paramiko.AuthenticationException:
         return False, "Authentication failed", icmp_latency
-    except paramiko.NoValidConnectionsError as e:
+    except paramiko.ssh_exception.NoValidConnectionsError as e:
         return False, f"Cannot connect: {e}", icmp_latency
     except Exception as e:
         # Если ICMP ответил но SSH упал — сервер жив, но SSH проблема
@@ -348,8 +428,8 @@ def get_security_status(server: Server) -> dict:
             _, out, _ = ssh.exec("systemctl is-active fail2ban 2>/dev/null", timeout=5)
             result["fail2ban"] = out.strip() == "active"
 
-            # UFW
-            _, out, _ = ssh.exec("ufw status 2>/dev/null | head -1", timeout=5)
+            # UFW — запускаем через sudo (непривилегированный юзер не видит статус)
+            _, out, _ = ssh.exec("sudo ufw status 2>/dev/null | head -1 || ufw status 2>/dev/null | head -1", timeout=8)
             result["ufw"] = "active" in out.lower()
 
             # PasswordAuthentication
@@ -404,10 +484,10 @@ def apply_security_setting(server: Server, setting: str, enabled: bool) -> Tuple
                         "ufw allow 443/tcp",
                         "ufw allow 51820/udp",
                         "ufw allow 51821/udp",
-                        "echo 'y' | ufw enable",
+                        "DEBIAN_FRONTEND=noninteractive sudo ufw --force enable",
                     ]
                 else:
-                    cmds = ["echo 'y' | ufw disable"]
+                    cmds = ["DEBIAN_FRONTEND=noninteractive sudo ufw --force disable"]
                 for cmd in cmds:
                     code, _, err = ssh.exec(cmd, timeout=60)
                     if code != 0:
