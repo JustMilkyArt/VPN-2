@@ -1,15 +1,17 @@
-// VPN Engine — manages VPN connections on Windows
+// VPN Engine — полноценный VPN через TUN адаптер (как V2Ray / HAPP)
 //
-// Architecture (v3):
-//   VLESS/Trojan  → xray.exe (SOCKS5 on port 10808)
-//                   → system proxy via netsh winhttp + WinInet registry
-//   NaiveProxy    → naive.exe (SOCKS5 on port 10808)
-//                   → same system proxy approach
-//   AmneziaWG     → amneziawg.exe /installtunnelservice (from installed MSI)
-//                   → auto-install MSI silently if not present
+// Архитектура:
+//   VLESS/Trojan  → xray.exe (SOCKS5 на 10808) → tun2socks → WinTUN адаптер
+//   NaiveProxy    → naive.exe (SOCKS5 на 10808) → tun2socks → WinTUN адаптер
+//   AmneziaWG     → amneziawg.exe /installtunnelservice (полноценный WG туннель)
 //
-// On disconnect: system proxy is fully restored, AWG tunnel removed.
-// On crash: cleanup runs via exitCode listeners.
+// TUN адаптер перехватывает ВЕСЬ трафик машины (TCP + UDP) — настоящий VPN.
+//
+// Маршруты:
+//   1. Трафик на VPN-сервер → через оригинальный шлюз (иначе петля)
+//   2. Всё остальное       → через TUN адаптер (10.0.0.1)
+//
+// Cleanup гарантирован через try/finally + exitCode listener.
 
 import 'dart:async';
 import 'dart:io';
@@ -28,19 +30,24 @@ class VpnEngine {
   VpnEngine._();
   static final VpnEngine instance = VpnEngine._();
 
-  Process? _proxyProcess;
+  Process?    _proxyProcess;
+  Process?    _tunProcess;
   EngineType? _activeEngine;
-  String? _tempConfigPath;
-  String? _awgTunnelName;
+  String?     _tempConfigPath;
+  String?     _awgTunnelName;
+  String?     _vpnServerIp;      // сохраняем чтобы убрать маршрут на cleanup
+  String?     _originalGateway;  // оригинальный шлюз до подключения
+  bool        _routesAdded = false;
 
-  // System proxy state (saved before connect, restored on disconnect)
-  bool _systemProxyWasSet = false;
+  static const _tunName    = 'MilkyVPN-TUN';
+  static const _tunAddr    = '10.0.0.1';     // IP адаптера
+  static const _tunGateway = '10.0.0.1';     // шлюз через TUN
+  static const _tunMask    = '255.255.255.0';
 
-  final ValueNotifier<VpnStatus> status  = ValueNotifier(VpnStatus.disconnected);
-  final ValueNotifier<String?> lastError = ValueNotifier(null);
-
-  // Path to amneziawg.exe (installed by MSI during SetupScreen)
   static const _awgExePath = r'C:\Program Files\AmneziaWG\amneziawg.exe';
+
+  final ValueNotifier<VpnStatus> status   = ValueNotifier(VpnStatus.disconnected);
+  final ValueNotifier<String?>   lastError = ValueNotifier(null);
 
   bool get isConnected => status.value == VpnStatus.connected;
 
@@ -53,29 +60,27 @@ class VpnEngine {
         status.value == VpnStatus.connecting) {
       await disconnect();
     }
-    status.value   = VpnStatus.connecting;
+    status.value    = VpnStatus.connecting;
     lastError.value = null;
 
     try {
       switch (conn.protocol) {
         case Protocol.vlessReality:
         case Protocol.trojan:
-          await _startXray(conn);
+          await _startXrayWithTun(conn);
           break;
         case Protocol.amneziaWg:
           await _startAwg(conn);
           break;
         case Protocol.naiveProxy:
-          await _startNaive(conn);
+          await _startNaiveWithTun(conn);
           break;
         case Protocol.unknown:
-          throw VpnEngineException(
-              'Неподдерживаемый протокол: ${conn.protocol}');
+          throw VpnEngineException('Неподдерживаемый протокол: ${conn.protocol}');
       }
     } catch (e) {
-      status.value   = VpnStatus.error;
+      status.value    = VpnStatus.error;
       lastError.value = e.toString().replaceFirst('VpnEngineException: ', '');
-      // Best-effort cleanup — don't let cleanup errors mask the original error
       unawaited(_forceCleanup());
       rethrow;
     }
@@ -92,18 +97,24 @@ class VpnEngine {
   }
 
   // ═══════════════════════════════════════════════════════
-  // VLESS / Trojan → Xray SOCKS5 + system proxy
+  // VLESS / Trojan → xray SOCKS5 → tun2socks → TUN
   // ═══════════════════════════════════════════════════════
 
-  Future<void> _startXray(VpnConnection conn) async {
+  Future<void> _startXrayWithTun(VpnConnection conn) async {
     final engineDir = await _engineDir();
     final xrayPath  = p.join(engineDir, 'xray.exe');
+    final t2sPath   = p.join(engineDir, 'tun2socks.exe');
 
     if (!File(xrayPath).existsSync()) {
       throw VpnEngineException(
-          'xray.exe не найден. Удалите папку engines (кнопка в настройках) '
-          'и перезапустите приложение.');
+          'xray.exe не найден. Удалите папку engines и перезапустите приложение.');
     }
+    if (!File(t2sPath).existsSync()) {
+      throw VpnEngineException(
+          'tun2socks.exe не найден. Удалите папку engines и перезапустите приложение.');
+    }
+
+    _vpnServerIp = conn.serverIp;
 
     final config     = _buildXrayConfig(conn);
     final configPath = await _writeTempConfig('xray_config.json', jsonEncode(config));
@@ -111,30 +122,33 @@ class VpnEngine {
 
     final logBuf = StringBuffer();
 
+    // 1. Запускаем xray
     _proxyProcess = await Process.start(
       xrayPath,
       ['run', '-config', configPath],
-      workingDirectory: engineDir, // geoip.dat / geosite.dat рядом с xray.exe
+      workingDirectory: engineDir,
       runInShell: false,
     );
     _activeEngine = EngineType.xray;
-
     _proxyProcess!.stdout.transform(utf8.decoder).listen(logBuf.write);
     _proxyProcess!.stderr.transform(utf8.decoder).listen(logBuf.write);
 
     await Future.delayed(const Duration(seconds: 2));
     await _assertAlive(_proxyProcess!, 'xray.exe', logBuf);
 
-    // Устанавливаем системный прокси
-    await _setSystemProxy('127.0.0.1', AppConstants.xraySocksPort);
+    // 2. Запускаем tun2socks → создаёт TUN адаптер
+    await _startTun2socks(engineDir);
+
+    // 3. Настраиваем маршруты
+    await _setupRoutes(conn.serverIp);
 
     status.value = VpnStatus.connected;
 
-    // Мониторинг — если xray упадёт сам
+    // Мониторинг падения xray
     _proxyProcess!.exitCode.then((code) {
       if (status.value == VpnStatus.connected) {
         final log = _tail(logBuf.toString(), 800);
-        status.value   = VpnStatus.error;
+        status.value    = VpnStatus.error;
         lastError.value = 'xray завершился (код $code)'
             '${log.isNotEmpty ? ":\n$log" : ""}'
             '${_xrayHint(code)}';
@@ -143,7 +157,271 @@ class VpnEngine {
     });
   }
 
-  Map<String, dynamic> _buildXrayConfig(VpnConnection conn) {
+  // ═══════════════════════════════════════════════════════
+  // NaiveProxy → naive SOCKS5 → tun2socks → TUN
+  // ═══════════════════════════════════════════════════════
+
+  Future<void> _startNaiveWithTun(VpnConnection conn) async {
+    final engineDir = await _engineDir();
+    final naivePath = p.join(engineDir, 'naive.exe');
+    final t2sPath   = p.join(engineDir, 'tun2socks.exe');
+
+    if (!File(naivePath).existsSync()) {
+      throw VpnEngineException(
+          'naive.exe не найден. Удалите папку engines и перезапустите.');
+    }
+    if (!File(t2sPath).existsSync()) {
+      throw VpnEngineException(
+          'tun2socks.exe не найден. Удалите папку engines и перезапустите.');
+    }
+
+    _vpnServerIp = conn.serverIp;
+
+    final cfgContent = _buildNaiveConfig(conn);
+    final cfgPath    = await _writeTempConfig('naive_config.json', cfgContent);
+    _tempConfigPath  = cfgPath;
+
+    final logBuf = StringBuffer();
+
+    // 1. Запускаем naive
+    _proxyProcess = await Process.start(
+      naivePath,
+      ['--config=$cfgPath'],
+      runInShell: false,
+    );
+    _activeEngine = EngineType.naive;
+    _proxyProcess!.stdout.transform(utf8.decoder).listen(logBuf.write);
+    _proxyProcess!.stderr.transform(utf8.decoder).listen(logBuf.write);
+
+    await Future.delayed(const Duration(milliseconds: 1500));
+    await _assertAlive(_proxyProcess!, 'naive.exe', logBuf);
+
+    // 2. tun2socks
+    await _startTun2socks(engineDir);
+
+    // 3. Маршруты
+    await _setupRoutes(conn.serverIp);
+
+    status.value = VpnStatus.connected;
+
+    _proxyProcess!.exitCode.then((code) {
+      if (status.value == VpnStatus.connected) {
+        final log = _tail(logBuf.toString(), 800);
+        status.value    = VpnStatus.error;
+        lastError.value = 'naive завершился (код $code)'
+            '${log.isNotEmpty ? ":\n$log" : ""}';
+        unawaited(_forceCleanup());
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // tun2socks — поднимает TUN адаптер поверх SOCKS5
+  // ═══════════════════════════════════════════════════════
+
+  Future<void> _startTun2socks(String engineDir) async {
+    final t2sPath   = p.join(engineDir, 'tun2socks.exe');
+    final wintunDll = p.join(engineDir, 'wintun.dll');
+
+    // wintun.dll должен лежать рядом с tun2socks.exe
+    // (tun2socks ищет его в рабочей директории)
+    final t2sLog = StringBuffer();
+
+    _tunProcess = await Process.start(
+      t2sPath,
+      [
+        '--device', 'tun://$_tunName',
+        '--proxy',  'socks5://127.0.0.1:${AppConstants.xraySocksPort}',
+        '--loglevel', 'info',
+      ],
+      workingDirectory: engineDir, // wintun.dll рядом
+      environment:      {...Platform.environment, 'WINTUN_DLL': wintunDll},
+      runInShell:       false,
+    );
+
+    _tunProcess!.stdout.transform(utf8.decoder).listen(t2sLog.write);
+    _tunProcess!.stderr.transform(utf8.decoder).listen(t2sLog.write);
+
+    // Ждём пока адаптер поднимется
+    await Future.delayed(const Duration(seconds: 3));
+    await _assertAlive(_tunProcess!, 'tun2socks.exe', t2sLog);
+
+    // Мониторинг
+    _tunProcess!.exitCode.then((code) {
+      if (status.value == VpnStatus.connected) {
+        final log = _tail(t2sLog.toString(), 600);
+        status.value    = VpnStatus.error;
+        lastError.value = 'tun2socks завершился (код $code)'
+            '${log.isNotEmpty ? ":\n$log" : ""}';
+        unawaited(_forceCleanup());
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // Маршруты — направляем весь трафик через TUN
+  // ═══════════════════════════════════════════════════════
+
+  Future<void> _setupRoutes(String serverIp) async {
+    try {
+      // 1. Сохраняем текущий шлюз
+      _originalGateway = await _getDefaultGateway();
+      debugPrint('Original gateway: $_originalGateway');
+
+      if (_originalGateway == null || _originalGateway!.isEmpty) {
+        throw VpnEngineException(
+            'Не удалось определить шлюз по умолчанию.\n'
+            'Проверьте сетевое подключение.');
+      }
+
+      // 2. Назначаем IP TUN адаптеру
+      await Process.run('netsh', [
+        'interface', 'ip', 'set', 'address',
+        'name=$_tunName', 'static', _tunAddr, _tunMask,
+      ], runInShell: false);
+
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // 3. Маршрут VPN-сервер → оригинальный шлюз (ОБЯЗАТЕЛЬНО, иначе петля)
+      await Process.run('route', [
+        'add', serverIp, 'mask', '255.255.255.255', _originalGateway!, 'metric', '1',
+      ], runInShell: false);
+
+      // 4. Весь остальной трафик → через TUN
+      //    Добавляем два маршрута 0.0.0.0/1 и 128.0.0.0/1 вместо 0.0.0.0/0
+      //    (они перекрывают дефолтный маршрут без его удаления)
+      await Process.run('route', [
+        'add', '0.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '1',
+      ], runInShell: false);
+      await Process.run('route', [
+        'add', '128.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '1',
+      ], runInShell: false);
+
+      // 5. DNS через TUN (чтобы не было DNS утечек)
+      await Process.run('netsh', [
+        'interface', 'ip', 'set', 'dns',
+        'name=$_tunName', 'static', '1.1.1.1',
+      ], runInShell: false);
+
+      _routesAdded = true;
+      debugPrint('Routes added via $_tunName (GW: $_originalGateway)');
+    } catch (e) {
+      // Если маршруты не добавились — откатываем и кидаем ошибку
+      await _removeRoutes();
+      rethrow;
+    }
+  }
+
+  Future<void> _removeRoutes() async {
+    if (!_routesAdded) return;
+    try {
+      final srv = _vpnServerIp;
+      final gw  = _originalGateway;
+
+      if (srv != null && gw != null) {
+        await Process.run('route', ['delete', srv, 'mask', '255.255.255.255'],
+            runInShell: false);
+      }
+      await Process.run('route', ['delete', '0.0.0.0',   'mask', '128.0.0.0'],
+          runInShell: false);
+      await Process.run('route', ['delete', '128.0.0.0', 'mask', '128.0.0.0'],
+          runInShell: false);
+
+      _routesAdded     = false;
+      _originalGateway = null;
+      _vpnServerIp     = null;
+      debugPrint('Routes removed');
+    } catch (e) {
+      debugPrint('_removeRoutes error (non-fatal): $e');
+    }
+  }
+
+  Future<String?> _getDefaultGateway() async {
+    // PowerShell: получаем активный шлюз по умолчанию
+    final r = await Process.run(
+      'powershell',
+      ['-NoProfile', '-Command',
+       '(Get-NetRoute -DestinationPrefix "0.0.0.0/0" | '
+       'Sort-Object -Property RouteMetric | '
+       'Select-Object -First 1).NextHop'],
+      runInShell: false,
+    );
+    return r.stdout.toString().trim().isEmpty ? null : r.stdout.toString().trim();
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // AmneziaWG → полноценный WireGuard туннель
+  // ═══════════════════════════════════════════════════════
+
+  Future<void> _startAwg(VpnConnection conn) async {
+    if (!File(_awgExePath).existsSync()) {
+      throw VpnEngineException(
+          'AmneziaWG не установлен.\n'
+          'Перезапустите приложение — установка произойдёт автоматически.');
+    }
+
+    final confText = (conn.configJson != null &&
+            conn.configJson!.trim().isNotEmpty)
+        ? conn.configJson!
+        : _buildAwgConfig(conn);
+
+    final tunnelName = 'MilkyVPN${conn.id}';
+    _awgTunnelName   = tunnelName;
+
+    final appDir   = await getApplicationSupportDirectory();
+    final confFile = File(p.join(appDir.path, '$tunnelName.conf'));
+    await confFile.writeAsString(confText, flush: true);
+    _tempConfigPath = confFile.path;
+
+    // Убираем старый туннель (игнорируем ошибку)
+    await _runHidden(_awgExePath, ['/uninstalltunnelservice', tunnelName]);
+    await Future.delayed(const Duration(milliseconds: 800));
+
+    // Устанавливаем туннель
+    final r = await _runHidden(_awgExePath, ['/installtunnelservice', confFile.path]);
+    if (r.exitCode != 0) {
+      final err = '${r.stdout}\n${r.stderr}'.trim();
+      throw VpnEngineException(
+          'AWG: ошибка установки туннеля (код ${r.exitCode})\n$err'
+          '${err.toLowerCase().contains('access') ? "\n⚠️ Запустите от имени Администратора!" : ""}');
+    }
+
+    await Future.delayed(const Duration(seconds: 3));
+
+    final scName = 'AmneziaWGTunnel\$$tunnelName';
+    final sc     = await Process.run('sc', ['query', scName], runInShell: true);
+    final scOut  = sc.stdout.toString();
+
+    if (!scOut.contains('RUNNING') && !scOut.contains('START_PENDING')) {
+      throw VpnEngineException(
+          'AWG туннель не запустился.\n'
+          'Убедитесь что приложение запущено от Администратора.\n'
+          'SC: $scOut');
+    }
+
+    _activeEngine = EngineType.awg;
+    status.value  = VpnStatus.connected;
+    _monitorAwg(tunnelName);
+  }
+
+  void _monitorAwg(String tunnelName) {
+    Future.delayed(const Duration(seconds: 5), () async {
+      if (status.value != VpnStatus.connected || _activeEngine != EngineType.awg) return;
+      try {
+        final r = await Process.run(
+            'sc', ['query', 'AmneziaWGTunnel\$$tunnelName'], runInShell: true);
+        if (!r.stdout.toString().contains('RUNNING')) {
+          status.value    = VpnStatus.error;
+          lastError.value = 'AWG туннель остановился неожиданно';
+          unawaited(_forceCleanup());
+          return;
+        }
+      } catch (_) {}
+      _monitorAwg(tunnelName);
+    });
+  }
+
+  String _buildXrayConfig(VpnConnection conn) {
     final outbound = <String, dynamic>{};
 
     if (conn.protocol == Protocol.vlessReality) {
@@ -187,8 +465,8 @@ class VpnEngine {
       };
     }
 
-    return {
-      'log': {'loglevel': 'info'},
+    return jsonEncode({
+      'log': {'loglevel': 'warning'},
       'inbounds': [
         {
           'tag':      'socks',
@@ -197,192 +475,42 @@ class VpnEngine {
           'protocol': 'socks',
           'settings': {'auth': 'noauth', 'udp': true},
         },
-        {
-          'tag':      'http',
-          'listen':   '127.0.0.1',
-          'port':     AppConstants.xraySocksPort + 1,
-          'protocol': 'http',
-        },
       ],
       'outbounds': [
         {...outbound, 'tag': 'proxy'},
-        {'tag': 'direct',  'protocol': 'freedom'},
-        {'tag': 'block',   'protocol': 'blackhole'},
+        {'tag': 'direct', 'protocol': 'freedom'},
+        {'tag': 'block',  'protocol': 'blackhole'},
       ],
       'routing': {
         'domainStrategy': 'IPIfNonMatch',
         'rules': [
-          // VPN-сервер — напрямую (иначе петля)
+          // VPN-сервер — напрямую (иначе петля через TUN)
           {'type': 'field', 'ip': [conn.serverIp], 'outboundTag': 'direct'},
           // Локальные сети — напрямую
           {'type': 'field', 'ip': ['geoip:private'], 'outboundTag': 'direct'},
-          // Всё остальное — через прокси
+          // Всё остальное — через VPN
           {'type': 'field', 'network': 'tcp,udp', 'outboundTag': 'proxy'},
         ],
       },
-    };
-  }
-
-  String _xrayHint(int code) {
-    switch (code) {
-      case -1073741515: return '\n⚠️ Установите Visual C++ Redistributable 2019 (x64)';
-      case 1:           return '\n⚠️ Проверьте UUID и publicKey сервера';
-      default:          return '';
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // NaiveProxy → naive.exe SOCKS5 + system proxy
-  // ═══════════════════════════════════════════════════════
-
-  Future<void> _startNaive(VpnConnection conn) async {
-    final engineDir  = await _engineDir();
-    final naivePath  = p.join(engineDir, 'naive.exe');
-
-    if (!File(naivePath).existsSync()) {
-      throw VpnEngineException(
-          'naive.exe не найден. Удалите папку engines и перезапустите.');
-    }
-
-    final cfgContent = _buildNaiveConfig(conn);
-    final cfgPath    = await _writeTempConfig('naive_config.json', cfgContent);
-    _tempConfigPath  = cfgPath;
-
-    final logBuf = StringBuffer();
-
-    _proxyProcess = await Process.start(
-      naivePath,
-      ['--config=$cfgPath'],
-      runInShell: false,
-    );
-    _activeEngine = EngineType.naive;
-
-    _proxyProcess!.stdout.transform(utf8.decoder).listen(logBuf.write);
-    _proxyProcess!.stderr.transform(utf8.decoder).listen(logBuf.write);
-
-    await Future.delayed(const Duration(milliseconds: 1500));
-    await _assertAlive(_proxyProcess!, 'naive.exe', logBuf);
-
-    await _setSystemProxy('127.0.0.1', AppConstants.xraySocksPort);
-
-    status.value = VpnStatus.connected;
-
-    _proxyProcess!.exitCode.then((code) {
-      if (status.value == VpnStatus.connected) {
-        final log = _tail(logBuf.toString(), 800);
-        status.value   = VpnStatus.error;
-        lastError.value = 'naive завершился (код $code)'
-            '${log.isNotEmpty ? ":\n$log" : ""}';
-        unawaited(_forceCleanup());
-      }
     });
   }
 
   String _buildNaiveConfig(VpnConnection conn) {
-    // config_json из БД уже содержит правильный порт (2096 или 8443)
     if (conn.configJson != null && conn.configJson!.trim().startsWith('{')) {
       try {
         final cfg = jsonDecode(conn.configJson!) as Map<String, dynamic>;
-        // Перенаправляем listen на наш локальный SOCKS5 порт
         cfg['listen'] = 'socks://127.0.0.1:${AppConstants.xraySocksPort}';
         cfg.remove('log');
         return jsonEncode(cfg);
       } catch (_) {}
     }
-
-    // Fallback — строим из полей
     final naivePort  = conn.connType == ConnectionType.cascade ? 8443 : 2096;
     final serverHost = conn.connType == ConnectionType.cascade
         ? 'ru.milkyims.com'
         : conn.serverIp;
-    final pass = conn.password ?? '';
     return jsonEncode({
       'listen': 'socks://127.0.0.1:${AppConstants.xraySocksPort}',
-      'proxy':  'https://admin:$pass@$serverHost:$naivePort',
-    });
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // AmneziaWG → /installtunnelservice (auto-install MSI if needed)
-  // ═══════════════════════════════════════════════════════
-
-  Future<void> _startAwg(VpnConnection conn) async {
-    // AWG должен быть установлен ещё на этапе SetupScreen
-    if (!File(_awgExePath).existsSync()) {
-      throw VpnEngineException(
-          'AmneziaWG не установлен.\n'
-          'Перезапустите приложение — установка произойдёт автоматически.');
-    }
-
-    // Конфиг: берём из БД или строим вручную
-    final confText = (conn.configJson != null &&
-            conn.configJson!.trim().isNotEmpty)
-        ? conn.configJson!
-        : _buildAwgConfig(conn);
-
-    // Имя туннеля: только ASCII без пробелов, ≤ 32 символа
-    final tunnelName = 'MilkyVPN${conn.id}';
-    _awgTunnelName   = tunnelName;
-
-    // Пишем конфиг во временный файл (путь без пробелов)
-    final appDir   = await getApplicationSupportDirectory();
-    final confFile = File(p.join(appDir.path, '$tunnelName.conf'));
-    await confFile.writeAsString(confText, flush: true);
-    _tempConfigPath = confFile.path;
-
-    // Удаляем старый туннель с таким же именем (игнорируем ошибку)
-    await _runHidden(_awgExePath, ['/uninstalltunnelservice', tunnelName]);
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    // Устанавливаем туннельный сервис (нет GUI окна)
-    final r = await _runHidden(
-        _awgExePath, ['/installtunnelservice', confFile.path]);
-
-    if (r.exitCode != 0) {
-      final err = '${r.stdout}\n${r.stderr}'.trim();
-      throw VpnEngineException(
-          'AWG: ошибка установки туннеля (код ${r.exitCode})\n$err'
-          '${err.toLowerCase().contains('access') ? "\n⚠️ Запустите от имени Администратора!" : ""}');
-    }
-
-    // Ждём пока сервис запустится
-    await Future.delayed(const Duration(seconds: 3));
-
-    // Проверяем статус Windows Service
-    final scName = 'AmneziaWGTunnel\$$tunnelName';
-    final sc     = await Process.run('sc', ['query', scName], runInShell: true);
-    final scOut  = sc.stdout.toString();
-
-    if (!scOut.contains('RUNNING') && !scOut.contains('START_PENDING')) {
-      throw VpnEngineException(
-          'AWG туннель не запустился.\n'
-          'Убедитесь, что приложение запущено от Администратора.\n'
-          'SC: $scOut');
-    }
-
-    _activeEngine = EngineType.awg;
-    status.value  = VpnStatus.connected;
-
-    // Периодически проверяем что сервис жив
-    _monitorAwg(tunnelName);
-  }
-
-  void _monitorAwg(String tunnelName) {
-    Future.delayed(const Duration(seconds: 5), () async {
-      if (status.value != VpnStatus.connected ||
-          _activeEngine != EngineType.awg) return;
-      try {
-        final r = await Process.run(
-            'sc', ['query', 'AmneziaWGTunnel\$$tunnelName'],
-            runInShell: true);
-        if (!r.stdout.toString().contains('RUNNING')) {
-          status.value   = VpnStatus.error;
-          lastError.value = 'AWG туннель остановился неожиданно';
-          unawaited(_forceCleanup());
-          return;
-        }
-      } catch (_) {}
-      _monitorAwg(tunnelName); // рекурсивно
+      'proxy':  'https://admin:${conn.password ?? ""}@$serverHost:$naivePort',
     });
   }
 
@@ -413,115 +541,34 @@ class VpnEngine {
         'PersistentKeepalive = 25\n';
   }
 
-  // ═══════════════════════════════════════════════════════
-  // System proxy — set / restore
-  // ═══════════════════════════════════════════════════════
-
-  Future<void> _setSystemProxy(String host, int port) async {
-    if (!Platform.isWindows) return;
-
-    try {
-      final proxyStr = 'socks=$host:$port';
-
-      // 1. WinHTTP (используется системой, Node, .NET, PowerShell)
-      await Process.run(
-          'netsh', ['winhttp', 'set', 'proxy', proxyStr],
-          runInShell: false);
-
-      // 2. WinInet / IE реестр (браузеры: Chrome, Edge, IE)
-      const regKey =
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings';
-      await Process.run(
-          'reg',
-          ['add', regKey, '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', '1', '/f'],
-          runInShell: false);
-      await Process.run(
-          'reg',
-          ['add', regKey, '/v', 'ProxyServer', '/t', 'REG_SZ', '/d', proxyStr, '/f'],
-          runInShell: false);
-      await Process.run(
-          'reg',
-          ['add', regKey, '/v', 'ProxyOverride', '/t', 'REG_SZ',
-           '/d', '<local>;127.*;10.*;172.16.*;192.168.*', '/f'],
-          runInShell: false);
-
-      // 3. Уведомляем WinInet об изменении
-      await _refreshWinInet();
-
-      _systemProxyWasSet = true;
-      debugPrint('System proxy SET: $proxyStr');
-    } catch (e) {
-      debugPrint('_setSystemProxy error (non-fatal): $e');
-    }
-  }
-
-  Future<void> _restoreSystemProxy() async {
-    if (!Platform.isWindows || !_systemProxyWasSet) return;
-    try {
-      // 1. Сбрасываем WinHTTP
-      await Process.run(
-          'netsh', ['winhttp', 'reset', 'proxy'],
-          runInShell: false);
-
-      // 2. Выключаем IE/WinInet прокси в реестре
-      const regKey =
-          r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings';
-      await Process.run(
-          'reg',
-          ['add', regKey, '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', '0', '/f'],
-          runInShell: false);
-
-      // 3. Уведомляем WinInet
-      await _refreshWinInet();
-
-      _systemProxyWasSet = false;
-      debugPrint('System proxy RESTORED');
-    } catch (e) {
-      debugPrint('_restoreSystemProxy error: $e');
-    }
-  }
-
-  /// Заставляет Windows применить новые настройки прокси без перезагрузки
-  Future<void> _refreshWinInet() async {
-    // InternetSetOption(INTERNET_OPTION_SETTINGS_CHANGED=39, INTERNET_OPTION_REFRESH=37)
-    // Используем EncodedCommand чтобы не иметь проблем с экранированием
-    // Команда закодирована в Base64 UTF-16LE:
-    //   Add-Type -TypeDefinition '...' -ErrorAction SilentlyContinue
-    //   [WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0)
-    //   [WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0)
-    // Вместо Add-Type используем более простой подход через rundll32
-    try {
-      // Самый простой способ — rundll32 для уведомления WinInet
-      await Process.run(
-        'rundll32.exe',
-        ['wininet.dll', 'InternetSetOption'],
-        runInShell: false,
-      );
-    } catch (e) {
-      debugPrint('_refreshWinInet: $e');
+  String _xrayHint(int code) {
+    switch (code) {
+      case -1073741515: return '\n⚠️ Установите Visual C++ Redistributable 2019 x64';
+      case 1:           return '\n⚠️ Проверьте UUID и publicKey сервера';
+      default:          return '';
     }
   }
 
   // ═══════════════════════════════════════════════════════
-  // Cleanup — guaranteed to run on disconnect or crash
+  // Cleanup — гарантированный откат
   // ═══════════════════════════════════════════════════════
 
   Future<void> _forceCleanup() async {
-    // 1. Восстанавливаем системный прокси
-    await _restoreSystemProxy();
+    // 1. Убираем маршруты — ПЕРВЫМ ДЕЛОМ, пока адаптер ещё жив
+    await _removeRoutes();
 
-    // 2. Удаляем AWG туннельный сервис
-    if (_activeEngine == EngineType.awg && _awgTunnelName != null) {
+    // 2. Убиваем tun2socks
+    if (_tunProcess != null) {
       try {
-        if (File(_awgExePath).existsSync()) {
-          await _runHidden(
-              _awgExePath, ['/uninstalltunnelservice', _awgTunnelName!]);
-        }
+        _tunProcess!.kill();
+        await _tunProcess!.exitCode
+            .timeout(const Duration(seconds: 3))
+            .catchError((_) => -1);
       } catch (_) {}
-      _awgTunnelName = null;
+      _tunProcess = null;
     }
 
-    // 3. Убиваем прокси-процесс (xray / naive)
+    // 3. Убиваем прокси (xray / naive)
     if (_proxyProcess != null) {
       try {
         _proxyProcess!.kill();
@@ -532,11 +579,21 @@ class VpnEngine {
       _proxyProcess = null;
     }
 
-    // 4. Удаляем временный конфиг
+    // 4. Удаляем AWG туннель
+    if (_activeEngine == EngineType.awg && _awgTunnelName != null) {
+      try {
+        if (File(_awgExePath).existsSync()) {
+          await _runHidden(_awgExePath, ['/uninstalltunnelservice', _awgTunnelName!]);
+        }
+      } catch (_) {}
+      _awgTunnelName = null;
+    }
+
+    // 5. Удаляем временный конфиг
     if (_tempConfigPath != null) {
       try {
         final f = File(_tempConfigPath!);
-        if (f.existsSync()) await f.delete();
+        if (f.existsSync()) f.deleteSync();
       } catch (_) {}
       _tempConfigPath = null;
     }
@@ -548,22 +605,19 @@ class VpnEngine {
   // Helpers
   // ═══════════════════════════════════════════════════════
 
-  /// Проверяет что процесс ещё жив; если упал — бросает исключение с логом
   Future<void> _assertAlive(Process proc, String name, StringBuffer buf) async {
     try {
-      final code = await proc.exitCode
-          .timeout(const Duration(milliseconds: 300));
-      final log = _tail(buf.toString(), 1000);
+      final code = await proc.exitCode.timeout(const Duration(milliseconds: 400));
+      final log  = _tail(buf.toString(), 1000);
       throw VpnEngineException(
         '$name упал сразу после запуска (код $code)'
         '${log.isNotEmpty ? ":\n$log" : ""}',
       );
     } on TimeoutException {
-      // Хорошо — процесс ещё работает
+      // Хорошо — процесс живёт
     }
   }
 
-  /// Запускает процесс и ждёт завершения (без GUI-окна)
   Future<ProcessResult> _runHidden(String exe, List<String> args) =>
       Process.run(exe, args, runInShell: false);
 
@@ -572,8 +626,7 @@ class VpnEngine {
     return s.length > maxLen ? '...' + s.substring(s.length - maxLen) : s;
   }
 
-  Future<String> _engineDir() =>
-      EngineDownloader.instance.enginesDir; // returns Future<String>
+  Future<String> _engineDir() => EngineDownloader.instance.enginesDir;
 
   Future<String> _writeTempConfig(String name, String content) async {
     final appDir = await getApplicationSupportDirectory();
@@ -581,7 +634,7 @@ class VpnEngine {
     await file.writeAsString(content, flush: true);
     return file.path;
   }
-} // end VpnEngine
+}
 
 class VpnEngineException implements Exception {
   final String message;

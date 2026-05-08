@@ -1,12 +1,13 @@
 // Engine downloader — downloads VPN binaries on first launch
 //
 // Downloads (in order):
-//   1. Xray-core zip → xray.exe + wintun.dll + geoip.dat + geosite.dat
-//   2. NaiveProxy zip → naive.exe
-//   3. AmneziaWG MSI → silent install → amneziawg.exe
+//   1. Xray-core zip  → xray.exe + wintun.dll + geoip.dat + geosite.dat
+//   2. tun2socks zip  → tun2socks.exe  (нужен для TUN-режима VLESS/Naive)
+//   3. NaiveProxy zip → naive.exe
+//   4. AmneziaWG MSI  → silent install → amneziawg.exe
 //
-// Each download has multiple fallback mirrors + 3 retries per mirror.
-// Timeout per attempt: 60 seconds.
+// Each download has multiple fallback mirrors + 2 retries per mirror.
+// Timeout per attempt: 90 seconds.
 
 import 'dart:async';
 import 'dart:io';
@@ -29,6 +30,14 @@ class EngineDownloader {
     'https://gh.idayer.com/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
     'https://mirror.ghproxy.com/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
     'https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
+  ];
+
+  // tun2socks v2.6.0 — нужен для TUN-режима (VLESS/Naive)
+  static const _tun2socksUrls = [
+    'https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
+    'https://gh.idayer.com/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
+    'https://mirror.ghproxy.com/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
+    'https://ghproxy.net/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
   ];
 
   // NaiveProxy v148 — primary: GitHub, fallback: ghproxy
@@ -69,7 +78,7 @@ class EngineDownloader {
   /// Returns true when all required binaries + AWG are present.
   Future<bool> areEnginesReady() async {
     final dir = await enginesDir;
-    for (final name in ['xray.exe', 'naive.exe', 'wintun.dll']) {
+    for (final name in ['xray.exe', 'naive.exe', 'wintun.dll', 'tun2socks.exe']) {
       if (!File(p.join(dir, name)).existsSync()) return false;
     }
     // AWG is optional on first check — installed separately
@@ -116,13 +125,36 @@ class EngineDownloader {
       }
       progress.value = 0.35;
 
-      // ── Step 2: NaiveProxy (30%) ─────────────────────────────────────────
+      // ── Step 2: tun2socks (20%) ──────────────────────────────────────────
+      if (!File(p.join(dir, 'tun2socks.exe')).existsSync()) {
+        final bytes = await _downloadWithFallback(
+          label: 'tun2socks',
+          urls:  _tun2socksUrls,
+          progressBase: 0.35,
+          progressRange: 0.20,
+        );
+        _status('Распаковка tun2socks...');
+        final archive = await compute(_decodeZip, bytes);
+        for (final f in archive) {
+          final n = f.name.toLowerCase();
+          if (n.endsWith('tun2socks.exe') || n.endsWith('tun2socks-windows-amd64.exe')) {
+            _write(f, dir, 'tun2socks.exe');
+            break;
+          }
+        }
+        _status('tun2socks: ОК');
+      } else {
+        _status('tun2socks: уже установлен');
+      }
+      progress.value = 0.55;
+
+      // ── Step 3: NaiveProxy (15%) ─────────────────────────────────────────
       if (!File(p.join(dir, 'naive.exe')).existsSync()) {
         final bytes = await _downloadWithFallback(
           label: 'NaiveProxy',
           urls:  _naiveUrls,
-          progressBase: 0.35,
-          progressRange: 0.30,
+          progressBase: 0.55,
+          progressRange: 0.15,
         );
         _status('Распаковка NaiveProxy...');
         final archive = await compute(_decodeZip, bytes);
@@ -137,15 +169,15 @@ class EngineDownloader {
       } else {
         _status('NaiveProxy: уже установлен');
       }
-      progress.value = 0.65;
+      progress.value = 0.70;
 
-      // ── Step 3: AmneziaWG MSI (30%) ──────────────────────────────────────
+      // ── Step 4: AmneziaWG MSI (25%) ──────────────────────────────────────
       if (!isAwgInstalled) {
         final msiBytes = await _downloadWithFallback(
           label: 'AmneziaWG',
           urls:  _awgMsiUrls,
-          progressBase: 0.65,
-          progressRange: 0.25,
+          progressBase: 0.70,
+          progressRange: 0.20,
         );
 
         _status('Установка AmneziaWG...');
