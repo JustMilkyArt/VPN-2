@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
 
   # HTTP client
-  http: 1.5.0
+  http: ^1.2.2
 
   # State management
   provider: 6.1.5+1
@@ -34,6 +34,9 @@ dependencies:
 
   # Logging
   logging: ^1.3.0
+
+  # ZIP extraction (for downloading engine binaries)
+  archive: ^3.6.1
 
 dev_dependencies:
   flutter_test:

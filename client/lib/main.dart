@@ -5,7 +5,9 @@ import 'package:window_manager/window_manager.dart';
 import 'services/vpn_provider.dart';
 import 'services/tray_service.dart';
 import 'services/vpn_engine.dart';
+import 'services/engine_downloader.dart';
 import 'screens/home_screen.dart';
+import 'screens/setup_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,11 +30,15 @@ void main() async {
     });
   }
 
-  runApp(const MyApp());
+  // Check if engines are ready (first launch detection)
+  final enginesReady = await EngineDownloader.instance.areEnginesReady();
+
+  runApp(MyApp(needsSetup: !enginesReady));
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  final bool needsSetup;
+  const MyApp({super.key, required this.needsSetup});
 
   @override
   State<MyApp> createState() => _MyAppState();
@@ -82,7 +88,6 @@ class _MyAppState extends State<MyApp> with WindowListener {
       exit(0);
     };
 
-    // Keep tray in sync with VPN status
     VpnEngine.instance.status.addListener(() {
       final status = VpnEngine.instance.status.value;
       final connName = _vpnProvider.selectedConnection?.name;
@@ -90,12 +95,9 @@ class _MyAppState extends State<MyApp> with WindowListener {
     });
   }
 
-  // ── WindowListener: intercept close → minimize to tray ───────────────────
-
   @override
   void onWindowClose() async {
     if (Platform.isWindows) {
-      // Instead of closing, hide to tray
       await windowManager.hide();
     }
   }
@@ -108,7 +110,7 @@ class _MyAppState extends State<MyApp> with WindowListener {
         title: 'MilkyVPN',
         debugShowCheckedModeBanner: false,
         theme: _buildTheme(),
-        home: const HomeScreen(),
+        home: widget.needsSetup ? const SetupScreen() : const HomeScreen(),
       ),
     );
   }

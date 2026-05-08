@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../models/connection.dart';
 import '../utils/constants.dart';
+import 'engine_downloader.dart';
 
 enum EngineType { xray, awg, naive }
 
@@ -343,10 +344,8 @@ PersistentKeepalive = 25
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   Future<String> _engineDir() async {
-    final appDir = await getApplicationSupportDirectory();
-    final dir = Directory(p.join(appDir.path, 'engines'));
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir.path;
+    // Use same path as EngineDownloader so binaries are found correctly
+    return await EngineDownloader.instance.enginesDir;
   }
 
   Future<String> _writeTempConfig(String filename, String content) async {
