@@ -1,7 +1,10 @@
 // HomeScreen — main app window
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/connection.dart';
@@ -338,6 +341,9 @@ class _ConnectPanel extends StatelessWidget {
               const SizedBox(height: 28),
               // Status text
               _StatusText(status: prov.vpnStatus, error: prov.vpnError),
+              const SizedBox(height: 20),
+              // IP checker — показывает реальный IP когда подключено
+              if (prov.isConnected) const _IpChecker(),
               const SizedBox(height: 40),
             ],
           );
@@ -447,11 +453,11 @@ class _StatusText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (text, color) = switch (status) {
-      VpnStatus.connected    => ('Защищено', const Color(0xFF00D26A)),
-      VpnStatus.connecting   => ('Устанавливается соединение…', const Color(0xFF7B61FF)),
+      VpnStatus.connected     => ('Защищено', const Color(0xFF00D26A)),
+      VpnStatus.connecting    => ('Устанавливается соединение…', const Color(0xFF7B61FF)),
       VpnStatus.disconnecting => ('Отключение…', const Color(0xFFFF8A00)),
-      VpnStatus.error        => (error ?? 'Ошибка подключения', const Color(0xFFFF4D6D)),
-      VpnStatus.disconnected => ('Не защищено', Colors.white38),
+      VpnStatus.error         => (error ?? 'Ошибка подключения', const Color(0xFFFF4D6D)),
+      VpnStatus.disconnected  => ('Не защищено', Colors.white38),
     };
 
     return Text(
@@ -464,6 +470,165 @@ class _StatusText extends StatelessWidget {
             : FontWeight.w400,
       ),
       textAlign: TextAlign.center,
+    );
+  }
+}
+
+// ── IP Checker — показывает реальный IP после подключения ────────────────────
+// Помогает пользователю убедиться что VPN работает:
+//   ✅ Если IP не российский — VPN работает
+//   ❌ Если IP российский   — трафик не идёт через туннель
+
+class _IpChecker extends StatefulWidget {
+  const _IpChecker();
+
+  @override
+  State<_IpChecker> createState() => _IpCheckerState();
+}
+
+class _IpCheckerState extends State<_IpChecker> {
+  String? _ip;
+  String? _country;
+  bool    _loading = true;
+  bool    _isRu    = false;
+  Timer?  _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkIp();
+    // Автообновление каждые 30 секунд
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _checkIp());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkIp() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    try {
+      // ip-api.com — бесплатный, без ключа, возвращает JSON
+      final resp = await http
+          .get(Uri.parse('http://ip-api.com/json/?fields=query,country,countryCode'))
+          .timeout(const Duration(seconds: 8));
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        // Простой парсинг без dart:convert (уже импортирован http)
+        final body = resp.body;
+        final ip      = _extract(body, 'query');
+        final country = _extract(body, 'country');
+        final cc      = _extract(body, 'countryCode');
+        setState(() {
+          _ip      = ip;
+          _country = country;
+          _isRu    = cc == 'RU';
+          _loading = false;
+        });
+      } else {
+        setState(() { _ip = '—'; _loading = false; });
+      }
+    } catch (_) {
+      if (mounted) setState(() { _ip = 'Нет ответа'; _loading = false; });
+    }
+  }
+
+  // Простой regex-парсинг JSON без decode
+  String _extract(String json, String key) {
+    final re = RegExp('"$key"\\s*:\\s*"([^"]*)"');
+    return re.firstMatch(json)?.group(1) ?? '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 32),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: (_isRu
+                  ? const Color(0xFFFF4D6D)
+                  : const Color(0xFF00D26A))
+              .withValues(alpha: 0.25),
+        ),
+      ),
+      child: _loading
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 12, height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Color(0xFF4F8EF7),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Проверяю IP…',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            )
+          : Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  _isRu ? Icons.warning_amber_rounded : Icons.verified_rounded,
+                  size: 15,
+                  color: _isRu ? const Color(0xFFFF4D6D) : const Color(0xFF00D26A),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    _isRu
+                        ? '⚠️ Ваш IP: $_ip ($_country) — VPN не работает!'
+                        : 'IP: $_ip  •  $_country',
+                    style: TextStyle(
+                      color: _isRu
+                          ? const Color(0xFFFF4D6D)
+                          : Colors.white.withValues(alpha: 0.7),
+                      fontSize: 12,
+                      fontWeight: _isRu ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Кнопка копировать IP
+                GestureDetector(
+                  onTap: () {
+                    if (_ip != null && _ip != '—') {
+                      Clipboard.setData(ClipboardData(text: _ip!));
+                    }
+                  },
+                  child: Icon(
+                    Icons.copy_rounded,
+                    size: 13,
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                // Кнопка обновить
+                GestureDetector(
+                  onTap: _checkIp,
+                  child: Icon(
+                    Icons.refresh_rounded,
+                    size: 13,
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
