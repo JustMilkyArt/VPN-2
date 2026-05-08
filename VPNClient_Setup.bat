@@ -1,43 +1,49 @@
 @echo off
-:: VPN Client — One-click Setup
-:: Двойной клик → UAC → установка → запуск VPN
-:: Требования: Windows 10/11, интернет
+setlocal
+set LOG=%USERPROFILE%\vpnclient_setup.log
+set CS=%TEMP%\vpn_installer_%RANDOM%.cs
+set EXE=%TEMP%\vpn_installer_%RANDOM%.exe
 
-title VPN Client Setup
+echo [%TIME%] Starting > "%LOG%"
 
-:: ── Запрос прав администратора (UAC) ────────────────────────────────────────
-net session >nul 2>&1
-if %errorLevel% == 0 goto :ADMIN_OK
+:: Find csc.exe (C# compiler, built into Windows)
+set CSC=
+for %%d in (
+    "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+) do (
+    if exist %%d set CSC=%%~d
+)
 
-echo.
-echo  Запрос прав администратора...
-echo  (Нажмите "Да" в окне UAC)
-echo.
-
-:: Перезапускаем себя через PowerShell с UAC
-powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\"' -Verb RunAs"
-exit /b
-
-:ADMIN_OK
-:: ── Мы администратор, запускаем PowerShell скрипт ───────────────────────────
-
-set "SCRIPT_DIR=%~dp0"
-set "PS1=%SCRIPT_DIR%VPNClient_Setup.ps1"
-
-if not exist "%PS1%" (
-    echo.
-    echo  ОШИБКА: VPNClient_Setup.ps1 не найден!
-    echo  Убедитесь что .bat и .ps1 файлы находятся в одной папке.
-    echo.
-    pause
+if "%CSC%"=="" (
+    echo [%TIME%] ERROR: csc.exe not found >> "%LOG%"
+    msg * "C# compiler not found. Please install .NET Framework 4.5+"
     exit /b 1
 )
+echo [%TIME%] Compiler: %CSC% >> "%LOG%"
 
-:: Снимаем ограничение на выполнение скриптов и запускаем
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
-
-if %errorLevel% neq 0 (
-    echo.
-    echo  Установка завершилась с ошибкой. См. лог: %USERPROFILE%\vpnclient_setup.log
-    pause
+:: Download installer.cs from GitHub
+powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/JustMilkyArt/VPN-2/main/installer.cs' -OutFile '%CS%'" >nul 2>&1
+if not exist "%CS%" (
+    echo [%TIME%] ERROR: download failed >> "%LOG%"
+    msg * "Failed to download installer.cs from GitHub"
+    exit /b 1
 )
+echo [%TIME%] Download OK >> "%LOG%"
+
+:: Compile
+"%CSC%" /nologo /target:winexe /out:"%EXE%" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:Microsoft.CSharp.dll "%CS%" >> "%LOG%" 2>&1
+if not exist "%EXE%" (
+    echo [%TIME%] ERROR: compile failed >> "%LOG%"
+    msg * "Compile error - see %LOG%"
+    exit /b 1
+)
+echo [%TIME%] Compile OK >> "%LOG%"
+
+:: Run
+start "" "%EXE%"
+echo [%TIME%] Launched >> "%LOG%"
+
+:: Cleanup source (keep exe until it exits)
+del "%CS%" >nul 2>&1
+endlocal
