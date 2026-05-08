@@ -1,18 +1,5 @@
-# VPN Client Installer — Windows Forms GUI
-# PowerShell 5+, встроен в Windows 10/11
-
-# ── Сначала — перехват ЛЮБОЙ ошибки до GUI ───────────────────────────────────
-trap {
-    $msg = "FATAL: $_"
-    try { Add-Content "$env:USERPROFILE\vpnclient_setup.log" $msg -EA SilentlyContinue } catch {}
-    try {
-        Add-Type -AssemblyName System.Windows.Forms -EA SilentlyContinue
-        [System.Windows.Forms.MessageBox]::Show(
-            "Ошибка установщика:`n$_`n`nЛог: $env:USERPROFILE\vpnclient_setup.log",
-            "VPN Client — Ошибка", 0, 16)
-    } catch {}
-    exit 1
-}
+# VPN Client Installer
+# PowerShell 5+ / Windows Forms
 
 $ErrorActionPreference = 'Stop'
 $LOG = "$env:USERPROFILE\vpnclient_setup.log"
@@ -21,15 +8,11 @@ $LOG = "$env:USERPROFILE\vpnclient_setup.log"
 function L($m) {
     $line = "[$(Get-Date -f 'HH:mm:ss')] $m"
     Add-Content $LOG $line -EA SilentlyContinue
-    Write-Host $line
 }
 
 L "=== installer.ps1 started ==="
-L "PS Version: $($PSVersionTable.PSVersion)"
-L "User: $env:USERNAME"
-L "Dir: $(Get-Location)"
+L "PS: $($PSVersionTable.PSVersion)  User: $env:USERNAME"
 
-# ── Пути ─────────────────────────────────────────────────────────────────────
 $INSTALL = "$env:LOCALAPPDATA\VPNClient"
 $BIN     = "$INSTALL\bin"
 $PYDIR   = "$INSTALL\python"
@@ -38,6 +21,9 @@ $PYWEXE  = "$PYDIR\pythonw.exe"
 $PIPEXE  = "$PYDIR\Scripts\pip.exe"
 $MAINPY  = "$INSTALL\main.py"
 $GHRAW   = "https://raw.githubusercontent.com/JustMilkyArt/VPN-2/main"
+$PYZIP   = "https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip"
+$GETPIP  = "https://bootstrap.pypa.io/get-pip.py"
+$AWGMSI  = "https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi"
 
 $SOURCES = @(
     "main.py","config.py","requirements.txt",
@@ -47,31 +33,27 @@ $SOURCES = @(
     "ui/__init__.py","ui/main_window.py"
 )
 $BINS = @(
-    @{L="Xray-core (VLESS)"; U="https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-windows-64.zip";                                                                  E="xray.exe";                    D="$BIN\xray.exe"},
-    @{L="WinTUN driver";     U="https://www.wintun.net/builds/wintun-0.14.1.zip";                                                                                                    E="wintun/bin/amd64/wintun.dll"; D="$BIN\wintun.dll"},
-    @{L="tun2socks";         U="https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-windows-amd64.zip";                                                       E="tun2socks-windows-amd64.exe"; D="$BIN\tun2socks.exe"},
-    @{L="NaiveProxy";        U="https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip";                                 E="naive.exe";                   D="$BIN\naive.exe"}
+    @{N="Xray-core";  U="https://github.com/XTLS/Xray-core/releases/download/v25.4.30/Xray-windows-64.zip";                                                               E="xray.exe";                    D="$BIN\xray.exe"},
+    @{N="WinTUN";     U="https://www.wintun.net/builds/wintun-0.14.1.zip";                                                                                                 E="wintun/bin/amd64/wintun.dll"; D="$BIN\wintun.dll"},
+    @{N="tun2socks";  U="https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-windows-amd64.zip";                                                    E="tun2socks-windows-amd64.exe"; D="$BIN\tun2socks.exe"},
+    @{N="NaiveProxy"; U="https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip"; E="naive.exe";               D="$BIN\naive.exe"}
 )
-$AWGMSI  = "https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi"
-$PYZIP   = "https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip"
-$GETPIP  = "https://bootstrap.pypa.io/get-pip.py"
-$TOTAL   = $SOURCES.Count + $BINS.Count + 5
+$TOTAL = $SOURCES.Count + $BINS.Count + 5
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 function DL($url, $dest) {
     $dir = Split-Path $dest
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $wc = New-Object Net.WebClient
-    $wc.Headers.Add("User-Agent", "VPNClient/4.0")
+    $wc.Headers.Add("User-Agent","VPNClient/5")
     $wc.DownloadFile($url, $dest)
     $wc.Dispose()
 }
 
-function UnzipEntry($zip, $entry, $dest) {
+function UZE($zip, $entry, $dest) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $z     = [IO.Compression.ZipFile]::OpenRead($zip)
+    $z = [IO.Compression.ZipFile]::OpenRead($zip)
     $fname = ($entry -split '/')[-1]
-    $e     = $z.Entries | Where-Object { $_.FullName -eq $entry -or $_.Name -eq $fname } | Select-Object -First 1
+    $e = $z.Entries | Where-Object { $_.FullName -eq $entry -or $_.Name -eq $fname } | Select-Object -First 1
     if (-not $e) { $z.Dispose(); throw "Not in zip: $entry" }
     $dir = Split-Path $dest
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
@@ -79,366 +61,300 @@ function UnzipEntry($zip, $entry, $dest) {
     $z.Dispose()
 }
 
-function AwgOk { Test-Path "C:\Program Files\AmneziaWG\wireguard.exe" }
-
-# ── Windows Forms GUI ─────────────────────────────────────────────────────────
-L "Loading Windows Forms..."
+# --- Build GUI ---
+L "Loading WinForms..."
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 
-$form          = New-Object Windows.Forms.Form
-$form.Text     = "VPN Client — Установка"
-$form.Size     = New-Object Drawing.Size(500, 560)
-$form.StartPosition = "CenterScreen"
-$form.BackColor     = [Drawing.Color]::FromArgb(15, 17, 23)
-$form.ForeColor     = [Drawing.Color]::FromArgb(226, 232, 240)
+$form = New-Object Windows.Forms.Form
+$form.Text            = "VPN Client - Setup"
+$form.Size            = New-Object Drawing.Size(480, 520)
+$form.StartPosition   = "CenterScreen"
+$form.BackColor       = [Drawing.Color]::FromArgb(18, 20, 28)
+$form.ForeColor       = [Drawing.Color]::White
 $form.FormBorderStyle = "FixedSingle"
-$form.MaximizeBox   = $false
-$form.Font          = New-Object Drawing.Font("Segoe UI", 9)
+$form.MaximizeBox     = $false
+$form.Font            = New-Object Drawing.Font("Segoe UI", 9)
 
-L "Form created, adding controls..."
+# Title
+$t = New-Object Windows.Forms.Label
+$t.Text      = "VPN Client"
+$t.Font      = New-Object Drawing.Font("Segoe UI", 17, [Drawing.FontStyle]::Bold)
+$t.ForeColor = [Drawing.Color]::White
+$t.BackColor = [Drawing.Color]::Transparent
+$t.Size      = New-Object Drawing.Size(440, 34)
+$t.Location  = New-Object Drawing.Point(20, 18)
+$t.TextAlign = "MiddleCenter"
+$form.Controls.Add($t)
 
-# Иконка (замок через emoji label)
-$lblIcon          = New-Object Windows.Forms.Label
-$lblIcon.Text     = "🔒"
-$lblIcon.Font     = New-Object Drawing.Font("Segoe UI Emoji", 28)
-$lblIcon.Size     = New-Object Drawing.Size(460, 50)
-$lblIcon.Location = New-Object Drawing.Point(20, 18)
-$lblIcon.TextAlign = "MiddleCenter"
-$lblIcon.BackColor = [Drawing.Color]::Transparent
-$lblIcon.ForeColor = [Drawing.Color]::FromArgb(108, 99, 255)
-$form.Controls.Add($lblIcon)
+# Subtitle
+$sub = New-Object Windows.Forms.Label
+$sub.Text      = "VLESS Reality  |  AmneziaWG  |  NaiveProxy"
+$sub.Font      = New-Object Drawing.Font("Segoe UI", 8)
+$sub.ForeColor = [Drawing.Color]::FromArgb(120, 130, 150)
+$sub.BackColor = [Drawing.Color]::Transparent
+$sub.Size      = New-Object Drawing.Size(440, 18)
+$sub.Location  = New-Object Drawing.Point(20, 56)
+$sub.TextAlign = "MiddleCenter"
+$form.Controls.Add($sub)
 
-# Заголовок
-$lblTitle          = New-Object Windows.Forms.Label
-$lblTitle.Text     = "VPN Client"
-$lblTitle.Font     = New-Object Drawing.Font("Segoe UI", 16, [Drawing.FontStyle]::Bold)
-$lblTitle.Size     = New-Object Drawing.Size(460, 30)
-$lblTitle.Location = New-Object Drawing.Point(20, 72)
-$lblTitle.TextAlign = "MiddleCenter"
-$lblTitle.BackColor = [Drawing.Color]::Transparent
-$lblTitle.ForeColor = [Drawing.Color]::White
-$form.Controls.Add($lblTitle)
-
-# Подзаголовок
-$lblSub          = New-Object Windows.Forms.Label
-$lblSub.Text     = "VLESS Reality  ·  AmneziaWG  ·  NaiveProxy"
-$lblSub.Font     = New-Object Drawing.Font("Segoe UI", 8)
-$lblSub.Size     = New-Object Drawing.Size(460, 20)
-$lblSub.Location = New-Object Drawing.Point(20, 104)
-$lblSub.TextAlign = "MiddleCenter"
-$lblSub.BackColor = [Drawing.Color]::Transparent
-$lblSub.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
-$form.Controls.Add($lblSub)
-
-# Карточка статуса
-$card          = New-Object Windows.Forms.Panel
-$card.Size     = New-Object Drawing.Size(454, 80)
-$card.Location = New-Object Drawing.Point(23, 132)
-$card.BackColor = [Drawing.Color]::FromArgb(22, 27, 39)
+# Status card
+$card = New-Object Windows.Forms.Panel
+$card.Size      = New-Object Drawing.Size(440, 72)
+$card.Location  = New-Object Drawing.Point(20, 84)
+$card.BackColor = [Drawing.Color]::FromArgb(26, 30, 42)
 $form.Controls.Add($card)
 
-$lblStatus          = New-Object Windows.Forms.Label
-$lblStatus.Text     = "Подготовка..."
-$lblStatus.Font     = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
-$lblStatus.Size     = New-Object Drawing.Size(410, 22)
-$lblStatus.Location = New-Object Drawing.Point(16, 10)
-$lblStatus.BackColor = [Drawing.Color]::Transparent
-$lblStatus.ForeColor = [Drawing.Color]::White
-$card.Controls.Add($lblStatus)
+$lblS = New-Object Windows.Forms.Label
+$lblS.Text      = "Preparing..."
+$lblS.Font      = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$lblS.ForeColor = [Drawing.Color]::White
+$lblS.BackColor = [Drawing.Color]::Transparent
+$lblS.Size      = New-Object Drawing.Size(400, 22)
+$lblS.Location  = New-Object Drawing.Point(16, 8)
+$card.Controls.Add($lblS)
 
-$lblDetail          = New-Object Windows.Forms.Label
-$lblDetail.Text     = "Инициализация..."
-$lblDetail.Font     = New-Object Drawing.Font("Segoe UI", 8)
-$lblDetail.Size     = New-Object Drawing.Size(410, 18)
-$lblDetail.Location = New-Object Drawing.Point(16, 34)
-$lblDetail.BackColor = [Drawing.Color]::Transparent
-$lblDetail.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
-$card.Controls.Add($lblDetail)
+$lblD = New-Object Windows.Forms.Label
+$lblD.Text      = "Initializing..."
+$lblD.Font      = New-Object Drawing.Font("Segoe UI", 8)
+$lblD.ForeColor = [Drawing.Color]::FromArgb(120, 130, 150)
+$lblD.BackColor = [Drawing.Color]::Transparent
+$lblD.Size      = New-Object Drawing.Size(400, 18)
+$lblD.Location  = New-Object Drawing.Point(16, 32)
+$card.Controls.Add($lblD)
 
-# Прогресс-бар
-$pb          = New-Object Windows.Forms.ProgressBar
-$pb.Size     = New-Object Drawing.Size(410, 10)
-$pb.Location = New-Object Drawing.Point(16, 58)
+$pb = New-Object Windows.Forms.ProgressBar
+$pb.Size     = New-Object Drawing.Size(400, 10)
+$pb.Location = New-Object Drawing.Point(16, 54)
 $pb.Maximum  = 100
 $pb.Value    = 0
 $pb.Style    = "Continuous"
 $card.Controls.Add($pb)
 
-# Процент
-$lblPct          = New-Object Windows.Forms.Label
-$lblPct.Text     = "0%"
-$lblPct.Font     = New-Object Drawing.Font("Segoe UI", 7)
-$lblPct.Size     = New-Object Drawing.Size(50, 16)
-$lblPct.Location = New-Object Drawing.Point(400, 218)
-$lblPct.BackColor = [Drawing.Color]::Transparent
-$lblPct.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
-$lblPct.TextAlign = "MiddleRight"
-$form.Controls.Add($lblPct)
-
-# Шаги
-$stepNames = @("Код","Python","Пакеты","VPN","AWG")
-$stepLabels = @()
-$stepDots   = @()
-$sx = 23
+# Step dots
+$stepNames = @("Code","Python","Deps","VPN","AWG")
+$dots = @()
 for ($i = 0; $i -lt 5; $i++) {
-    $dot          = New-Object Windows.Forms.Label
-    $dot.Text     = "○"
-    $dot.Font     = New-Object Drawing.Font("Segoe UI", 12)
-    $dot.Size     = New-Object Drawing.Size(88, 22)
-    $dot.Location = New-Object Drawing.Point($sx + ($i*88), 230)
-    $dot.TextAlign = "MiddleCenter"
-    $dot.BackColor = [Drawing.Color]::Transparent
-    $dot.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
-    $form.Controls.Add($dot)
-    $stepDots += $dot
+    $d = New-Object Windows.Forms.Label
+    $d.Text      = "o"
+    $d.Font      = New-Object Drawing.Font("Segoe UI", 11)
+    $d.Size      = New-Object Drawing.Size(88, 22)
+    $d.Location  = New-Object Drawing.Point(20 + $i*88, 170)
+    $d.TextAlign = "MiddleCenter"
+    $d.BackColor = [Drawing.Color]::Transparent
+    $d.ForeColor = [Drawing.Color]::FromArgb(80, 90, 110)
+    $form.Controls.Add($d)
+    $dots += $d
 
-    $lbl          = New-Object Windows.Forms.Label
-    $lbl.Text     = $stepNames[$i]
-    $lbl.Font     = New-Object Drawing.Font("Segoe UI", 7)
-    $lbl.Size     = New-Object Drawing.Size(88, 16)
-    $lbl.Location = New-Object Drawing.Point($sx + ($i*88), 252)
-    $lbl.TextAlign = "MiddleCenter"
-    $lbl.BackColor = [Drawing.Color]::Transparent
-    $lbl.ForeColor = [Drawing.Color]::FromArgb(100, 116, 139)
-    $form.Controls.Add($lbl)
-    $stepLabels += $lbl
+    $n2 = New-Object Windows.Forms.Label
+    $n2.Text      = $stepNames[$i]
+    $n2.Font      = New-Object Drawing.Font("Segoe UI", 7)
+    $n2.Size      = New-Object Drawing.Size(88, 16)
+    $n2.Location  = New-Object Drawing.Point(20 + $i*88, 192)
+    $n2.TextAlign = "MiddleCenter"
+    $n2.BackColor = [Drawing.Color]::Transparent
+    $n2.ForeColor = [Drawing.Color]::FromArgb(80, 90, 110)
+    $form.Controls.Add($n2)
 }
 
-# Лог
-$logBox              = New-Object Windows.Forms.RichTextBox
-$logBox.Size         = New-Object Drawing.Size(454, 190)
-$logBox.Location     = New-Object Drawing.Point(23, 276)
-$logBox.BackColor    = [Drawing.Color]::FromArgb(13, 16, 24)
-$logBox.ForeColor    = [Drawing.Color]::FromArgb(45, 122, 45)
-$logBox.Font         = New-Object Drawing.Font("Consolas", 8)
-$logBox.ReadOnly     = $true
-$logBox.BorderStyle  = "None"
-$logBox.ScrollBars   = "Vertical"
-$form.Controls.Add($logBox)
+# Log box
+$rtb = New-Object Windows.Forms.RichTextBox
+$rtb.Size        = New-Object Drawing.Size(440, 210)
+$rtb.Location    = New-Object Drawing.Point(20, 218)
+$rtb.BackColor   = [Drawing.Color]::FromArgb(12, 14, 20)
+$rtb.ForeColor   = [Drawing.Color]::FromArgb(50, 200, 80)
+$rtb.Font        = New-Object Drawing.Font("Consolas", 8)
+$rtb.ReadOnly    = $true
+$rtb.BorderStyle = "None"
+$rtb.ScrollBars  = "Vertical"
+$form.Controls.Add($rtb)
 
-# Кнопка запуска
-$btn              = New-Object Windows.Forms.Button
-$btn.Text         = "🚀  Открыть VPN Client"
-$btn.Font         = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
-$btn.Size         = New-Object Drawing.Size(454, 44)
-$btn.Location     = New-Object Drawing.Point(23, 478)
-$btn.BackColor    = [Drawing.Color]::FromArgb(108, 99, 255)
-$btn.ForeColor    = [Drawing.Color]::White
-$btn.FlatStyle    = "Flat"
+# Button
+$btn = New-Object Windows.Forms.Button
+$btn.Text      = "Open VPN Client"
+$btn.Font      = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$btn.Size      = New-Object Drawing.Size(440, 42)
+$btn.Location  = New-Object Drawing.Point(20, 442)
+$btn.BackColor = [Drawing.Color]::FromArgb(99, 90, 240)
+$btn.ForeColor = [Drawing.Color]::White
+$btn.FlatStyle = "Flat"
 $btn.FlatAppearance.BorderSize = 0
-$btn.Enabled      = $false
-$btn.Cursor       = [Windows.Forms.Cursors]::Hand
+$btn.Enabled   = $false
+$btn.Cursor    = [Windows.Forms.Cursors]::Hand
 $form.Controls.Add($btn)
 
-L "All controls added — showing window next"
+L "Form built OK"
 
-# ── UI helpers (вызов из фонового потока) ────────────────────────────────────
-function UI([scriptblock]$sb) {
-    $form.Invoke([Action]$sb)
+# --- Helpers called from background thread ---
+function UI([scriptblock]$sb) { $form.Invoke([Action]$sb) | Out-Null }
+
+function SS($title, $detail) {
+    UI { $lblS.Text = $title; $lblD.Text = $detail }
 }
-
-$script:n = 0
-
-function SetStatus($title, $detail = "") {
-    UI { $lblStatus.Text = $title; $lblDetail.Text = $detail }
-}
-function AddLog($msg, [Drawing.Color]$color = [Drawing.Color]::FromArgb(45,122,45)) {
+function AL($msg, $col) {
     L $msg
+    if (-not $col) { $col = [Drawing.Color]::FromArgb(50,200,80) }
     UI {
-        $logBox.SelectionStart  = $logBox.TextLength
-        $logBox.SelectionLength = 0
-        $logBox.SelectionColor  = $color
-        $logBox.AppendText("$msg`n")
-        $logBox.ScrollToCaret()
+        $rtb.SelectionStart  = $rtb.TextLength
+        $rtb.SelectionLength = 0
+        $rtb.SelectionColor  = $col
+        $rtb.AppendText("$msg`n")
+        $rtb.ScrollToCaret()
     }
 }
-function SetStep($i, $state) {
-    $sym   = @{active="◉"; done="●"; error="●"}[$state]
-    $color = @{
-        active = [Drawing.Color]::FromArgb(245,158,11)
-        done   = [Drawing.Color]::FromArgb(34,197,94)
-        error  = [Drawing.Color]::FromArgb(239,68,68)
-    }[$state]
-    UI { $stepDots[$i].Text = $sym; $stepDots[$i].ForeColor = $color }
-}
-function SetProg($done) {
+function SP($done) {
     $pct = [int]($done / $TOTAL * 100)
-    UI { $pb.Value = [Math]::Min($pct,100); $lblPct.Text = "$pct%" }
+    UI { $pb.Value = [Math]::Min($pct, 100) }
 }
-function Done() {
-    UI {
-        $btn.Enabled   = $true
-        $lblStatus.Text = "Установка завершена!"
-        $lblDetail.Text = "Нажмите кнопку для запуска"
-        $lblStatus.ForeColor = [Drawing.Color]::FromArgb(34,197,94)
-    }
+function STEP($i, $s) {
+    $sym = if ($s -eq "done") { "*" } elseif ($s -eq "err") { "!" } else { ">" }
+    $col = if ($s -eq "done") { [Drawing.Color]::FromArgb(34,197,94) } `
+      elseif ($s -eq "err")  { [Drawing.Color]::FromArgb(239,68,68) } `
+      else                   { [Drawing.Color]::FromArgb(245,158,11) }
+    UI { $dots[$i].Text = $sym; $dots[$i].ForeColor = $col }
 }
+$RED = [Drawing.Color]::FromArgb(239, 68, 68)
 
-# ── Кнопка запуска ───────────────────────────────────────────────────────────
+# --- Launch button ---
 $btn.Add_Click({
     $exe = if (Test-Path $PYWEXE) { $PYWEXE } else { $PYEXE }
     Start-Process $exe -ArgumentList "`"$MAINPY`"" -WorkingDirectory $INSTALL
     $form.Close()
 })
 
-# ── Установка (фоновый поток) ────────────────────────────────────────────────
+# --- Install thread ---
 $job = [System.Threading.Thread]::new([System.Threading.ThreadStart]{
     try {
         $n = 0
 
-        # 1 — Исходный код
-        SetStep 0 "active"
-        SetStatus "Скачивание VPN Client..." "Загрузка файлов с GitHub"
-        AddLog "=== Исходный код ==="
+        # Step 1: Source code
+        STEP 0 "act"; SS "Downloading source code..." "GitHub"
+        AL "=== Source code ==="
         New-Item -ItemType Directory -Force -Path $INSTALL | Out-Null
         foreach ($f in $SOURCES) {
             $dst = "$INSTALL\$($f -replace '/','\\')"
             $dir = Split-Path $dst
             if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-            try { DL "$GHRAW/$f" $dst; AddLog "  OK: $f" }
-            catch { AddLog "  !! $f : $_" ([Drawing.Color]::FromArgb(239,68,68)) }
-            $n++; SetProg $n
+            try   { DL "$GHRAW/$f" $dst; AL "  OK $f" }
+            catch { AL "  FAIL $f : $_" $RED }
+            $n++; SP $n
         }
-        SetStep 0 "done"
+        STEP 0 "done"
 
-        # 2 — Python
-        SetStep 1 "active"
-        SetStatus "Python 3.12..." "Скачивание портативной версии"
-        AddLog "=== Python 3.12 ==="
+        # Step 2: Python
+        STEP 1 "act"; SS "Python 3.12..." "Downloading portable"
+        AL "=== Python 3.12 ==="
         if (Test-Path $PYEXE) {
-            AddLog "  OK: Python уже установлен"
+            AL "  OK already installed"
         } else {
-            try {
-                AddLog "  Скачивание Python 3.12..."
-                $pz = "$env:TEMP\py312.zip"
-                DL $PYZIP $pz
-                AddLog "  Распаковка..."
-                New-Item -ItemType Directory -Force -Path $PYDIR | Out-Null
-                Add-Type -AssemblyName System.IO.Compression.FileSystem
-                [IO.Compression.ZipFile]::ExtractToDirectory($pz, $PYDIR)
-                Remove-Item $pz -Force -EA SilentlyContinue
-                $pth = Get-ChildItem $PYDIR -Filter "*._pth" | Select-Object -First 1
-                if ($pth) {
-                    (Get-Content $pth.FullName) -replace '#import site','import site' |
-                        Set-Content $pth.FullName
-                }
-                AddLog "  OK: Python 3.12 готов"
-            } catch {
-                AddLog "  !! Python: $_" ([Drawing.Color]::FromArgb(239,68,68))
-                SetStep 1 "error"
+            $pz = "$env:TEMP\py312.zip"
+            DL $PYZIP $pz
+            AL "  Extracting..."
+            New-Item -ItemType Directory -Force -Path $PYDIR | Out-Null
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory($pz, $PYDIR)
+            Remove-Item $pz -Force -EA SilentlyContinue
+            $pth = Get-ChildItem $PYDIR -Filter "*._pth" | Select-Object -First 1
+            if ($pth) {
+                (Get-Content $pth.FullName) -replace '#import site','import site' |
+                    Set-Content $pth.FullName
             }
+            AL "  OK Python ready"
         }
-        $n++; SetProg $n
+        $n++; SP $n
 
         # pip
         if (-not (Test-Path $PIPEXE)) {
-            try {
-                AddLog "  Установка pip..."
-                $gp = "$env:TEMP\get-pip.py"
-                DL $GETPIP $gp
-                & $PYEXE $gp "--quiet" 2>$null
-                Remove-Item $gp -Force -EA SilentlyContinue
-                AddLog "  OK: pip"
-            } catch { AddLog "  !! pip: $_" ([Drawing.Color]::FromArgb(239,68,68)) }
+            AL "  Installing pip..."
+            $gp = "$env:TEMP\get-pip.py"
+            DL $GETPIP $gp
+            & $PYEXE $gp "--quiet" 2>$null
+            Remove-Item $gp -Force -EA SilentlyContinue
+            AL "  OK pip"
         }
-        $n++; SetProg $n
+        $n++; SP $n
 
-        # Зависимости
-        SetStep 2 "active"
-        SetStatus "Зависимости..." "PyQt6, requests, pyotp"
-        AddLog "=== Зависимости ==="
+        # Step 3: Deps
+        STEP 2 "act"; SS "Dependencies..." "PyQt6 requests pyotp"
+        AL "=== Dependencies ==="
         foreach ($dep in @("PyQt6","requests","pyotp")) {
-            AddLog "  pip install $dep..."
-            try { & $PIPEXE install $dep "--quiet" "--no-warn-script-location" 2>$null; AddLog "  OK: $dep" }
-            catch { AddLog "  !! $dep : $_" ([Drawing.Color]::FromArgb(239,68,68)) }
+            AL "  pip $dep..."
+            try   { & $PIPEXE install $dep "--quiet" "--no-warn-script-location" 2>$null; AL "  OK $dep" }
+            catch { AL "  FAIL $dep" $RED }
         }
-        SetStep 1 "done"; SetStep 2 "done"
-        $n++; SetProg $n
+        STEP 1 "done"; STEP 2 "done"; $n++; SP $n
 
-        # 3 — Бинарники
-        SetStep 3 "active"
-        AddLog "=== VPN модули ==="
+        # Step 4: VPN binaries
+        STEP 3 "act"; AL "=== VPN binaries ==="
         New-Item -ItemType Directory -Force -Path $BIN | Out-Null
         foreach ($b in $BINS) {
-            SetStatus "Скачивание: $($b.L)..." "VPN компоненты"
-            if (Test-Path $b.D) {
-                AddLog "  OK: $($b.L) (уже есть)"
-                $n++; SetProg $n; continue
-            }
-            $tmp = "$env:TEMP\vpnbin_$([IO.Path]::GetRandomFileName()).zip"
+            SS "Downloading $($b.N)..." ""
+            if (Test-Path $b.D) { AL "  OK $($b.N) cached"; $n++; SP $n; continue }
+            $tmp = "$env:TEMP\vpnb_$([IO.Path]::GetRandomFileName()).zip"
             try {
-                AddLog "  Скачивание $($b.L)..."
+                AL "  Downloading $($b.N)..."
                 DL $b.U $tmp
-                UnzipEntry $tmp $b.E $b.D
+                UZE $tmp $b.E $b.D
                 Remove-Item $tmp -Force -EA SilentlyContinue
-                AddLog "  OK: $($b.L)"
+                AL "  OK $($b.N)"
             } catch {
-                AddLog "  !! $($b.L): $_" ([Drawing.Color]::FromArgb(239,68,68))
+                AL "  FAIL $($b.N): $_" $RED
                 Remove-Item $tmp -Force -EA SilentlyContinue
             }
-            $n++; SetProg $n
+            $n++; SP $n
         }
-        SetStep 3 "done"
+        STEP 3 "done"
 
-        # 4 — AmneziaWG
-        SetStep 4 "active"
-        SetStatus "AmneziaWG..." "Установка драйвера WireGuard"
-        AddLog "=== AmneziaWG ==="
-        if (AwgOk) {
-            AddLog "  OK: AmneziaWG уже установлен"
-            SetStep 4 "done"
+        # Step 5: AmneziaWG
+        STEP 4 "act"; SS "AmneziaWG..." "Installing driver"
+        AL "=== AmneziaWG ==="
+        if (Test-Path "C:\Program Files\AmneziaWG\wireguard.exe") {
+            AL "  OK already installed"; STEP 4 "done"
         } else {
             $msi = "$env:TEMP\awg.msi"
-            try {
-                AddLog "  Скачивание AmneziaWG..."
-                DL $AWGMSI $msi
-                AddLog "  Установка..."
-                $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait -PassThru
-                Remove-Item $msi -Force -EA SilentlyContinue
-                if (AwgOk) { AddLog "  OK: AmneziaWG установлен"; SetStep 4 "done" }
-                else        { AddLog "  !! msiexec: $($p.ExitCode)" ([Drawing.Color]::FromArgb(239,68,68)); SetStep 4 "error" }
-            } catch {
-                AddLog "  !! AmneziaWG: $_" ([Drawing.Color]::FromArgb(239,68,68))
-                SetStep 4 "error"
+            DL $AWGMSI $msi
+            AL "  Installing MSI..."
+            $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait -PassThru
+            Remove-Item $msi -Force -EA SilentlyContinue
+            if (Test-Path "C:\Program Files\AmneziaWG\wireguard.exe") {
+                AL "  OK AmneziaWG installed"; STEP 4 "done"
+            } else {
+                AL "  FAIL msiexec exit $($p.ExitCode)" $RED; STEP 4 "err"
             }
         }
-        $n++; SetProg $n
+        $n++; SP $n
 
-        # Ярлык
+        # Shortcut
         try {
-            $link = "$env:USERPROFILE\Desktop\VPN Client.lnk"
-            $exe  = if (Test-Path $PYWEXE) { $PYWEXE } else { $PYEXE }
-            $ws   = New-Object -ComObject WScript.Shell
-            $sc   = $ws.CreateShortcut($link)
+            $lnk = "$env:USERPROFILE\Desktop\VPN Client.lnk"
+            $exe = if (Test-Path $PYWEXE) { $PYWEXE } else { $PYEXE }
+            $ws  = New-Object -ComObject WScript.Shell
+            $sc  = $ws.CreateShortcut($lnk)
             $sc.TargetPath       = $exe
             $sc.Arguments        = "`"$MAINPY`""
             $sc.WorkingDirectory = $INSTALL
-            $sc.Description      = "VPN Client"
             $sc.Save()
-            AddLog "  OK: Ярлык на рабочем столе"
-        } catch { AddLog "  !! Ярлык: $_" ([Drawing.Color]::FromArgb(239,68,68)) }
+            AL "  OK Desktop shortcut created"
+        } catch { AL "  shortcut: $_" $RED }
 
-        SetProg $TOTAL
-        AddLog "=== Готово! Нажмите кнопку ==="
-        Done
+        SP $TOTAL; AL "=== Done! Press the button ==="
+        UI {
+            $btn.Enabled    = $true
+            $lblS.Text      = "Setup complete!"
+            $lblD.Text      = "Click the button to launch"
+            $lblS.ForeColor = [Drawing.Color]::FromArgb(34,197,94)
+        }
 
     } catch {
         L "FATAL: $_"
-        AddLog "FATAL ERROR: $_" ([Drawing.Color]::FromArgb(239,68,68))
-        UI { $lblStatus.Text = "Ошибка установки"; $lblDetail.Text = "См. лог: $LOG" }
+        AL "FATAL: $_" $RED
+        UI { $lblS.Text = "Error"; $lblD.Text = "See log: $LOG" }
     }
 })
 $job.IsBackground = $true
-
-L "Starting install thread..."
 $form.Add_Shown({ $job.Start() })
 
 L "Showing form..."
-try {
-    [Windows.Forms.Application]::Run($form)
-} catch {
-    L "Form crashed: $_"
-}
+[Windows.Forms.Application]::Run($form)
 L "Form closed."
