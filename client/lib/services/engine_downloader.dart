@@ -22,36 +22,35 @@ class EngineDownloader {
   EngineDownloader._();
   static final EngineDownloader instance = EngineDownloader._();
 
-  // ── Download URLs with fallback mirrors ────────────────────────────────────
-  //
-  // Xray-core v26.3.27 — primary: GitHub, fallback: ghproxy mirrors
+  // ── Download URLs ──────────────────────────────────────────────────────────
+  // PRIMARY: наш собственный GitHub release (engines-v1) — стабильно, без CDN-блокировок
+  // FALLBACK: оригинальные источники + ghproxy зеркала
+  static const _ownBase = 'https://github.com/JustMilkyArt/VPN-2/releases/download/engines-v1';
+
   static const _xrayUrls = [
+    '$_ownBase/Xray-windows-64.zip',
     'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
-    'https://gh.idayer.com/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
     'https://mirror.ghproxy.com/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
     'https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
   ];
 
-  // tun2socks v2.6.0 — нужен для TUN-режима (VLESS/Naive)
   static const _tun2socksUrls = [
+    '$_ownBase/tun2socks-windows-amd64.zip',
     'https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
-    'https://gh.idayer.com/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
     'https://mirror.ghproxy.com/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
     'https://ghproxy.net/https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-amd64.zip',
   ];
 
-  // NaiveProxy v148 — primary: GitHub, fallback: ghproxy
   static const _naiveUrls = [
+    '$_ownBase/naiveproxy-v148-win-x64.zip',
     'https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip',
-    'https://gh.idayer.com/https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip',
     'https://mirror.ghproxy.com/https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip',
     'https://ghproxy.net/https://github.com/klzgrad/naiveproxy/releases/download/v148.0.7778.96-2/naiveproxy-v148.0.7778.96-2-win-x64.zip',
   ];
 
-  // AmneziaWG MSI — primary: GitHub, fallback: ghproxy
   static const _awgMsiUrls = [
+    '$_ownBase/amneziawg-amd64-2.0.0.msi',
     'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi',
-    'https://gh.idayer.com/https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi',
     'https://mirror.ghproxy.com/https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi',
     'https://ghproxy.net/https://github.com/amnezia-vpn/amneziawg-windows-client/releases/download/2.0.0/amneziawg-amd64-2.0.0.msi',
   ];
