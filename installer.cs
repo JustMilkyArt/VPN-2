@@ -48,10 +48,10 @@ class InstallerForm : Form
 
     private static readonly string[] SOURCES = {
         "main.py", "config.py", "requirements.txt",
-        "core/__init__.py", "core/protocol_manager.py", "core/server_manager.py",
-        "core/connection_manager.py", "core/process_manager.py",
-        "ui/__init__.py", "ui/main_window.py", "ui/server_card.py",
-        "ui/connection_dialog.py", "ui/settings_dialog.py", "ui/tray_icon.py"
+        "core/__init__.py", "core/api_client.py", "core/vpn_manager.py",
+        "core/protocols/__init__.py", "core/protocols/vless_manager.py",
+        "core/protocols/awg_manager.py", "core/protocols/naive_manager.py",
+        "ui/__init__.py", "ui/main_window.py"
     };
 
     private struct BinEntry {
@@ -420,7 +420,46 @@ class InstallerForm : Form
     void LaunchClient()
     {
         try {
-            Process.Start(PYEXE, "\"" + MAIN + "\"");
+            // Set VPNCLIENT_BIN_DIR so vpn_manager.py finds the binaries
+            var psi = new ProcessStartInfo(PYEXE, "\"" + MAIN + "\"") {
+                UseShellExecute = false,
+                CreateNoWindow = false,
+                RedirectStandardOutput = false,
+                RedirectStandardError = true,
+                WorkingDirectory = INSTALL
+            };
+            psi.EnvironmentVariables["VPNCLIENT_BIN_DIR"] = BIN;
+            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+
+            var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+
+            var errBuf = new System.Text.StringBuilder();
+            proc.ErrorDataReceived += (s, e) => {
+                if (e.Data != null) errBuf.AppendLine(e.Data);
+            };
+
+            proc.Exited += (s, e) => {
+                int code = proc.ExitCode;
+                if (code != 0) {
+                    string err = errBuf.ToString().Trim();
+                    string logLine = "[" + DateTime.Now.ToString("HH:mm:ss") + "] CLIENT EXIT " + code + ": " + err + "\r\n";
+                    File.AppendAllText(LOGFILE, logLine);
+                    // Show error on UI thread
+                    this.Invoke(new Action(() => {
+                        AL("CLIENT CRASH (exit " + code + "): " + (err.Length > 200 ? err.Substring(0, 200) : err),
+                            Color.FromArgb(255, 80, 80));
+                        MessageBox.Show(
+                            "VPN Client crashed (exit code " + code + "):\n\n" +
+                            (err.Length > 600 ? err.Substring(0, 600) + "..." : err) +
+                            "\n\nSee log: " + LOGFILE,
+                            "VPN Client Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }));
+                }
+            };
+
+            proc.Start();
+            proc.BeginErrorReadLine();
+
         } catch (Exception ex) {
             MessageBox.Show("Could not launch: " + ex.Message, "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
