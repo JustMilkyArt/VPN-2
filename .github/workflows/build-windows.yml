@@ -1,0 +1,68 @@
+name: Build Flutter Windows
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'client/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Flutter version
+        working-directory: client
+        run: flutter --version
+
+      - name: Install dependencies
+        working-directory: client
+        run: flutter pub get
+
+      - name: Build Windows release
+        working-directory: client
+        run: flutter build windows --release
+
+      - name: Package into ZIP
+        shell: pwsh
+        run: |
+          $src = "client\build\windows\x64\runner\Release"
+          $zip = "MilkyVPN-windows.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $zip
+          $size = (Get-Item $zip).Length
+          Write-Host "ZIP created: $size bytes"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MilkyVPN-windows
+          path: MilkyVPN-windows.zip
+          retention-days: 30
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "MilkyVPN Windows build #${{ github.run_number }}"
+          body: |
+            Автоматическая сборка Flutter Windows клиента.
+            
+            **Установка:**
+            1. Скачай `MilkyVPN-windows.zip`
+            2. Распакуй в любую папку
+            3. Запусти `vpn_client.exe`
+          files: MilkyVPN-windows.zip
+          generate_release_notes: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

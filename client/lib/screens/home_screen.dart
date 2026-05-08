@@ -1,7 +1,9 @@
 // HomeScreen — main app window
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:window_manager/window_manager.dart';
 import '../models/connection.dart';
 import '../services/vpn_provider.dart';
 import '../widgets/connection_card.dart';
@@ -127,21 +129,10 @@ class _TitleBar extends StatelessWidget {
   }
 
   void _minimizeToTray(BuildContext context) async {
-    try {
-      // Import window_manager dynamically to avoid web issues
-      final wm = await _getWindowManager();
-      if (wm != null) {
-        await wm.hide();
-      }
-    } catch (_) {}
-  }
-
-  Future<dynamic> _getWindowManager() async {
-    try {
-      // window_manager is Windows-only
-      return null; // handled in main.dart
-    } catch (_) {
-      return null;
+    if (Platform.isWindows) {
+      try {
+        await windowManager.hide();
+      } catch (_) {}
     }
   }
 }

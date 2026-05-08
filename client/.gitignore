@@ -25,6 +25,5 @@ assets/engines/*.exe
 assets/engines/*.dll
 assets/engines/*.sys
 
-# Icons generated at build time — keep placeholder .gitkeep
-assets/icons/*.ico
-!assets/icons/.gitkeep
+# Icons — committed to repo
+# assets/icons/*.ico
