@@ -489,6 +489,7 @@ class _IpChecker extends StatefulWidget {
 class _IpCheckerState extends State<_IpChecker> {
   String? _ip;
   String? _country;
+  int?    _rttMs;
   bool    _loading = true;
   bool    _isRu    = false;
   Timer?  _timer;
@@ -497,7 +498,6 @@ class _IpCheckerState extends State<_IpChecker> {
   void initState() {
     super.initState();
     _checkIp();
-    // Автообновление каждые 30 секунд
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _checkIp());
   }
 
@@ -511,35 +511,41 @@ class _IpCheckerState extends State<_IpChecker> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      // ip-api.com — бесплатный, без ключа, возвращает JSON
-      final resp = await http
-          .get(Uri.parse('http://ip-api.com/json/?fields=query,country,countryCode'))
-          .timeout(const Duration(seconds: 8));
+      final url = Uri.parse('http://ip-api.com/json/?fields=query,country,countryCode');
+      final t0   = DateTime.now();
+      final resp = await http.get(url).timeout(const Duration(seconds: 8));
+      final rtt  = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
       if (resp.statusCode == 200) {
-        // Простой парсинг без dart:convert (уже импортирован http)
-        final body = resp.body;
+        final body    = resp.body;
         final ip      = _extract(body, 'query');
         final country = _extract(body, 'country');
         final cc      = _extract(body, 'countryCode');
         setState(() {
           _ip      = ip;
           _country = country;
+          _rttMs   = rtt;
           _isRu    = cc == 'RU';
           _loading = false;
         });
       } else {
-        setState(() { _ip = '—'; _loading = false; });
+        setState(() { _ip = '—'; _rttMs = null; _loading = false; });
       }
     } catch (_) {
-      if (mounted) setState(() { _ip = 'Нет ответа'; _loading = false; });
+      if (mounted) setState(() { _ip = 'Нет ответа'; _rttMs = null; _loading = false; });
     }
   }
 
-  // Простой regex-парсинг JSON без decode
   String _extract(String json, String key) {
     final re = RegExp('"$key"\\s*:\\s*"([^"]*)"');
     return re.firstMatch(json)?.group(1) ?? '';
+  }
+
+  // Цвет пинга: зелёный <100, жёлтый <250, красный ≥250
+  Color _rttColor(int ms) {
+    if (ms < 100) return const Color(0xFF00D26A);
+    if (ms < 250) return const Color(0xFFFFB800);
+    return const Color(0xFFFF4D6D);
   }
 
   @override
@@ -551,9 +557,7 @@ class _IpCheckerState extends State<_IpChecker> {
         color: Colors.white.withValues(alpha: 0.04),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: (_isRu
-                  ? const Color(0xFFFF4D6D)
-                  : const Color(0xFF00D26A))
+          color: (_isRu ? const Color(0xFFFF4D6D) : const Color(0xFF00D26A))
               .withValues(alpha: 0.25),
         ),
       ),
@@ -591,7 +595,7 @@ class _IpCheckerState extends State<_IpChecker> {
                 Flexible(
                   child: Text(
                     _isRu
-                        ? '⚠️ Ваш IP: $_ip ($_country) — VPN не работает!'
+                        ? '⚠️ $_ip ($_country) — трафик не через VPN!'
                         : 'IP: $_ip  •  $_country',
                     style: TextStyle(
                       color: _isRu
@@ -603,8 +607,18 @@ class _IpCheckerState extends State<_IpChecker> {
                     textAlign: TextAlign.center,
                   ),
                 ),
+                if (_rttMs != null) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_rttMs} ms',
+                    style: TextStyle(
+                      color: _rttColor(_rttMs!),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 6),
-                // Кнопка копировать IP
                 GestureDetector(
                   onTap: () {
                     if (_ip != null && _ip != '—') {
@@ -618,7 +632,6 @@ class _IpCheckerState extends State<_IpChecker> {
                   ),
                 ),
                 const SizedBox(width: 4),
-                // Кнопка обновить
                 GestureDetector(
                   onTap: _checkIp,
                   child: Icon(
