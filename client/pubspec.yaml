@@ -1,0 +1,47 @@
+name: vpn_client
+description: "MilkyIMS VPN — Windows client for secure VPN connections"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP client
+  http: 1.5.0
+
+  # State management
+  provider: 6.1.5+1
+
+  # Local storage (cache connections offline)
+  shared_preferences: 2.5.3
+
+  # System tray (Windows)
+  tray_manager: ^0.2.3
+
+  # Window management (minimize to tray, bring to front)
+  window_manager: ^0.4.3
+
+  # Path utilities
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # Process management (run xray/awg/naive subprocesses)
+  process_run: ^1.2.1
+
+  # Logging
+  logging: ^1.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/engines/
+    - assets/icons/

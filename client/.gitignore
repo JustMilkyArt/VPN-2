@@ -1,0 +1,30 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+*.g.dart
+*.freezed.dart
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit real keys)
+.env
+*.env
+
+# VPN engine binaries — downloaded separately, not committed
+assets/engines/*.exe
+assets/engines/*.dll
+assets/engines/*.sys
+
+# Icons generated at build time — keep placeholder .gitkeep
+assets/icons/*.ico
+!assets/icons/.gitkeep
