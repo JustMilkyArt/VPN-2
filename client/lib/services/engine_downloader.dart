@@ -8,6 +8,7 @@
 // Each download has multiple fallback mirrors + 3 retries per mirror.
 // Timeout per attempt: 60 seconds.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
