@@ -855,14 +855,15 @@ echo "[+] SSL cert installed"
         return False, str(e)
 
 
-# ─── Bash script to install caddy-naive binary (shared) ────────────────────
+# ─── Bash script to install caddy with forward_proxy module (xcaddy build) ──
 _CADDY_INSTALL_SCRIPT = r"""#!/bin/bash
 set -e
 
-# Wait for dpkg lock (unattended-upgrades, cloud-init, etc.)
+# Wait for dpkg lock
 _wait_dpkg() {
     local i=0
-    while ! flock -n /var/lib/dpkg/lock-frontend /bin/true 2>/dev/null ||           ! flock -n /var/lib/dpkg/lock /bin/true 2>/dev/null; do
+    while ! flock -n /var/lib/dpkg/lock-frontend /bin/true 2>/dev/null || \
+          ! flock -n /var/lib/dpkg/lock /bin/true 2>/dev/null; do
         i=$((i+1))
         [ $i -gt 60 ] && { echo "[!] dpkg lock timeout"; exit 1; }
         echo "[*] Waiting for dpkg lock ($i/60)..."
@@ -875,67 +876,74 @@ kill $(lsof /var/lib/dpkg/lock 2>/dev/null | awk 'NR>1{print $2}') 2>/dev/null |
 rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
 dpkg --configure -a 2>/dev/null || true
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl tar
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl
 
-# Detect architecture
-ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
-case "$ARCH" in
-  amd64|x86_64) IS_AMD64=1 ;;
-  *) IS_AMD64=0 ;;
-esac
-
-if [ -f /usr/local/bin/caddy-naive ]; then
-    echo "[+] caddy-naive already installed: $(/usr/local/bin/caddy-naive version 2>/dev/null || echo unknown)"
-else
-  cd /tmp
-  rm -f caddy-naive.tar.xz
-
-  if [ "$IS_AMD64" = "1" ]; then
-      FP_VER=$(curl -sf "https://api.github.com/repos/klzgrad/forwardproxy/releases/latest"           | grep '"tag_name"' | cut -d'"' -f4 | head -1)
-      [ -z "$FP_VER" ] && FP_VER="v2.10.0-naive"
-      echo "[+] forwardproxy version: $FP_VER"
-      CADDY_URL="https://github.com/klzgrad/forwardproxy/releases/download/${FP_VER}/caddy-forwardproxy-naive.tar.xz"
-      echo "[+] Downloading: $CADDY_URL"
-      curl -fsSL --retry 3 --retry-delay 2 -o caddy-naive.tar.xz "$CADDY_URL"
-      tar -xJf caddy-naive.tar.xz 2>/dev/null || tar -xf caddy-naive.tar.xz 2>/dev/null || true
-      CADDY_BIN=$(find /tmp/caddy-forwardproxy-naive -name "caddy" -type f 2>/dev/null | head -1)
-      [ -z "$CADDY_BIN" ] && CADDY_BIN=$(find /tmp -maxdepth 3 -name "caddy" -type f 2>/dev/null | head -1)
-      if [ -z "$CADDY_BIN" ]; then
-          echo "ERROR: caddy binary not found in archive"; exit 1
-      fi
-  else
-      # arm64 fallback: build with xcaddy
-      apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
-      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg
-      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' > /etc/apt/sources.list.d/caddy-xcaddy.list
-      apt-get update -qq && apt-get install -y -qq xcaddy golang-go
-      xcaddy build --with github.com/klzgrad/forwardproxy@latest --output /tmp/caddy
-      CADDY_BIN="/tmp/caddy"
-  fi
-
-  cp "$CADDY_BIN" /usr/local/bin/caddy-naive
-  chmod +x /usr/local/bin/caddy-naive
-  echo "[+] caddy-naive installed: $(/usr/local/bin/caddy-naive version 2>/dev/null || echo unknown)"
+# Check if caddy already has forward_proxy module
+if /usr/bin/caddy list-modules 2>/dev/null | grep -q forward_proxy; then
+    echo "[+] caddy with forward_proxy already installed: $(/usr/bin/caddy version 2>/dev/null || echo unknown)"
+    mkdir -p /etc/caddy /var/lib/caddy
+    id caddy 2>/dev/null || useradd -r -s /sbin/nologin caddy 2>/dev/null || true
+    chown caddy:caddy /var/lib/caddy 2>/dev/null || true
+    echo "[+] Done"
+    exit 0
 fi
 
-mkdir -p /etc/caddy /var/log/caddy /var/lib/caddy
+echo "[*] Installing xcaddy + Go to build caddy with forward_proxy..."
+
+# Install Go if missing
+if ! /usr/local/go/bin/go version 2>/dev/null && ! go version 2>/dev/null; then
+    echo "[*] Installing Go 1.22..."
+    curl -fsSL --max-time 90 https://go.dev/dl/go1.22.4.linux-amd64.tar.gz -o /tmp/go.tar.gz
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    rm -f /tmp/go.tar.gz
+    echo "[+] Go installed: $(go version)"
+fi
+
+# Install xcaddy
+apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https 2>/dev/null || true
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' \
+    | gpg --yes --dearmor -o /usr/share/keyrings/caddy-xcaddy-keyring.gpg 2>/dev/null
+echo "deb [signed-by=/usr/share/keyrings/caddy-xcaddy-keyring.gpg] https://dl.cloudsmith.io/public/caddy/xcaddy/deb/debian any-version main" \
+    > /etc/apt/sources.list.d/caddy-xcaddy.list
+apt-get update -qq 2>/dev/null
+apt-get install -y -qq xcaddy 2>/dev/null || true
+
+# Build caddy with forward_proxy
+echo "[*] Building caddy with forward_proxy (3-5 min)..."
+export PATH=$PATH:/usr/local/go/bin
+export HOME=/root
+xcaddy build --with github.com/caddyserver/forwardproxy@caddy2 --output /usr/bin/caddy 2>&1
+chmod +x /usr/bin/caddy
+
+# Verify
+if /usr/bin/caddy list-modules 2>/dev/null | grep -q forward_proxy; then
+    echo "[+] caddy with forward_proxy installed: $(/usr/bin/caddy version)"
+else
+    echo "ERROR: caddy forward_proxy module missing after build"; exit 1
+fi
+
+# Create caddy user and dirs
+id caddy 2>/dev/null || useradd -r -s /sbin/nologin caddy 2>/dev/null || true
+mkdir -p /etc/caddy /var/lib/caddy
+chown caddy:caddy /var/lib/caddy 2>/dev/null || true
 echo "[+] Done"
 """
 
 _CADDY_SERVICE = """[Unit]
 Description=Caddy NaiveProxy
 After=network-online.target
-Wants=network-online.target
+Requires=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/caddy-naive run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy-naive reload --config /etc/caddy/Caddyfile
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
 TimeoutStopSec=5s
 LimitNOFILE=1048576
-LimitNPROC=512
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -952,10 +960,10 @@ def install_caddy_naive_binary(server: Server) -> Tuple[bool, str]:
                 return False, f"caddy-naive install failed: {err or out}"
             # Record version
             code2, ver_out, _ = ssh.exec(
-                "/usr/local/bin/caddy-naive version 2>/dev/null | head -1 || echo ''"
+                "/usr/bin/caddy version 2>/dev/null | head -1 || echo ''"
             )
             ver = (ver_out or "").strip().splitlines()[0] if ver_out else "installed"
-            return True, f"caddy-naive installed ({ver})"
+            return True, f"caddy installed ({ver})"
     except Exception as e:
         return False, str(e)
 
@@ -976,9 +984,9 @@ def install_naiveproxy(server: Server, domain: str, password: str, port: int) ->
             ssh.upload_file(caddy_config, "/etc/caddy/Caddyfile")
 
             # 3. Install systemd service
-            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy-naive.service")
+            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy.service")
             code2, _, err2 = ssh.exec(
-                "systemctl daemon-reload && systemctl enable caddy-naive && systemctl restart caddy-naive"
+                "systemctl daemon-reload && systemctl enable caddy && systemctl restart caddy"
             )
             if code2 != 0:
                 return False, f"Caddy service failed: {err2}"
@@ -1344,7 +1352,7 @@ def deploy_naiveproxy_connection(
             if code != 0:
                 S(2, "error", f"caddy-naive install failed: {(err or out)[:200]}")
                 return False, f"caddy-naive install failed: {err or out}"
-            version_line = [l for l in out.splitlines() if "caddy-naive installed" in l or "already installed" in l]
+            version_line = [l for l in out.splitlines() if "caddy installed" in l or "already installed" in l]
             S(2, "ok", f"caddy-naive: {version_line[-1] if version_line else 'установлен'}")
 
             # Step 3: Generate and upload Caddyfile
@@ -1357,20 +1365,20 @@ def deploy_naiveproxy_connection(
 
             # Step 4: Start caddy-naive systemd service
             S(4, "running", "Запуск systemd сервиса caddy-naive")
-            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy-naive.service")
+            ssh.upload_file(_CADDY_SERVICE, "/etc/systemd/system/caddy.service")
             code2, _, err2 = ssh.exec(
-                "systemctl daemon-reload && systemctl enable caddy-naive && systemctl restart caddy-naive"
+                "systemctl daemon-reload && systemctl enable caddy && systemctl restart caddy"
             )
             if code2 != 0:
                 S(4, "error", f"Сервис не запустился: {err2[:200]}")
                 return False, f"Caddy service failed to start: {err2}"
 
-            _, svc_out, _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null || echo inactive")
+            _, svc_out, _ = ssh.exec("systemctl is-active caddy 2>/dev/null || echo inactive")
             if svc_out.strip() not in ("active", "activating"):
-                _, journal, _ = ssh.exec("journalctl -u caddy-naive -n 20 --no-pager 2>/dev/null || echo no_journal")
+                _, journal, _ = ssh.exec("journalctl -u caddy -n 20 --no-pager 2>/dev/null || echo no_journal")
                 S(4, "error", f"caddy-naive статус={svc_out.strip()}: {journal[:250]}")
                 return False, f"caddy-naive status={svc_out.strip()}. Journal: {journal[:400]}"
-            S(4, "ok", "caddy-naive.service активен и добавлен в автозапуск")
+            S(4, "ok", "caddy.service активен и добавлен в автозапуск")
 
             # 4a: TLS certificate check — confirm Let's Encrypt issued (not self-signed)
             _raw_log(connection, db, f"  Проверка TLS сертификата {domain}:{port} ...")
@@ -1891,7 +1899,7 @@ def restart_services(server: Server) -> Tuple[bool, str]:
     try:
         with SSHClient(server) as ssh:
             results = []
-            for svc in ["xray", "caddy-naive", "warp-svc"]:
+            for svc in ["xray", "caddy", "warp-svc"]:
                 code, _, err = ssh.exec(f"systemctl is-active {svc} && systemctl restart {svc} || true")
                 results.append(f"{svc}: {'ok' if code == 0 else 'not running'}")
             return True, " | ".join(results)
