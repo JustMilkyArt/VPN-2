@@ -43,9 +43,10 @@ class VpnEngine {
   bool        _routesAdded = false;
 
   static const _tunName    = 'MilkyVPN-TUN';
-  static const _tunAddr    = '10.8.0.1';      // IP самого TUN адаптера
-  static const _tunMask    = '255.255.255.0';
-  static const _tunGateway = '10.8.0.1';      // шлюз через TUN (= его IP)
+  // 172.16.0.1 — link-local диапазон, не конфликтует с AWG subnet 10.8.x.x
+  static const _tunAddr    = '172.16.0.1';    // IP самого TUN адаптера
+  static const _tunMask    = '255.255.0.0';   // /16 — весь 172.16.x.x
+  static const _tunGateway = '172.16.0.1';    // шлюз через TUN (= его IP)
   static const _awgExePath = r'C:\Program Files\AmneziaWG\amneziawg.exe';
 
   // Директория для конфигов — ASCII путь, xray не падает
@@ -113,11 +114,14 @@ class VpnEngine {
     _checkFile(xrayPath, 'xray.exe');
     _checkFile(t2sPath,  'tun2socks.exe');
 
+    // Очищаем потенциально зависшие маршруты от прошлой сессии
+    await _cleanStaleRoutes();
+
     // server_ip из API = entry point:
     //   direct  → EU IP
-    //   cascade → RU IP (бэкенд уже заменил)
-    // Этот IP должен идти напрямую (bypass), чтобы не было петли
-    _vpnServerIp = conn.serverIp;
+    //   cascade → RU домен/IP (бэкенд уже заменил)
+    // _vpnServerIp запишется в _setupRoutes после _resolveHost()
+    _vpnServerIp = conn.serverIp; // предварительно — перезапишется в _setupRoutes
 
     final configPath = await _writeConfig(
         'xray_${conn.id}.json', jsonEncode(_buildXrayConfig(conn)));
@@ -166,7 +170,11 @@ class VpnEngine {
     _checkFile(naivePath, 'naive.exe');
     _checkFile(t2sPath,   'tun2socks.exe');
 
-    _vpnServerIp = conn.serverIp;
+    // _vpnServerIp запишется в _setupRoutes после _resolveHost()
+    _vpnServerIp = conn.serverIp; // предварительно — перезапишется в _setupRoutes
+
+    // Очищаем потенциально зависшие маршруты от прошлой сессии
+    await _cleanStaleRoutes();
 
     // Убиваем старые экземпляры (порт мог остаться занят)
     await _killByName('naive.exe');
@@ -259,7 +267,7 @@ class VpnEngine {
   // Маршруты — весь трафик через TUN
   // ═══════════════════════════════════════════════════════
 
-  Future<void> _setupRoutes(String serverIp) async {
+  Future<void> _setupRoutes(String serverIpOrHost) async {
     try {
       // 1. Получаем текущий шлюз ДО изменения маршрутов
       _originalGateway = await _getDefaultGateway();
@@ -268,7 +276,13 @@ class VpnEngine {
             'Не удалось определить шлюз по умолчанию.\nПроверьте сетевое подключение.');
       }
 
-      // 2. Назначаем IP TUN адаптеру
+      // 2. Резолвим домен → IP (route add не принимает доменные имена!)
+      //    API может отдать домен (напр. ru.milkyims.com) вместо IP для cascade
+      final serverIp = await _resolveHost(serverIpOrHost);
+      _vpnServerIp = serverIp; // перезаписываем — будем удалять по IP
+      debugPrint('[VPN] Entry point: $serverIpOrHost → $serverIp');
+
+      // 3. Назначаем IP TUN адаптеру
       final netshR = await Process.run('netsh', [
         'interface', 'ip', 'set', 'address',
         'name=$_tunName', 'static', _tunAddr, _tunMask,
@@ -277,14 +291,15 @@ class VpnEngine {
 
       await Future.delayed(const Duration(milliseconds: 800));
 
-      // 3. VPN сервер (entry point) — через оригинальный шлюз (иначе петля!)
-      //    server_ip = entry point (RU для cascade, EU для direct)
-      await Process.run('route', [
+      // 4. VPN сервер (entry point) — через оригинальный шлюз (иначе петля!)
+      //    serverIp = resolved IP (RU для cascade, EU для direct)
+      final routeAddR = await Process.run('route', [
         'add', serverIp, 'mask', '255.255.255.255',
         _originalGateway!, 'metric', '1',
       ], runInShell: false);
+      debugPrint('[VPN] route add $serverIp: ${routeAddR.stdout} ${routeAddR.stderr}');
 
-      // 4. Весь остальной трафик — через TUN
+      // 5. Весь остальной трафик — через TUN
       //    Два маршрута /1 перекрывают дефолтный /0 без его удаления
       await Process.run('route', [
         'add', '0.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '5',
@@ -293,7 +308,7 @@ class VpnEngine {
         'add', '128.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '5',
       ], runInShell: false);
 
-      // 5. DNS через Cloudflare на TUN интерфейс (нет DNS-утечек)
+      // 6. DNS через Cloudflare на TUN интерфейс (нет DNS-утечек)
       await Process.run('netsh', [
         'interface', 'ip', 'set', 'dns',
         'name=$_tunName', 'static', '1.1.1.1',
@@ -304,6 +319,51 @@ class VpnEngine {
     } catch (e) {
       await _removeRoutes();
       rethrow;
+    }
+  }
+
+  /// Резолвит hostname → IP через PowerShell.
+  /// Если уже IP — возвращает как есть.
+  Future<String> _resolveHost(String host) async {
+    // Проверяем: уже IPv4?
+    final ipv4Re = RegExp(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$');
+    if (ipv4Re.hasMatch(host)) return host;
+
+    // Резолвим через PowerShell
+    final r = await Process.run('powershell', [
+      '-NoProfile', '-Command',
+      '[System.Net.Dns]::GetHostAddresses("$host") | '
+      'Where-Object { \$_.AddressFamily -eq "InterNetwork" } | '
+      'Select-Object -First 1 -ExpandProperty IPAddressToString',
+    ], runInShell: false);
+
+    final resolved = r.stdout.toString().trim();
+    if (resolved.isEmpty || !ipv4Re.hasMatch(resolved)) {
+      throw VpnEngineException(
+        'Не удалось разрешить DNS: $host\n'
+        'Проверьте интернет-соединение.',
+      );
+    }
+    debugPrint('[VPN] Resolved $host → $resolved');
+    return resolved;
+  }
+
+  /// Убирает зависшие /1 маршруты от предыдущей сессии (если приложение упало).
+  /// Вызывается ПЕРЕД подключением, чтобы не было конфликтов.
+  Future<void> _cleanStaleRoutes() async {
+    try {
+      // Удаляем /1 маршруты — они могут остаться если прошлая сессия упала
+      await Process.run('route', ['delete', '0.0.0.0',   'mask', '128.0.0.0'],
+          runInShell: false);
+      await Process.run('route', ['delete', '128.0.0.0', 'mask', '128.0.0.0'],
+          runInShell: false);
+      // Убиваем зависшие процессы от прошлой сессии
+      await _killByName('tun2socks.exe');
+      await _killByName('xray.exe');
+      await _killByName('naive.exe');
+      debugPrint('[VPN] Stale routes/processes cleaned');
+    } catch (e) {
+      debugPrint('[VPN] _cleanStaleRoutes (non-fatal): $e');
     }
   }
 
@@ -329,11 +389,12 @@ class VpnEngine {
     }
   }
 
-  /// Ждёт появления TUN адаптера в Windows (polling 10 сек, интервал 500мс).
+  /// Ждёт появления TUN адаптера в Windows (polling 15 сек, интервал 500мс).
   /// tun2socks создаёт WinTUN адаптер асинхронно — без ожидания netsh set address
   /// падает с "интерфейс не найден".
+  /// ВАЖНО: если адаптер не появился — бросаем exception (не продолжаем вслепую!).
   Future<void> _waitForTunAdapter(StringBuffer logBuf) async {
-    const maxTries = 20;
+    const maxTries = 30; // 15 секунд
     for (int i = 0; i < maxTries; i++) {
       final r = await Process.run('powershell', [
         '-NoProfile', '-Command',
@@ -349,16 +410,25 @@ class VpnEngine {
         try {
           await _tunProcess!.exitCode.timeout(const Duration(milliseconds: 50));
           throw VpnEngineException(
-            'tun2socks.exe упал до создания TUN адаптера\n'
+            'tun2socks.exe упал до создания TUN адаптера.\n'
+            'Убедитесь что приложение запущено от имени Администратора.\n'
             '${_tail(logBuf.toString(), 600)}',
           );
         } on TimeoutException {
-          // процесс жив — продолжаем
+          // процесс жив — продолжаем ждать
         }
       }
       await Future.delayed(const Duration(milliseconds: 500));
     }
-    debugPrint('[VPN] WARN: TUN adapter $_tunName не появился за 10s, продолжаем...');
+    // Адаптер не появился — это фатальная ошибка, не продолжаем
+    throw VpnEngineException(
+      'TUN адаптер $_tunName не создался за 15 секунд.\n'
+      'Возможные причины:\n'
+      '• Приложение не запущено от имени Администратора\n'
+      '• wintun.dll повреждён или несовместим с версией Windows\n'
+      '• Антивирус блокирует создание виртуального адаптера\n'
+      'Лог tun2socks: ${_tail(logBuf.toString(), 400)}',
+    );
   }
 
   Future<String?> _getDefaultGateway() async {
