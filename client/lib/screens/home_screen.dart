@@ -545,7 +545,16 @@ class _IpCheckerState extends State<_IpChecker> {
   ///
   /// xray и naive оба открывают SOCKS5 на порту 10808.
   /// AWG не открывает SOCKS5 — для него фоллбэк на системный http.get(),
-  /// который корректен т.к. AWG пишет маршруты прямо в TUN-адаптер.
+  /// который корректен т.к. AWG пишет маршруты прямо в ядро через WinTUN.
+  ///
+  /// ВАЖНО про смещения (RFC 1928):
+  ///   Greeting reply:  [VER=05][METHOD=00]          → 2 байта, offset 0
+  ///   CONNECT reply:   [VER][REP][RSV][ATYP][ADDR][PORT]
+  ///                    начинается с offset 2 в allBytes
+  ///     ATYP=01(IPv4) → ADDR=4B + PORT=2B → всего с offset 2: 4+4+2=10 байт
+  ///     ATYP=04(IPv6) → ADDR=16B + PORT=2B → 4+16+2=22 байт
+  ///     ATYP=03(dom)  → 1B_len + NB_dom + PORT=2B → 4+1+N+2 байт
+  ///   allBytes.length нужен >= (2 + размер_CONNECT_reply) до отправки HTTP.
   Future<String> _httpViaSocks5(String host, int remotePort) async {
     const socksHost = '127.0.0.1';
     const socksPort = 10808;
@@ -557,7 +566,8 @@ class _IpCheckerState extends State<_IpChecker> {
       );
       sock.setOption(SocketOption.tcpNoDelay, true);
 
-      // Собираем все входящие байты в один список через broadcast
+      // allBytes — единый накопитель всех входящих байт с начала соединения.
+      // Все need(n) ждут allBytes.length >= n (абсолютный счётчик).
       final allBytes  = <int>[];
       final done      = Completer<void>();
 
@@ -568,48 +578,66 @@ class _IpCheckerState extends State<_IpChecker> {
         cancelOnError: true,
       );
 
-      // Ждём появления >= n байт в allBytes (poll каждые 10 мс, до timeout)
+      // Ждём появления >= n байт суммарно (poll каждые 10 мс, до deadline)
       Future<void> need(int n, Duration timeout) async {
         final deadline = DateTime.now().add(timeout);
         while (allBytes.length < n) {
           if (DateTime.now().isAfter(deadline)) {
-            throw TimeoutException('SOCKS5: нет ответа за ${timeout.inSeconds}с');
+            throw TimeoutException('SOCKS5: нет ответа ($n байт) за ${timeout.inSeconds}с');
           }
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
       }
 
       try {
-        // ── Greeting: VER=5, NMETHODS=1, METHOD=0(noauth) ───────────
+        // ── 1. Greeting: VER=5, NMETHODS=1, METHOD=0(noauth) ────────
+        //    Reply: 2 байта → allBytes[0]=VER, allBytes[1]=METHOD
         sock.add([0x05, 0x01, 0x00]);
         await sock.flush();
 
         await need(2, const Duration(seconds: 4));
         if (allBytes[0] != 0x05 || allBytes[1] != 0x00) {
-          throw Exception('SOCKS5 auth rejected (method=${allBytes[1]})');
+          throw Exception('SOCKS5 auth rejected (method=0x${allBytes[1].toRadixString(16)})');
         }
 
-        // ── CONNECT request ─────────────────────────────────────────
+        // ── 2. CONNECT request (ATYP=0x03 domain) ───────────────────
         final hb = host.codeUnits;           // ASCII hostname bytes
         sock.add([
           0x05, 0x01, 0x00, 0x03,            // VER CMD RSV ATYP=domain
-          hb.length, ...hb,                  // len + hostname
+          hb.length, ...hb,                  // 1-byte len + hostname bytes
           (remotePort >> 8) & 0xFF, remotePort & 0xFF,
         ]);
         await sock.flush();
 
-        // Reply: VER REP RSV ATYP BND.ADDR BND.PORT
-        // Минимум 10 байт (IPv4): VER REP RSV ATYP(1) ADDR(4) PORT(2)
-        await need(4, const Duration(seconds: 5));
-        if (allBytes[1] != 0x00) {
-          throw Exception('SOCKS5 CONNECT failed rep=0x${allBytes[1].toRadixString(16)}');
+        // ── 3. CONNECT reply — начинается с offset 2 в allBytes ──────
+        //    Сначала читаем 4-байтный заголовок: VER REP RSV ATYP
+        //    В allBytes это индексы [2],[3],[4],[5].
+        await need(2 + 4, const Duration(seconds: 5));   // offset 2..5
+        final rep  = allBytes[3];   // REP (0=успех)
+        final atyp = allBytes[5];   // ATYP
+        if (rep != 0x00) {
+          throw Exception('SOCKS5 CONNECT failed rep=0x${rep.toRadixString(16)}');
         }
-        // Пропускаем BND.ADDR+BND.PORT в зависимости от ATYP
-        final atyp = allBytes[3];
-        final skip = 4 + (atyp == 0x01 ? 6 : atyp == 0x04 ? 18 : 3) ;
-        await need(skip, const Duration(seconds: 5));
 
-        // ── HTTP GET ─────────────────────────────────────────────────
+        // Считаем полный размер CONNECT reply (с учётом ATYP):
+        //   IPv4:   4(заг) + 4(addr) + 2(port) = 10
+        //   IPv6:   4(заг) + 16(addr) + 2(port) = 22
+        //   domain: 4(заг) + 1(len) + N(dom) + 2(port)
+        //           Для domain-reply сначала читаем 1 байт длины.
+        final int connectReplyLen;
+        if (atyp == 0x01) {
+          connectReplyLen = 10;          // IPv4
+        } else if (atyp == 0x04) {
+          connectReplyLen = 22;          // IPv6
+        } else {
+          // ATYP=0x03: следующий байт (offset 2+4=6) — длина домена
+          await need(2 + 4 + 1, const Duration(seconds: 5));
+          final domLen = allBytes[6];
+          connectReplyLen = 4 + 1 + domLen + 2;
+        }
+        await need(2 + connectReplyLen, const Duration(seconds: 5));
+
+        // ── 4. HTTP GET — теперь туннель открыт ─────────────────────
         sock.write(
           'GET /json/?fields=query,country,countryCode HTTP/1.1\r\n'
           'Host: $host\r\n'
@@ -621,6 +649,8 @@ class _IpCheckerState extends State<_IpChecker> {
         // Читаем до закрытия TCP-соединения (сервер присылает Connection:close)
         await done.future.timeout(const Duration(seconds: 8));
 
+        // HTTP-ответ начинается сразу за SOCKS5-оберткой:
+        // allBytes = [greeting_reply(2)] + [connect_reply(N)] + [HTTP response]
         final raw = String.fromCharCodes(allBytes);
         final sep = raw.indexOf('\r\n\r\n');
         return sep >= 0 ? raw.substring(sep + 4) : raw;
@@ -631,10 +661,10 @@ class _IpCheckerState extends State<_IpChecker> {
       }
 
     } catch (_) {
-      // SOCKS5 не поднят (AWG-режим) или соединение не удалось →
+      // SOCKS5 недоступен (AWG-режим) или соединение не удалось →
       // фоллбэк: системный HTTP (WinHTTP).
-      // AWG прописывает маршруты в ядро через TUN, поэтому WinHTTP
-      // тоже пойдёт через VPN (в отличие от xray/naive).
+      // AWG /installtunnelservice пишет маршруты прямо в ядро через WinTUN,
+      // поэтому WinHTTP тоже идёт через VPN-туннель (в отличие от xray/naive).
       final url  = Uri.parse(
           'http://$host:$remotePort/json/?fields=query,country,countryCode');
       final resp = await http.get(url).timeout(const Duration(seconds: 8));
