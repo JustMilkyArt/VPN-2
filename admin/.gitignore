@@ -1,0 +1,62 @@
+# ─── Python ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ─── Environment & secrets ─────────────────────────
+.env
+*.env
+!.env.example
+.dev.vars
+*.pem
+*.key
+
+# ─── SQLite database ───────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Logs ──────────────────────────────────────────
+logs/
+*.log
+
+# ─── OS files ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── IDE ───────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ─── Flutter ───────────────────────────────────────
+frontend/flutter_admin/.dart_tool/
+frontend/flutter_admin/.flutter-plugins
+frontend/flutter_admin/.flutter-plugins-dependencies
+frontend/flutter_admin/build/
+frontend/flutter_admin/.packages
+frontend/flutter_admin/pubspec.lock
+
+# ─── Node.js (если будет) ──────────────────────────
+node_modules/
+
+# ─── Wrangler ──────────────────────────────────────
+.wrangler/
+
+# ─── Backup / temp ─────────────────────────────────
+*.bak
+*.backup
+*.tar.gz
+*.zip
+*.bak*
+*.bak

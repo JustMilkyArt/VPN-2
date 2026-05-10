@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPN Admin Panel</title>
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <link rel="stylesheet" href="css/app.css">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:'#f0f4ff',100:'#e0e9ff',200:'#c7d7fe',
+              300:'#a5b9fc',400:'#818cf8',500:'#6366f1',
+              600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
+
+<!-- ══════════════════════════════════════════════════════
+  SCREEN: LOGIN
+══════════════════════════════════════════════════════ -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-950 via-gray-900 to-brand-900">
+  <div class="w-full max-w-md px-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
+
+      <!-- Logo -->
+      <div class="flex flex-col items-center mb-8">
+        <div class="w-16 h-16 bg-brand-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
+          <i class="fas fa-shield-halved text-3xl text-white"></i>
+        </div>
+        <h1 class="text-2xl font-bold text-white">VPN Admin</h1>
+        <p class="text-gray-400 text-sm mt-1">Infrastructure Management System</p>
+      </div>
+
+      <!-- Error -->
+      <div id="login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
+        <i class="fas fa-circle-exclamation flex-shrink-0"></i>
+        <span id="login-error-text"></span>
+      </div>
+
+      <!-- Form: step 1 — username + password only -->
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Логин</label>
+          <div class="relative">
+            <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
+            <input id="login-username" type="text" placeholder="Введите логин" autocomplete="off"
+              class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm text-gray-400 mb-1">Пароль</label>
+          <div class="relative">
+            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm"></i>
+            <input id="login-password" type="password" placeholder="••••••••" autocomplete="off"
+              class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition">
+          </div>
+        </div>
+
+        <button type="submit" id="login-btn"
+          class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 mt-2">
+          <i class="fas fa-right-to-bracket"></i>
+          Войти
+        </button>
+      </form>
+    </div>
+    <p class="text-center text-gray-600 text-xs mt-4">VPN Infrastructure Manager v1.0 MVP</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  MODAL: TOTP step (overlay поверх login-screen)
+══════════════════════════════════════════════════════ -->
+<div id="modal-totp-login" class="hidden fixed inset-0 z-[200] flex items-center justify-center p-4"
+     style="background: rgba(3,7,18,0.75); backdrop-filter: blur(6px);">
+  <div class="bg-gray-900/95 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-sm p-8 relative">
+    <div class="flex flex-col items-center mb-6">
+      <div class="w-14 h-14 bg-brand-700/50 border border-brand-600 rounded-2xl flex items-center justify-center mb-3">
+        <i class="fas fa-mobile-screen-button text-2xl text-brand-300"></i>
+      </div>
+      <h2 class="text-xl font-bold text-white">Код аутентификатора</h2>
+      <p class="text-gray-400 text-sm mt-1 text-center">Введите 6-значный код из приложения</p>
+    </div>
+
+    <div id="totp-login-error" class="hidden mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm flex items-center gap-2">
+      <i class="fas fa-circle-exclamation flex-shrink-0"></i>
+      <span id="totp-login-error-text"></span>
+    </div>
+
+    <form id="totp-login-form" class="space-y-4">
+      <input id="totp-login-code" type="text" inputmode="numeric" maxlength="6"
+        placeholder="000000" autocomplete="one-time-code"
+        class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-4 text-3xl text-white text-center tracking-[0.5em] placeholder-gray-700 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/40 transition font-mono">
+
+      <button type="submit" id="totp-login-btn"
+        class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2">
+        <i class="fas fa-check"></i> Подтвердить
+      </button>
+
+      <button type="button" onclick="cancelTotpLogin()"
+        class="w-full py-2.5 text-gray-500 hover:text-gray-300 text-sm transition">
+        ← Вернуться к входу
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  MAIN APP
+══════════════════════════════════════════════════════ -->
+<div id="app" class="hidden min-h-screen flex flex-col">
+
+  <!-- TOP NAV -->
+  <header class="bg-gray-900 border-b border-gray-800 sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
+
+      <!-- Logo -->
+      <div class="flex items-center gap-3 flex-shrink-0">
+        <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+          <i class="fas fa-shield-halved text-white text-sm"></i>
+        </div>
+        <span class="font-bold text-white">VPN Admin</span>
+        <span class="hidden sm:block text-gray-600 text-xs">Infrastructure Manager</span>
+      </div>
+
+      <!-- Tabs -->
+      <nav class="flex gap-1">
+        <button onclick="showTab('servers')" data-tab="servers"
+          class="tab-btn px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-server text-xs"></i>
+          <span class="hidden sm:inline">Серверы</span>
+        </button>
+        <button onclick="showTab('connections')" data-tab="connections"
+          class="tab-btn px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-network-wired text-xs"></i>
+          <span class="hidden sm:inline">Подключения</span>
+        </button>
+        <button id="tab-btn-domains" onclick="showTab('domains')" data-tab="domains"
+          class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-globe text-xs"></i>
+          <span class="hidden sm:inline">Домены</span>
+        </button>
+        <button id="tab-btn-users" onclick="showTab('users')" data-tab="users"
+          class="tab-btn hidden px-3 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1.5">
+          <i class="fas fa-users text-xs"></i>
+          <span class="hidden sm:inline">Пользователи</span>
+        </button>
+      </nav>
+
+      <!-- Profile button -->
+      <div class="relative flex-shrink-0">
+        <button id="profile-btn"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-gray-800 transition text-xs text-gray-300">
+          <i class="fas fa-circle-user text-gray-400 text-base"></i>
+          <span id="username-display" class="hidden sm:inline">admin</span>
+          <span id="role-badge" class="hidden sm:inline px-1.5 py-0.5 bg-gray-700 rounded text-gray-400 text-xs"></span>
+          <i class="fas fa-chevron-down text-gray-500 text-xs"></i>
+        </button>
+
+        <!-- Profile dropdown panel -->
+        <div id="profile-panel" class="hidden absolute right-0 top-full mt-2 z-50 w-80 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden">
+
+          <!-- User info -->
+          <div class="p-4 border-b border-gray-800 flex items-center gap-3">
+            <div class="w-10 h-10 bg-brand-700 rounded-xl flex items-center justify-center flex-shrink-0">
+              <i class="fas fa-user text-white text-sm"></i>
+            </div>
+            <div>
+              <div id="pp-username" class="font-semibold text-white text-sm"></div>
+              <div id="pp-role" class="text-xs text-gray-400"></div>
+            </div>
+          </div>
+
+          <!-- 2FA status -->
+          <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between text-sm">
+            <span class="text-gray-400 flex items-center gap-2">
+              <i class="fas fa-shield-halved text-brand-400"></i>Аутентификатор
+            </span>
+            <span id="pp-2fa-status" class="text-xs font-medium"></span>
+          </div>
+
+          <!-- Change credentials button -->
+          <div class="p-3">
+            <button id="pp-change-btn"
+              class="w-full py-2.5 px-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white rounded-lg text-sm transition flex items-center justify-center gap-2">
+              <i class="fas fa-user-pen"></i> Изменить данные
+            </button>
+
+            <!-- Change credentials form (hidden by default) -->
+            <form id="pp-change-creds-form" class="hidden mt-3 space-y-3">
+              <div>
+                <label class="form-label">Новый логин</label>
+                <input id="pp-new-username" type="text" class="form-input" autocomplete="off">
+              </div>
+              <div>
+                <label class="form-label">Новый пароль</label>
+                <input id="pp-new-password" type="password" class="form-input" placeholder="Минимум 8 символов" autocomplete="new-password">
+              </div>
+              <div>
+                <label class="form-label">Повтор пароля</label>
+                <input id="pp-confirm-password" type="password" class="form-input" autocomplete="new-password">
+              </div>
+              <div>
+                <label class="form-label">Код аутентификатора</label>
+                <input id="pp-totp-code" type="text" inputmode="numeric" maxlength="6"
+                  placeholder="000000" autocomplete="one-time-code"
+                  class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-lg text-white text-center tracking-widest placeholder-gray-600 focus:outline-none focus:border-brand-500 transition font-mono">
+              </div>
+              <div id="pp-creds-error" class="hidden p-2 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-xs"></div>
+              <div class="flex gap-2">
+                <button type="button" id="pp-cancel-change"
+                  class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm transition">
+                  Отмена
+                </button>
+                <button type="submit"
+                  class="flex-1 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-medium text-white transition flex items-center justify-center gap-1">
+                  <i class="fas fa-check text-xs"></i> Сохранить
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Logout -->
+          <div class="px-3 pb-3">
+            <button onclick="logout()"
+              class="w-full py-2.5 px-3 bg-red-900/20 hover:bg-red-900/40 border border-red-800 text-red-400 rounded-lg text-sm transition flex items-center justify-center gap-2">
+              <i class="fas fa-right-from-bracket"></i> Выйти
+            </button>
+          </div>
+
+        </div><!-- /profile-panel -->
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
+  <main class="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+
+    <!-- ─── SERVERS TAB ─────────────────────────────── -->
+    <section id="tab-servers" class="tab-content">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Серверы</h2>
+          <p class="text-gray-400 text-sm mt-0.5">Управление VPN-узлами инфраструктуры</p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="checkAllServers()" id="check-all-btn"
+            class="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition flex items-center gap-2">
+            <i class="fas fa-rotate text-xs"></i>
+            <span class="hidden sm:inline">Проверить все</span>
+          </button>
+          <button onclick="showAddServerModal()"
+            class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+            <i class="fas fa-plus text-xs"></i>
+            <span class="hidden sm:inline">Добавить сервер</span>
+          </button>
+        </div>
+      </div>
+      <div id="servers-grid"></div>
+      <div id="servers-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-server text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Серверов пока нет</p>
+        <p class="text-gray-600 text-sm mt-1">Добавьте первый VPN-сервер</p>
+        <button onclick="showAddServerModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-plus mr-2"></i>Добавить
+        </button>
+      </div>
+    </section>
+
+    <!-- ─── CONNECTIONS TAB ─────────────────────────── -->
+    <section id="tab-connections" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Подключения</h2>
+          <p class="text-gray-400 text-sm mt-0.5">VPN-конфигурации по серверам</p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="checkAllConnections()" id="check-all-conns-btn"
+            class="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition flex items-center gap-2">
+            <i class="fas fa-rotate text-xs"></i>
+            <span class="hidden sm:inline">Проверить все</span>
+          </button>
+          <button onclick="showAddConnectionModal()"
+            class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+            <i class="fas fa-plus text-xs"></i>
+            <span class="hidden sm:inline">Создать подключение</span>
+          </button>
+        </div>
+      </div>
+      <div id="connections-list" class="space-y-4"></div>
+      <div id="connections-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-network-wired text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Подключений пока нет</p>
+        <button onclick="showAddConnectionModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-plus mr-2"></i>Создать
+        </button>
+      </div>
+    </section>
+
+    <!-- ─── DOMAINS TAB ─────────────────────────────── -->
+    <section id="tab-domains" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Домены</h2>
+          <p class="text-gray-400 text-sm mt-0.5">DNS-записи, SSL-сертификаты, Nginx через Porkbun API</p>
+        </div>
+        <button onclick="showAddDomainModal()"
+          class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+          <i class="fas fa-plus text-xs"></i>
+          <span class="hidden sm:inline">Добавить домен</span>
+        </button>
+      </div>
+      <div id="domains-list" class="space-y-4"></div>
+    </section>
+
+    <!-- ─── USERS (MANAGEMENT) TAB ─────────────────── -->
+    <section id="tab-users" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">Пользователи</h2>
+          <p class="text-gray-400 text-sm mt-0.5">Управление учётными записями операторов</p>
+        </div>
+        <button onclick="showCreateUserModal()"
+          class="px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+          <i class="fas fa-user-plus text-xs"></i>
+          <span class="hidden sm:inline">Создать</span>
+        </button>
+      </div>
+      <div id="users-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      <div id="users-empty" class="hidden text-center py-16">
+        <div class="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-users text-3xl text-gray-600"></i>
+        </div>
+        <p class="text-gray-400 font-medium">Пользователей нет</p>
+        <button onclick="showCreateUserModal()" class="mt-4 px-4 py-2 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition">
+          <i class="fas fa-user-plus mr-2"></i>Создать
+        </button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+  MODALS
+══════════════════════════════════════════════════════ -->
+
+<!-- ADD SERVER -->
+<div id="modal-add-server" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-server text-brand-400"></i>Добавить сервер
+      </h3>
+      <button onclick="closeModal('modal-add-server')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <form id="add-server-form" class="p-6 space-y-6">
+
+      <!-- ШАГ 1: Роль — только это видно при открытии -->
+      <div id="role-step">
+        <p style="text-align:center;color:#9ca3af;font-size:0.875rem;margin-bottom:1rem;">Выберите роль сервера</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+
+          <!-- EU.Exit -->
+          <button type="button" id="role-card-eu" onclick="selectRole('EU')"
+            style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;
+                   padding:1.5rem 1rem;border-radius:0.875rem;border:2px solid #374151;
+                   background:#111827;cursor:pointer;width:100%;transition:all 0.2s;">
+            <input type="radio" name="role" value="EU" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="68" height="68" style="pointer-events:none;flex-shrink:0;">
+              <defs>
+                <radialGradient id="gBg" cx="40%" cy="35%" r="65%">
+                  <stop offset="0%" stop-color="#1e40af"/>
+                  <stop offset="100%" stop-color="#0c1a4d"/>
+                </radialGradient>
+              </defs>
+              <circle cx="36" cy="36" r="34" fill="url(#gBg)" stroke="#3b82f6" stroke-width="1.5"/>
+              <ellipse cx="36" cy="36" rx="34" ry="13" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="34" ry="23" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.4"/>
+              <line x1="2" y1="36" x2="70" y2="36" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="13" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <ellipse cx="36" cy="36" rx="23" ry="34" fill="none" stroke="#60a5fa" stroke-width="0.8" opacity="0.35"/>
+              <line x1="36" y1="2" x2="36" y2="70" stroke="#60a5fa" stroke-width="0.8" opacity="0.5"/>
+              <path d="M32 16 Q35 14 37 17 Q40 19 39 23 Q38 26 35 25 Q33 24 31 26 Q29 28 30 31 Q31 34 29 36 Q27 34 26 30 Q25 26 27 22 Z" fill="#22c55e" opacity="0.85"/>
+              <path d="M18 22 Q20 20 22 22 Q24 24 23 28 Q22 32 20 35 Q18 38 17 35 Q15 32 16 27 Z" fill="#22c55e" opacity="0.75"/>
+              <path d="M41 18 Q46 16 50 19 Q54 22 52 27 Q50 31 47 30 Q44 28 43 24 Q41 22 41 18 Z" fill="#22c55e" opacity="0.8"/>
+              <path d="M50 42 Q54 41 56 44 Q57 47 54 49 Q51 50 49 47 Q47 44 50 42 Z" fill="#22c55e" opacity="0.75"/>
+              <circle cx="36" cy="36" r="2" fill="#93c5fd" opacity="0.9"/>
+              <circle cx="20" cy="28" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <circle cx="50" cy="24" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <circle cx="42" cy="48" r="1.5" fill="#93c5fd" opacity="0.7"/>
+              <line x1="36" y1="36" x2="20" y2="28" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+              <line x1="36" y1="36" x2="50" y2="24" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+              <line x1="36" y1="36" x2="42" y2="48" stroke="#93c5fd" stroke-width="0.7" opacity="0.5"/>
+            </svg>
+            <span style="color:#fff;font-weight:700;font-size:0.9rem;pointer-events:none;">EU.Exit</span>
+          </button>
+
+          <!-- RU.Entry -->
+          <button type="button" id="role-card-ru" onclick="selectRole('RU')"
+            style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;
+                   padding:1.5rem 1rem;border-radius:0.875rem;border:2px solid #374151;
+                   background:#111827;cursor:pointer;width:100%;transition:all 0.2s;">
+            <input type="radio" name="role" value="RU" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="68" height="68" style="pointer-events:none;flex-shrink:0;">
+              <defs>
+                <clipPath id="ruClip"><circle cx="36" cy="36" r="34"/></clipPath>
+              </defs>
+              <rect x="0" y="0" width="72" height="24" fill="#f0f0f0" clip-path="url(#ruClip)"/>
+              <rect x="0" y="24" width="72" height="24" fill="#0039a6" clip-path="url(#ruClip)"/>
+              <rect x="0" y="48" width="72" height="24" fill="#d52b1e" clip-path="url(#ruClip)"/>
+              <circle cx="36" cy="36" r="34" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+            </svg>
+            <span style="color:#fff;font-weight:700;font-size:0.9rem;pointer-events:none;">RU.Entry</span>
+          </button>
+
+        </div>
+      </div>
+
+      <!-- ШАГ 2: Общие поля (появляются после выбора роли) -->
+      <div id="server-fields" class="space-y-4 hidden">
+
+        <!-- Название -->
+        <div>
+          <label class="form-label">Название сервера</label>
+          <input name="name" type="text" id="add-server-name"
+                 placeholder="Название сервера" class="form-input" required>
+        </div>
+
+
+        <!-- IP -->
+        <div>
+          <label class="form-label">IP-адрес</label>
+          <input name="ip" id="add-server-ip" type="text"
+                 placeholder="Введите IP-адрес" class="form-input" required>
+          <!-- geo-блок скрыт: страна определяется автоматически в шаге 4 настройки -->
+          <div id="add-server-geo" class="hidden">
+            <img id="add-server-flag-img" src="" alt="" class="hidden">
+            <span id="add-server-geo-text" class="hidden"></span>
+          </div>
+        </div>
+
+        <!-- EU: Пароль SSH -->
+        <div id="eu-fields" class="hidden">
+          <label class="form-label">Пароль SSH</label>
+          <input name="ssh_password" id="add-server-password" type="password" class="form-input"
+                 placeholder="Пароль от сервера" autocomplete="off">
+
+          <!-- Дополнительно для EU -->
+          <div class="mt-3">
+            <button type="button" onclick="toggleServerAdvanced()"
+              class="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition py-1 w-full">
+              <i id="server-adv-icon" class="fas fa-chevron-right text-xs transition-transform duration-200"></i>
+              <span>Дополнительные параметры</span>
+            </button>
+            <div id="server-advanced-fields" class="hidden mt-3 grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label class="form-label">Пользователь SSH</label>
+                <input name="ssh_user" id="add-server-ssh-user" type="text" value="root" class="form-input">
+                <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">root</code></p>
+              </div>
+              <div>
+                <label class="form-label">Порт SSH</label>
+                <input name="ssh_port" type="number" value="22" min="1" max="65535" class="form-input">
+                <p class="text-xs text-gray-600 mt-1">Обычно <code class="text-gray-500">22</code></p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RU: Пользователь + SSH-ключ -->
+        <div id="ru-fields" class="hidden space-y-4">
+          <div>
+            <label class="form-label">Пользователь SSH</label>
+            <input name="ssh_user_ru" id="add-server-ssh-user-ru" type="text" class="form-input"
+                   placeholder="username">
+          </div>
+          <div>
+            <label class="form-label">SSH-ключ</label>
+            <div id="ssh-key-drop-area"
+              class="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer hover:border-brand-500 transition"
+              onclick="document.getElementById('ssh-key-file-input').click()"
+              ondragover="event.preventDefault();this.classList.add('border-brand-400')"
+              ondragleave="this.classList.remove('border-brand-400')"
+              ondrop="handleSshKeyDrop(event)">
+              <i class="fas fa-key text-2xl text-gray-600 mb-2 block"></i>
+              <p id="ssh-key-filename" class="text-sm text-gray-500">Перетащите файл ключа или нажмите для выбора</p>
+              <p class="text-xs text-gray-700 mt-1">Обычно файл называется <code class="text-gray-600">id_rsa</code> или <code class="text-gray-600">*.pem</code></p>
+            </div>
+            <input type="file" id="ssh-key-file-input" class="hidden" accept=".pem,.key,*"
+                   onchange="handleSshKeyFile(this)">
+            <textarea name="ssh_key" id="add-server-ssh-key" class="hidden"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- скрытое поле страны — заполняется автоматически -->
+      <input type="hidden" name="country" id="add-server-country" value="??">
+
+      <div id="add-server-error" class="hidden p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm"></div>
+
+      <div class="flex gap-3">
+        <button type="button" onclick="closeModal('modal-add-server')"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">
+          Отмена
+        </button>
+        <button type="submit"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-plus text-xs"></i>Добавить
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- SERVER DETAIL (4 вкладки) -->
+<div id="modal-server-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+
+    <!-- Шапка -->
+    <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-800 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <div id="sd-flag" class="flex-shrink-0"></div>
+        <div class="min-w-0">
+          <h3 id="sd-title" class="text-base font-bold text-white truncate">Сервер</h3>
+          <div id="sd-meta" class="flex items-center gap-2 mt-0.5"></div>
+        </div>
+      </div>
+      <button onclick="closeModal('modal-server-detail')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-4">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Вкладки -->
+    <div class="flex border-b border-gray-800 flex-shrink-0 px-2">
+      <button onclick="sdTab('overview')" id="sd-tab-overview"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-brand-400 border-b-2 border-brand-500 transition">
+        <i class="fas fa-circle-info mr-1.5"></i>Обзор
+      </button>
+      <button onclick="sdTab('actions')" id="sd-tab-actions"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-bolt mr-1.5"></i>Действия
+      </button>
+      <button onclick="sdTab('stack')" id="sd-tab-stack"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-layer-group mr-1.5"></i>Стек
+      </button>
+      <button onclick="sdTab('params')" id="sd-tab-params"
+        class="sd-tab-btn px-4 py-3 text-sm font-medium text-gray-500 hover:text-gray-300 border-b-2 border-transparent transition">
+        <i class="fas fa-sliders mr-1.5"></i>Параметры
+      </button>
+    </div>
+
+    <!-- Контент вкладок -->
+    <div class="overflow-y-auto flex-1 p-6">
+
+      <!-- ОБЗОР -->
+      <div id="sd-pane-overview">
+        <div id="sd-overview-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- ДЕЙСТВИЯ -->
+      <div id="sd-pane-actions" class="hidden">
+        <div class="space-y-3" id="sd-actions-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- СТЕК -->
+      <div id="sd-pane-stack" class="hidden">
+        <div id="sd-stack-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+      <!-- ПАРАМЕТРЫ -->
+      <div id="sd-pane-params" class="hidden">
+        <div id="sd-params-content">
+          <div class="flex justify-center py-8"><span class="spinner"></span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══ WIZARD: CREATE CONNECTIONS ═══════════════════════════════════════ -->
+<div id="modal-wizard-conn" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style="max-height:90vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-network-wired text-brand-400"></i>Создать подключения
+      </h3>
+      <button onclick="closeModal('modal-wizard-conn')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="wizard-body" class="p-6 flex-1 overflow-y-auto"></div>
+    <div id="wizard-footer" class="px-6 py-4 border-t border-gray-800 flex-shrink-0"></div>
+  </div>
+</div>
+
+<!-- ═══ DEPLOY LOG MODAL ══════════════════════════════════════════════════ -->
+<!-- ═══ DEPLOY LOG MODAL (wizard-style, как у серверов) ══════════════════ -->
+<div id="modal-deploy-log" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[60] p-4" style="pointer-events:auto;">
+  <div class="bg-[#0f1117] border border-white/8 rounded-2xl shadow-2xl w-full max-w-[560px] overflow-hidden" onclick="event.stopPropagation()">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-white/6">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="deploy-log-dot" style="
+          width:9px;height:9px;border-radius:50%;flex-shrink:0;
+          background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.25);
+          transition:background .4s,box-shadow .4s;display:inline-block;"></span>
+        <div class="min-w-0">
+          <span class="text-sm font-semibold text-white">Настройка подключений</span>
+          <p id="deploy-log-status" class="text-[11px] text-gray-500 mt-0.5">Инициализация...</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0 ml-3">
+        <span id="deploy-log-spinner"><i class="fas fa-spinner fa-spin text-brand-400 text-xs"></i></span>
+        <button id="deploy-log-close" onclick="closeDeployLog()"
+          style="display:none"
+          class="px-4 py-1.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-xs font-semibold text-white transition">
+          Закрыть
+        </button>
+      </div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="h-[2px] bg-white/5">
+      <div id="deploy-log-progress" class="h-full rounded-full transition-all duration-700"
+           style="width:0%;background:linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)"></div>
+    </div>
+
+    <!-- Connection cards -->
+    <div id="deploy-log-body" class="overflow-y-auto p-4 space-y-3 scrollbar-thin"
+         style="max-height:62vh; min-height:180px;"></div>
+
+  </div>
+</div>
+
+<!-- ═══ CONNECTION AUTO-SETUP MODAL ══════════════════════════════════════ -->
+<div id="modal-conn-setup" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[60] p-4" style="pointer-events:auto;">
+  <div class="bg-[#0f1117] border border-white/8 rounded-2xl shadow-2xl w-full max-w-[540px] overflow-hidden" onclick="event.stopPropagation()">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-white/6">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="conn-setup-status-dot" style="
+          width:9px;height:9px;border-radius:50%;flex-shrink:0;
+          background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.25);
+          transition:background .4s,box-shadow .4s;display:inline-block;"></span>
+        <div class="min-w-0">
+          <span id="conn-setup-title" class="text-sm font-semibold text-white">Настройка подключений</span>
+          <p id="conn-setup-subtitle" class="text-[11px] text-gray-500 mt-0.5 truncate">Шаги выполняются последовательно</p>
+        </div>
+      </div>
+      <span id="conn-setup-server-name" class="text-xs font-medium text-gray-400 hidden sm:block max-w-[180px] truncate flex-shrink-0 ml-3"></span>
+    </div>
+
+    <!-- Progress bar (thin gradient line) -->
+    <div class="h-[2px] bg-white/5">
+      <div id="conn-setup-progress-fill" class="h-full rounded-full transition-all duration-700"
+           style="width:0%;background:linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)"></div>
+    </div>
+
+    <!-- Steps timeline (5 steps) -->
+    <div class="px-6 pt-5 pb-3">
+      <div class="flex items-center">
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-1"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">VLESS</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-1"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-2"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">AWG</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-2"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-3"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">NaiveProxy</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-3"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-4"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Cascade</span>
+        </div>
+        <div class="stp-connector flex-1" id="csd-conn-4"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="csd-dot-5"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Финал</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Per-step log accordions -->
+    <div class="px-6 space-y-1 pb-3 max-h-[46vh] overflow-y-auto scrollbar-thin">
+
+      <!-- Step 1: VLESS+Reality -->
+      <div id="csd-step-1-wrap" class="hidden">
+        <button onclick="_csdToggleLog(1)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-1" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">VLESS+Reality</span>
+          <i id="csd-chev-1" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-1" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 2: AmneziaWG -->
+      <div id="csd-step-2-wrap" class="hidden">
+        <button onclick="_csdToggleLog(2)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-2" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">AmneziaWG</span>
+          <i id="csd-chev-2" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-2" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 3: NaiveProxy -->
+      <div id="csd-step-3-wrap" class="hidden">
+        <button onclick="_csdToggleLog(3)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-3" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">NaiveProxy</span>
+          <i id="csd-chev-3" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-3" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 4: Cascade -->
+      <div id="csd-step-4-wrap" class="hidden">
+        <button onclick="_csdToggleLog(4)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-4" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">Cascade / RU Xray routing</span>
+          <i id="csd-chev-4" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-4" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+      <!-- Step 5: Final (WARP / split-tunnel / misc) -->
+      <div id="csd-step-5-wrap" class="hidden">
+        <button onclick="_csdToggleLog(5)"
+          class="w-full flex items-center gap-2 py-1.5 text-left group">
+          <span id="csd-icon-5" class="text-[10px] w-4 text-center flex-shrink-0">·</span>
+          <span class="text-[11px] font-semibold text-gray-300 group-hover:text-white transition flex-1">WARP / Split-tunnel / Финал</span>
+          <i id="csd-chev-5" class="fas fa-chevron-right text-[9px] text-gray-600 transition-transform flex-shrink-0"></i>
+        </button>
+        <div id="csd-log-5" class="hidden stp-log-block mb-1"></div>
+      </div>
+
+    </div>
+
+    <!-- Error block -->
+    <div id="conn-setup-error-block" class="hidden mx-6 mb-2 px-4 py-3 bg-red-950/50 border border-red-800/60 rounded-xl">
+      <div class="flex items-start gap-2">
+        <i class="fas fa-triangle-exclamation text-red-400 text-xs mt-0.5 flex-shrink-0"></i>
+        <span id="conn-setup-error-text" class="text-xs text-red-300 break-all"></span>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <div class="px-6 pb-5 pt-2 flex gap-2">
+      <button id="conn-setup-btn-cancel" onclick="closeConnSetup()"
+        class="py-2.5 px-5 rounded-xl text-sm font-medium border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition flex items-center justify-center gap-2 h-10">
+        <i class="fas fa-xmark text-xs"></i> Отмена
+      </button>
+      <button id="conn-setup-btn-retry" onclick="retryConnSetup()"
+        style="display:none"
+        class="flex-1 py-2.5 bg-amber-700/80 hover:bg-amber-600 rounded-xl text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-rotate-right text-xs"></i> Повторить опрос
+      </button>
+      <button id="conn-setup-btn-done" onclick="closeConnSetup()"
+        style="display:none"
+        class="flex-1 py-2.5 bg-emerald-700/80 hover:bg-emerald-600 rounded-xl text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-check text-xs"></i> Закрыть
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ CONNECTION DETAIL MODAL ══════════════════════════════════════════ -->
+<div id="modal-conn-detail" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl flex flex-col" style="max-height:90vh;">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <div id="conn-detail-header" class="flex items-center gap-3 min-w-0"></div>
+      <button onclick="closeModal('modal-conn-detail')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-3">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="conn-detail-content" class="flex-1 overflow-y-auto p-6"></div>
+  </div>
+</div>
+
+<!-- CLIENT CONFIG -->
+<!-- INSTALL STACK -->
+<div id="modal-install-stack" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-download text-brand-400"></i>Установка VPN стека
+      </h3>
+      <button onclick="closeModal('modal-install-stack')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <p class="text-gray-400 text-sm">Выберите компоненты для установки:</p>
+      <div class="space-y-2">
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-xray" checked class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">Xray-core</div>
+            <div class="text-xs text-gray-500">Для VLESS + Reality подключений</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-naive" class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">NaiveProxy (Caddy)</div>
+            <div class="text-xs text-gray-500">Для NaiveProxy подключений</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-awg" class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">AmneziaWG</div>
+            <div class="text-xs text-gray-500">Для AmneziaWG подключений</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 bg-gray-800 rounded-lg cursor-pointer hover:bg-gray-750 transition">
+          <input type="checkbox" id="install-warp" class="w-4 h-4 accent-brand-500">
+          <div>
+            <div class="text-sm font-medium text-white">Cloudflare WARP</div>
+            <div class="text-xs text-gray-500">Fallback выход (для каскадной схемы)</div>
+          </div>
+        </label>
+      </div>
+      <div id="install-output" class="hidden mt-2 p-3 bg-gray-800 rounded-lg text-xs font-mono text-green-400 max-h-32 overflow-y-auto"></div>
+      <input type="hidden" id="install-server-id">
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeModal('modal-install-stack')"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+        <button onclick="confirmInstallStack()"
+          class="flex-1 py-2.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-download text-xs"></i>Установить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SERVER SETTINGS -->
+<!-- SERVER SETTINGS — 4 tabs -->
+<div id="modal-server-settings" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col" style="max-height:90vh;">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="settings-server-flag" class="flex-shrink-0"></span>
+        <div class="min-w-0">
+          <h3 class="text-base font-bold text-white leading-tight" id="settings-server-title"></h3>
+          <span class="text-xs text-gray-500" id="settings-server-meta"></span>
+        </div>
+      </div>
+      <button onclick="closeModal('modal-server-settings')" class="text-gray-500 hover:text-white transition p-1 flex-shrink-0 ml-4">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="flex border-b border-gray-800 flex-shrink-0 px-2">
+      <button id="stab-overview" onclick="switchSettingsTab('overview')"
+        class="settings-tab active px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-circle-info mr-1.5"></i>Обзор
+      </button>
+      <button id="stab-actions" onclick="switchSettingsTab('actions')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-bolt mr-1.5"></i>Действия
+      </button>
+      <button id="stab-stack" onclick="switchSettingsTab('stack')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-layer-group mr-1.5"></i>Стек
+      </button>
+      <button id="stab-security" onclick="switchSettingsTab('security')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-shield-halved mr-1.5"></i>Безопасность
+      </button>
+      <button id="stab-params" onclick="switchSettingsTab('params')"
+        class="settings-tab px-4 py-3 text-sm font-medium border-b-2 transition">
+        <i class="fas fa-sliders mr-1.5"></i>Параметры
+      </button>
+    </div>
+
+    <!-- Scrollable body -->
+    <div class="overflow-y-auto flex-1">
+      <input type="hidden" id="settings-server-id">
+
+      <!-- ─── TAB: OVERVIEW ─── -->
+      <div id="stab-content-overview" class="p-5 space-y-4">
+
+        <!-- Server info row -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">IP-адрес</p>
+            <p class="text-sm font-mono text-white" id="sov-ip">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Роль</p>
+            <p class="text-sm text-white" id="sov-role">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Страна</p>
+            <p class="text-sm text-white flex items-center gap-1.5" id="sov-country">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3">
+            <p class="text-xs text-gray-500 mb-1">Домен</p>
+            <p class="text-sm text-white font-mono truncate" id="sov-domain">—</p>
+          </div>
+          <div class="bg-gray-800/60 rounded-xl p-3 col-span-2">
+            <p class="text-xs text-gray-500 mb-1">Добавлен</p>
+            <p class="text-sm text-white" id="sov-created">—</p>
+          </div>
+        </div>
+
+        <!-- System info -->
+        <div>
+          <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+            <i class="fas fa-microchip text-brand-400"></i> Системная информация
+            <button onclick="loadServerInfoTab()" class="ml-auto text-gray-600 hover:text-gray-300 transition" title="Обновить">
+              <i class="fas fa-arrows-rotate text-xs"></i>
+            </button>
+          </div>
+          <div id="sov-sysinfo" class="grid grid-cols-2 gap-2">
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">ОС</p>
+              <p class="text-xs text-gray-300" id="sov-os">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">CPU</p>
+              <p class="text-xs text-gray-300" id="sov-cpu">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">RAM</p>
+              <p class="text-xs text-gray-300" id="sov-ram">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl p-3">
+              <p class="text-xs text-gray-500 mb-1">Диск</p>
+              <p class="text-xs text-gray-300" id="sov-disk">—</p>
+            </div>
+            <div class="bg-gray-800/60 rounded-xl col-span-2 p-3">
+              <p class="text-xs text-gray-500 mb-1">Аптайм</p>
+              <p class="text-xs text-gray-300" id="sov-uptime">—</p>
+            </div>
+          </div>
+          <p id="sov-sysinfo-hint" class="text-xs text-gray-600 mt-2 text-center">
+            Нажмите <i class="fas fa-arrows-rotate"></i> для загрузки данных
+          </p>
+        </div>
+      </div>
+
+      <!-- ─── TAB: ACTIONS ─── -->
+      <div id="stab-content-actions" class="p-5 space-y-3 hidden">
+
+        <!-- Setup server -->
+        <div class="bg-gray-800/40 rounded-xl p-4 border border-brand-900/40">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white flex items-center gap-2">
+                <i class="fas fa-wand-magic-sparkles text-brand-400"></i> Автонастройка сервера
+              </p>
+              <p class="text-xs text-gray-500 mt-0.5">Установка стека, безопасность, ключи — всё автоматически</p>
+            </div>
+            <button onclick="startServerSetup()" id="btn-start-setup"
+              class="flex-shrink-0 px-3 py-1.5 bg-brand-600/20 hover:bg-brand-600/40 border border-brand-700 rounded-lg text-xs font-medium text-brand-300 transition flex items-center gap-1.5">
+              <i class="fas fa-play text-xs"></i> Запустить
+            </button>
+          </div>
+          <div id="setup-status-line" class="hidden mt-2 text-xs"></div>
+        </div>
+
+        <!-- Update -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Обновить статус</p>
+              <p class="text-xs text-gray-500 mt-0.5">Пинг, статус Online/Offline</p>
+            </div>
+            <button onclick="updateServerStatus()" id="btn-update-status"
+              class="flex-shrink-0 px-3 py-1.5 bg-brand-600/20 hover:bg-brand-600/40 border border-brand-700 rounded-lg text-xs font-medium text-brand-300 transition flex items-center gap-1.5">
+              <i class="fas fa-satellite-dish text-xs"></i> Обновить
+            </button>
+          </div>
+          <div id="action-ping-result" class="hidden mt-2 text-xs text-gray-400"></div>
+        </div>
+
+        <!-- Restart services -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Перезапустить сервисы</p>
+              <p class="text-xs text-gray-500 mt-0.5">Xray, AmneziaWG, WARP, NaiveProxy</p>
+            </div>
+            <button onclick="restartServicesAction()"
+              class="flex-shrink-0 px-3 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 rounded-lg text-xs font-medium text-yellow-300 transition flex items-center gap-1.5">
+              <i class="fas fa-rotate-right text-xs"></i> Рестарт
+            </button>
+          </div>
+        </div>
+
+        <!-- Redeploy config -->
+        <div class="bg-gray-800/40 rounded-xl p-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-white">Передеплоить конфиги</p>
+              <p class="text-xs text-gray-500 mt-0.5">Пересоздать конфигурации без переустановки</p>
+            </div>
+            <button onclick="redeployConfigAction()"
+              class="flex-shrink-0 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-700 rounded-lg text-xs font-medium text-blue-300 transition flex items-center gap-1.5">
+              <i class="fas fa-upload text-xs"></i> Redeploy
+            </button>
+          </div>
+        </div>
+
+        <!-- Delete server -->
+        <div class="bg-gray-800/40 rounded-xl p-4 border border-red-900/40">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-medium text-red-300">Удалить сервер</p>
+              <p class="text-xs text-gray-500 mt-0.5">Все подключения этого сервера будут удалены</p>
+            </div>
+            <button onclick="deleteServerFromSettings()"
+              class="flex-shrink-0 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-700 rounded-lg text-xs font-medium text-red-300 transition flex items-center gap-1.5">
+              <i class="fas fa-trash text-xs"></i> Удалить
+            </button>
+          </div>
+        </div>
+
+        <p id="settings-action-msg" class="text-xs text-center text-gray-500"></p>
+      </div>
+
+      <!-- ─── TAB: STACK ─── -->
+      <div id="stab-content-stack" class="p-5 hidden">
+
+        <!-- Stack table -->
+        <div class="space-y-2 mb-4">
+          <!-- Xray -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-xray">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-xray" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">Xray-core</p>
+                <p class="text-xs text-gray-500" id="stack-status-xray">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-xray"></div>
+          </div>
+          <!-- AmneziaWG -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-awg">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-awg" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">AmneziaWG</p>
+                <p class="text-xs text-gray-500" id="stack-status-awg">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-awg"></div>
+          </div>
+          <!-- WARP -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-warp">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-warp" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">WARP</p>
+                <p class="text-xs text-gray-500" id="stack-status-warp">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-warp"></div>
+          </div>
+          <!-- NaiveProxy -->
+          <div class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl" id="stack-row-naive">
+            <div class="flex items-center gap-3">
+              <span id="stack-icon-naive" class="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+              <div>
+                <p class="text-sm font-medium text-white">NaiveProxy</p>
+                <p class="text-xs text-gray-500" id="stack-status-naive">Не установлен</p>
+              </div>
+            </div>
+            <div class="flex gap-1.5" id="stack-btns-naive"></div>
+          </div>
+        </div>
+
+        <!-- Destroy all -->
+        <button onclick="destroyAllStack()"
+          class="w-full py-2 bg-red-600/15 hover:bg-red-600/30 border border-red-800 rounded-xl text-sm font-medium text-red-400 transition flex items-center justify-center gap-2">
+          <i class="fas fa-bomb text-xs"></i> Снести весь стек
+        </button>
+
+        <!-- Install output log -->
+        <div id="stack-output" class="hidden mt-3 p-3 bg-black/40 rounded-xl font-mono text-xs text-gray-400 whitespace-pre-wrap max-h-40 overflow-y-auto"></div>
+      </div>
+
+      <!-- ─── TAB: SECURITY ─── -->
+      <div id="stab-content-security" class="p-5 space-y-4 hidden">
+        <div class="flex items-center justify-between mb-1">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+            <i class="fas fa-shield-halved text-purple-400"></i> Статус защиты
+          </p>
+          <div class="flex items-center gap-2">
+            <span id="sec-loading" class="hidden text-xs text-gray-500">Загружаю...</span>
+            <button id="sec-refresh-btn" onclick="loadSecurityStatus()" class="text-gray-600 hover:text-gray-300 transition" title="Обновить статус">
+              <i class="fas fa-arrows-rotate text-xs"></i>
+            </button>
+          </div>
+        </div>
+        <div class="space-y-2">
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Fail2Ban</p>
+              <p class="text-xs text-gray-500">Блокировка после 5 неудачных попыток входа</p>
+            </div>
+            <input type="checkbox" id="sec-fail2ban" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('fail2ban', this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">UFW Firewall</p>
+              <p class="text-xs text-gray-500">Разрешить только нужные порты</p>
+            </div>
+            <input type="checkbox" id="sec-ufw" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('ufw', this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Вход по паролю запрещён</p>
+              <p class="text-xs text-gray-500">PasswordAuthentication no в sshd_config</p>
+            </div>
+            <input type="checkbox" id="sec-password-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('password_login', !this.checked)">
+          </label>
+          <label class="flex items-center justify-between p-3 bg-gray-800/60 rounded-xl cursor-pointer hover:bg-gray-800 transition">
+            <div>
+              <p class="text-sm text-white">Вход под root запрещён</p>
+              <p class="text-xs text-gray-500">PermitRootLogin no в sshd_config</p>
+            </div>
+            <input type="checkbox" id="sec-root-login" class="w-4 h-4 accent-brand-500" onchange="applySecSetting('root_login', !this.checked)">
+          </label>
+        </div>
+        <p id="sec-status-msg" class="text-xs mt-1 text-center hidden"></p>
+      </div>
+
+      <!-- ─── TAB: PARAMS ─── -->
+      <div id="stab-content-params" class="p-5 space-y-5 hidden">
+
+        <!-- Basic -->
+        <div>
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i class="fas fa-tag text-brand-400"></i> Основное
+          </p>
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="form-label">Название</label>
+                <input id="settings-name" type="text" class="form-input" placeholder="EU-DE-01">
+              </div>
+              <div>
+                <label class="form-label">IP-адрес</label>
+                <input id="settings-ip" type="text" class="form-input font-mono" placeholder="Введите IP-адрес">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="form-label">Роль</label>
+                <input id="settings-role" type="text" class="form-input bg-gray-800/40 text-gray-400 cursor-not-allowed" readonly>
+              </div>
+              <div>
+                <label class="form-label">Страна</label>
+                <input id="settings-country" type="text" class="form-input font-mono bg-gray-800/40 text-gray-400 cursor-not-allowed" readonly maxlength="2">
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Домен</label>
+              <input id="settings-domain" type="text" class="form-input" placeholder="vpn.example.com">
+            </div>
+          </div>
+        </div>
+
+        <!-- SSH Access -->
+        <div class="border-t border-gray-800 pt-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+            <i class="fas fa-terminal text-green-400"></i> SSH доступ
+          </p>
+          <div class="space-y-3">
+            <div class="grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label class="form-label">Пользователь</label>
+                <input id="settings-ssh-user" type="text" class="form-input" placeholder="root">
+              </div>
+              <div>
+                <label class="form-label">Порт</label>
+                <input id="settings-ssh-port" type="number" class="form-input" placeholder="Порт SSH" min="1" max="65535">
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Пароль SSH</label>
+              <div class="relative">
+                <input id="settings-ssh-password" type="password" class="form-input pr-10" placeholder="••••••••" autocomplete="off">
+                <button type="button" id="btn-show-ssh-password" onclick="loadSshPassword()"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition"
+                  title="Показать/скрыть пароль">
+                  <i class="fas fa-eye text-xs"></i>
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="form-label">Приватный SSH-ключ</label>
+              <input type="hidden" id="settings-ssh-key" value="">
+              <button type="button" id="btn-copy-ssh-key" onclick="copyPrivateSshKey()"
+                class="w-full py-2 px-3 bg-gray-700/40 hover:bg-gray-700/70 border border-gray-600 rounded-lg text-xs text-gray-300 transition flex items-center justify-center gap-2">
+                <i class="fas fa-copy text-xs"></i> Скопировать приватный ключ
+              </button>
+              <p id="copy-key-msg" class="text-xs text-center mt-1 hidden"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Save button -->
+        <div class="border-t border-gray-800 pt-4">
+          <button onclick="saveServerParams()"
+            class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-xl text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+            <i class="fas fa-floppy-disk text-xs"></i> Сохранить параметры
+          </button>
+        </div>
+
+      </div>
+    </div><!-- /scrollable body -->
+  </div>
+</div>
+
+<!-- CREATE USER -->
+<div id="modal-create-user" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-user-plus text-brand-400"></i>Создать пользователя
+      </h3>
+      <button onclick="closeModal('modal-create-user')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="create-user-modal-body"></div>
+  </div>
+</div>
+
+<!-- EDIT USER MODAL -->
+<div id="modal-edit-user" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-user-pen text-brand-400"></i>
+        <span id="edit-user-modal-title">Изменить пользователя</span>
+      </h3>
+      <button onclick="closeModal('modal-edit-user')" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="edit-user-modal-body" class="p-5 space-y-4"></div>
+  </div>
+</div>
+
+<!-- TOTP ONE-TIME SHOW -->
+<div id="modal-totp-once" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 id="totp-once-title" class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-qrcode text-brand-400"></i>TOTP аутентификатор
+      </h3>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="p-3 bg-yellow-900/30 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-start gap-2">
+        <i class="fas fa-triangle-exclamation mt-0.5 flex-shrink-0"></i>
+        <span>Отсканируйте QR в приложении (Google Authenticator, Aegis, 2FAS), затем введите код для подтверждения. Ключ показывается <strong>только один раз</strong>.</span>
+      </div>
+      <p class="text-sm text-gray-400">Пользователь: <span id="totp-once-user" class="font-semibold text-white"></span></p>
+      <div class="flex justify-center">
+        <img id="totp-once-qr" src="" alt="TOTP QR" class="w-44 h-44 rounded-lg bg-white p-2">
+      </div>
+      <div class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+        <code id="totp-once-secret" class="flex-1 text-xs font-mono text-brand-300 break-all"></code>
+        <button onclick="copyTotpSecret()" class="text-gray-500 hover:text-brand-400 transition p-1" title="Скопировать">
+          <i class="fas fa-copy text-xs"></i>
+        </button>
+      </div>
+
+      <!-- Confirm TOTP code -->
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5">
+          <i class="fas fa-mobile-screen-button mr-1 text-brand-400"></i>Введите код из приложения для подтверждения
+        </label>
+        <input id="totp-once-code" type="text" inputmode="numeric" maxlength="6"
+          placeholder="000000" autocomplete="one-time-code"
+          class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-2xl text-white text-center tracking-[0.5em] placeholder-gray-600 placeholder:tracking-normal focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition font-mono">
+      </div>
+      <div id="totp-once-error" class="hidden p-2 bg-red-900/40 border border-red-800 rounded-lg text-red-300 text-xs flex items-center gap-2">
+        <i class="fas fa-circle-exclamation flex-shrink-0"></i>
+        <span id="totp-once-error-text"></span>
+      </div>
+      <button id="totp-once-confirm-btn" onclick="confirmTotpOnce()"
+        class="w-full py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-check"></i> Подтвердить
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD DOMAIN MODAL -->
+<div id="modal-add-domain" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-globe text-brand-400"></i>Добавить домен
+      </h3>
+      <button onclick="closeAddDomainModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="p-3 bg-blue-900/30 border border-blue-800 rounded-lg text-blue-300 text-xs flex items-start gap-2">
+        <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+        <span>Укажите домен и API-ключи от Porkbun. Ключи можно создать на <a href="https://porkbun.com/account/api" target="_blank" class="underline">porkbun.com/account/api</a></span>
+      </div>
+      <div>
+        <label class="form-label">Домен</label>
+        <input id="add-domain-name" type="text" placeholder="example.com" class="form-input" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label">Porkbun API Key</label>
+        <input id="add-domain-apikey" type="text" placeholder="pk1_..." class="form-input font-mono text-sm" autocomplete="off">
+      </div>
+      <div>
+        <label class="form-label">Porkbun Secret Key</label>
+        <input id="add-domain-secret" type="password" placeholder="sk1_..." class="form-input font-mono text-sm" autocomplete="off">
+      </div>
+      <div id="add-domain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeAddDomainModal()"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+        <button id="add-domain-btn" type="button" onclick="submitAddDomain()"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-check text-xs"></i>Добавить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE SUBDOMAIN MODAL -->
+<div id="modal-create-subdomain" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-5 border-b border-gray-800">
+      <h3 class="text-base font-bold text-white flex items-center gap-2">
+        <i class="fas fa-sitemap text-brand-400"></i>Новый поддомен
+      </h3>
+      <button onclick="closeCreateSubdomainModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div class="p-5 space-y-4">
+      <!-- Domain badge -->
+      <div class="flex items-center gap-2 px-3 py-2 bg-gray-800 rounded-lg text-sm">
+        <i class="fas fa-globe text-gray-400 text-xs"></i>
+        <span id="subdomain-domain-name" class="font-mono text-brand-300 font-medium"></span>
+      </div>
+
+      <!-- Subdomain name -->
+      <div>
+        <label class="form-label">Поддомен</label>
+        <div class="flex items-center gap-0">
+          <input id="subdomain-name-input" type="text"
+            placeholder="имя"
+            class="form-input rounded-r-none flex-1 font-mono"
+            oninput="onSubdomainNameInput()"
+            autocomplete="off">
+          <span id="subdomain-domain-suffix" class="px-3 py-2.5 bg-gray-700 border border-l-0 border-gray-600 rounded-r-lg text-sm text-gray-400 font-mono whitespace-nowrap"></span>
+        </div>
+        <div class="mt-1 text-xs text-gray-500">
+          Итог: <span id="subdomain-fullname-preview" class="font-mono text-brand-300"></span>
+        </div>
+      </div>
+
+      <!-- Type select -->
+      <div>
+        <label class="form-label">Тип</label>
+        <div class="custom-select-wrap">
+          <select id="subdomain-type-select" class="form-input custom-select" onchange="onSubdomainTypeChange()">
+            <option value="admin_panel">🛡 Админ-панель</option>
+            <option value="client_site">🌐 Клиентский сайт</option>
+            <option value="swagger">📋 Swagger API</option>
+            <option value="naiveproxy_eu">🇪🇺 NaiveProxy EU</option>
+            <option value="naiveproxy_ru">🇷🇺 NaiveProxy RU</option>
+          </select>
+        </div>
+        <p id="subdomain-type-hint" class="mt-1.5 text-xs text-gray-400 min-h-[1rem]"></p>
+      </div>
+
+      <div id="create-subdomain-error" class="text-red-400 text-sm min-h-[1.2rem]"></div>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeCreateSubdomainModal()"
+          class="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition">Отмена</button>
+        <button id="create-subdomain-btn" type="button" onclick="submitCreateSubdomain()"
+          class="flex-1 py-2.5 bg-brand-600 hover:bg-brand-500 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+          <i class="fas fa-plus text-xs"></i>Создать
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SETUP PROGRESS MODAL -->
+<div id="modal-setup-progress" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between p-6 border-b border-gray-800">
+      <h3 id="progress-modal-title" class="text-lg font-bold text-white flex items-center gap-2">
+        <i class="fas fa-cog fa-spin text-brand-400"></i>Настройка поддомена
+      </h3>
+      <button onclick="closeProgressModal()" class="text-gray-500 hover:text-white transition p-1">
+        <i class="fas fa-xmark text-lg"></i>
+      </button>
+    </div>
+    <div id="progress-steps-container" class="p-6 space-y-1 max-h-[60vh] overflow-y-auto"></div>
+  </div>
+</div>
+
+
+<!-- SETUP PROGRESS MODAL (automated server setup) -->
+<div id="modal-server-setup" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[60] p-4" style="pointer-events:auto;">
+  <div class="bg-[#0f1117] border border-white/8 rounded-2xl shadow-2xl w-full max-w-[520px] overflow-hidden" onclick="event.stopPropagation()">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-white/6">
+      <div class="flex items-center gap-3 min-w-0">
+        <!-- Пульсирующая точка статуса -->
+        <span id="setup-status-dot" style="
+          width:9px;height:9px;border-radius:50%;flex-shrink:0;
+          background:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.25);
+          transition:background .4s,box-shadow .4s;display:inline-block;"></span>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <span id="setup-modal-title" class="text-sm font-semibold text-white">Настройка сервера</span>
+            <span id="setup-role-tag" class="text-[10px] font-bold px-2 py-0.5 rounded-md" style="background:#1e3a5f;color:#93c5fd"></span>
+          </div>
+          <p id="setup-modal-subtitle" class="text-[11px] text-gray-500 mt-0.5 truncate">Шаги выполняются последовательно</p>
+        </div>
+      </div>
+      <!-- Имя сервера + IP справа -->
+      <div class="flex items-center gap-2 flex-shrink-0 ml-3">
+        <span id="setup-server-name" class="text-xs font-medium text-gray-300 hidden sm:block"></span>
+        <span id="setup-ip-tag" class="font-mono text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-md"></span>
+      </div>
+    </div>
+
+    <!-- Progress bar (тонкая линия) -->
+    <div class="h-[2px] bg-white/5">
+      <div id="setup-progress-fill" class="h-full rounded-full transition-all duration-700"
+           style="width:0%;background:linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)"></div>
+    </div>
+
+    <!-- Steps timeline -->
+    <div class="px-6 pt-5 pb-3">
+      <div class="flex items-center">
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="setup-dot-1"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Связь</span>
+        </div>
+        <div class="stp-connector flex-1" id="setup-conn-1"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="setup-dot-2"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Стек</span>
+        </div>
+        <div class="stp-connector flex-1" id="setup-conn-2"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="setup-dot-3"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Безоп.</span>
+        </div>
+        <div class="stp-connector flex-1" id="setup-conn-3"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="setup-dot-4"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Параметры</span>
+        </div>
+        <div class="stp-connector flex-1" id="setup-conn-4"></div>
+
+        <div class="flex flex-col items-center">
+          <div class="stp-dot stp-pending" id="setup-dot-5"></div>
+          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Проверка</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Accordion логи шагов -->
+    <div class="px-6 space-y-1 max-h-56 overflow-y-auto pb-1 scrollbar-thin">
+      <div id="setup-step-1-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-2-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-3-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-4-log" class="hidden stp-log-block"></div>
+      <div id="setup-step-5-log" class="hidden stp-log-block"></div>
+    </div>
+
+    <!-- Тайминги (скрыты, для совместимости с JS) -->
+    <div class="hidden">
+      <span id="setup-time-1"></span><span id="setup-time-2"></span>
+      <span id="setup-time-3"></span><span id="setup-time-4"></span>
+      <span id="setup-time-5"></span>
+    </div>
+
+    <!-- Блок итоговых параметров (показывается после завершения) -->
+    <div id="setup-result-block" class="hidden mx-6 mb-2 rounded-xl border border-white/6 bg-white/3 overflow-hidden">
+      <div class="px-4 py-2.5 border-b border-white/6">
+        <span class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Сохранённые параметры доступа</span>
+      </div>
+      <div id="setup-result-content" class="px-4 py-3 space-y-1.5 text-xs"></div>
+    </div>
+
+    <!-- Блок ошибки -->
+    <div id="setup-error-block" class="hidden mx-6 mb-2 px-4 py-3 bg-red-950/50 border border-red-800/60 rounded-xl">
+      <div class="flex items-start gap-2">
+        <i class="fas fa-triangle-exclamation text-red-400 text-xs mt-0.5 flex-shrink-0"></i>
+        <span id="setup-error-text" class="text-xs text-red-300 break-all"></span>
+      </div>
+    </div>
+
+    <!-- Кнопки -->
+    <div class="px-6 pb-5 pt-2 flex gap-2">
+      <button id="setup-btn-cancel" onclick="cancelServerSetup()"
+        class="py-2.5 px-5 rounded-xl text-sm font-medium transition flex items-center justify-center gap-2 h-10">
+        <i class="fas fa-xmark text-xs"></i> Отмена
+      </button>
+      <button id="setup-btn-retry" onclick="retryServerSetup()"
+        style="display:none"
+        class="flex-1 py-2.5 bg-amber-700/80 hover:bg-amber-600 rounded-xl text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-rotate-right text-xs"></i> Повторить
+      </button>
+      <button id="setup-btn-done" onclick="closeServerSetup()"
+        style="display:none"
+        class="flex-1 py-2.5 bg-green-700/80 hover:bg-green-600 rounded-xl text-sm font-medium text-white transition flex items-center justify-center gap-2">
+        <i class="fas fa-check text-xs"></i> Закрыть
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- IDLE TIMEOUT WARNING MODAL -->
+<div id="modal-idle-warning" class="hidden fixed inset-0 z-[300] flex items-center justify-center p-4"
+     style="background: rgba(3,7,18,0.8); backdrop-filter: blur(8px);">
+  <div class="bg-gray-900 border border-amber-700/60 rounded-2xl shadow-2xl w-full max-w-sm p-8 relative"
+       style="animation: slide-up 0.2s ease;">
+    <div class="flex flex-col items-center text-center mb-6">
+      <div class="w-14 h-14 bg-amber-900/40 border border-amber-700 rounded-2xl flex items-center justify-center mb-3">
+        <i class="fas fa-clock text-2xl text-amber-400"></i>
+      </div>
+      <h2 class="text-xl font-bold text-white">Сессия истекает</h2>
+      <p class="text-gray-400 text-sm mt-2">
+        Вы неактивны. Автоматический выход через
+        <span id="idle-countdown" class="font-mono font-bold text-amber-400">60</span> сек.
+      </p>
+    </div>
+    <button onclick="idleStayActive()"
+      class="w-full py-3 bg-brand-600 hover:bg-brand-500 rounded-xl text-sm font-semibold text-white transition flex items-center justify-center gap-2">
+      <i class="fas fa-hand"></i> Продолжить работу
+    </button>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container" class="fixed bottom-4 right-4 z-[100] space-y-2"></div>
+
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/servers.js"></script>
+<script src="js/connections.js"></script>
+<script src="js/users.js"></script>
+<script src="js/domains.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
