@@ -241,8 +241,8 @@ class VpnEngine {
     _tunProcess!.stdout.transform(utf8.decoder).listen(logBuf.write);
     _tunProcess!.stderr.transform(utf8.decoder).listen(logBuf.write);
 
-    // Ждём пока WinTUN создаст адаптер (может занять 3-5 сек)
-    await Future.delayed(const Duration(seconds: 4));
+    // Ждём пока WinTUN создаст адаптер (polling до 10 сек)
+    await _waitForTunAdapter(logBuf);
     await _assertAlive(_tunProcess!, 'tun2socks.exe', logBuf);
 
     _tunProcess!.exitCode.then((code) {
@@ -327,6 +327,38 @@ class VpnEngine {
       _originalGateway = null;
       _vpnServerIp     = null;
     }
+  }
+
+  /// Ждёт появления TUN адаптера в Windows (polling 10 сек, интервал 500мс).
+  /// tun2socks создаёт WinTUN адаптер асинхронно — без ожидания netsh set address
+  /// падает с "интерфейс не найден".
+  Future<void> _waitForTunAdapter(StringBuffer logBuf) async {
+    const maxTries = 20;
+    for (int i = 0; i < maxTries; i++) {
+      final r = await Process.run('powershell', [
+        '-NoProfile', '-Command',
+        r'Get-NetAdapter -Name "' + _tunName + r'" -ErrorAction SilentlyContinue | '
+        'Select-Object -ExpandProperty Name',
+      ], runInShell: false);
+      final out = r.stdout.toString().trim();
+      if (out.contains(_tunName)) {
+        debugPrint('[VPN] TUN adapter $_tunName appeared after ${(i + 1) * 500}ms');
+        return;
+      }
+      if (_tunProcess != null) {
+        try {
+          await _tunProcess!.exitCode.timeout(const Duration(milliseconds: 50));
+          throw VpnEngineException(
+            'tun2socks.exe упал до создания TUN адаптера\n'
+            '${_tail(logBuf.toString(), 600)}',
+          );
+        } on TimeoutException {
+          // процесс жив — продолжаем
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    debugPrint('[VPN] WARN: TUN adapter $_tunName не появился за 10s, продолжаем...');
   }
 
   Future<String?> _getDefaultGateway() async {
@@ -514,11 +546,13 @@ class VpnEngine {
     };
   }
 
-  /// NaiveProxy конфиг — строим из полей БД, НЕ из config_json
-  /// (config_json содержит порт 443 без TLS-сертификата — не работает)
-  /// API уже отдаёт правильный server_ip:
-  ///   direct  → EU IP,  port=2096
-  ///   cascade → RU IP,  port=8443
+  /// NaiveProxy конфиг — строим из полей БД.
+  /// API отдаёт правильный server_ip:
+  ///   direct  → EU IP (или домен fin.milkyims.com / eu.milkyims.com)
+  ///   cascade → RU IP (ru.milkyims.com)
+  ///
+  /// С доменом Caddy получает Let's Encrypt сертификат → https:// работает.
+  /// ВАЖНО: используем conn.serverIp напрямую (API возвращает entry_ip как строку).
   String _buildNaiveConfig(VpnConnection conn) {
     final pass = conn.password ?? '';
     return jsonEncode({
