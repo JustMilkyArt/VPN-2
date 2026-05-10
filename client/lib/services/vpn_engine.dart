@@ -277,9 +277,8 @@ class VpnEngine {
       }
 
       // 2. Резолвим домен → IP (route add не принимает доменные имена!)
-      //    API может отдать домен (напр. ru.milkyims.com) вместо IP для cascade
       final serverIp = await _resolveHost(serverIpOrHost);
-      _vpnServerIp = serverIp; // перезаписываем — будем удалять по IP
+      _vpnServerIp = serverIp;
       debugPrint('[VPN] Entry point: $serverIpOrHost → $serverIp');
 
       // 3. Назначаем IP TUN адаптеру
@@ -289,33 +288,54 @@ class VpnEngine {
       ], runInShell: false);
       debugPrint('[VPN] netsh set address: ${netshR.stdout} ${netshR.stderr}');
 
-      await Future.delayed(const Duration(milliseconds: 800));
+      await Future.delayed(const Duration(milliseconds: 1000));
 
-      // 4. VPN сервер (entry point) — через оригинальный шлюз (иначе петля!)
-      //    serverIp = resolved IP (RU для cascade, EU для direct)
-      final routeAddR = await Process.run('route', [
+      // 4. Получаем IF index TUN адаптера через PowerShell
+      //    ВАЖНО: route add с gateway=адрес_TUN не работает на Windows
+      //    (нельзя маршрутизировать через собственный адрес интерфейса).
+      //    Решение: route add ... IF <ifIndex> — роутим через индекс интерфейса.
+      final ifIdxR = await Process.run('powershell', [
+        '-NoProfile', '-Command',
+        '(Get-NetAdapter -Name "$_tunName" -ErrorAction SilentlyContinue).ifIndex',
+      ], runInShell: false);
+      final tunIfIndex = ifIdxR.stdout.toString().trim();
+      if (tunIfIndex.isEmpty || int.tryParse(tunIfIndex) == null) {
+        throw VpnEngineException(
+          'Не удалось получить IF index TUN адаптера "$_tunName".\n'
+          'Попробуйте перезапустить приложение от имени Администратора.',
+        );
+      }
+      debugPrint('[VPN] TUN ifIndex=$tunIfIndex');
+
+      // 5. Bypass-маршрут: VPN сервер идёт напрямую через исходный шлюз
+      final r1 = await Process.run('route', [
         'add', serverIp, 'mask', '255.255.255.255',
         _originalGateway!, 'metric', '1',
       ], runInShell: false);
-      debugPrint('[VPN] route add $serverIp: ${routeAddR.stdout} ${routeAddR.stderr}');
+      debugPrint('[VPN] route add server: exit=${r1.exitCode} ${r1.stdout}${r1.stderr}');
 
-      // 5. Весь остальной трафик — через TUN
+      // 6. Весь остальной трафик — через TUN (IF index вместо gateway IP)
       //    Два маршрута /1 перекрывают дефолтный /0 без его удаления
-      await Process.run('route', [
-        'add', '0.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '5',
+      final r2 = await Process.run('route', [
+        'add', '0.0.0.0', 'mask', '128.0.0.0',
+        '0.0.0.0', 'metric', '5', 'if', tunIfIndex,
       ], runInShell: false);
-      await Process.run('route', [
-        'add', '128.0.0.0', 'mask', '128.0.0.0', _tunGateway, 'metric', '5',
-      ], runInShell: false);
+      debugPrint('[VPN] route add 0/1: exit=${r2.exitCode} ${r2.stdout}${r2.stderr}');
 
-      // 6. DNS через Cloudflare на TUN интерфейс (нет DNS-утечек)
+      final r3 = await Process.run('route', [
+        'add', '128.0.0.0', 'mask', '128.0.0.0',
+        '0.0.0.0', 'metric', '5', 'if', tunIfIndex,
+      ], runInShell: false);
+      debugPrint('[VPN] route add 128/1: exit=${r3.exitCode} ${r3.stdout}${r3.stderr}');
+
+      // 7. DNS через Cloudflare на TUN интерфейс (нет DNS-утечек)
       await Process.run('netsh', [
         'interface', 'ip', 'set', 'dns',
         'name=$_tunName', 'static', '1.1.1.1',
       ], runInShell: false);
 
       _routesAdded = true;
-      debugPrint('[VPN] Routes up. Entry=$serverIp bypass via $_originalGateway, rest → TUN $_tunGateway');
+      debugPrint('[VPN] Routes UP: entry=$serverIp via $_originalGateway, rest via TUN if=$tunIfIndex');
     } catch (e) {
       await _removeRoutes();
       rethrow;
