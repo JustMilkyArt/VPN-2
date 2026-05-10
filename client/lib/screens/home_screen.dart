@@ -511,16 +511,21 @@ class _IpCheckerState extends State<_IpChecker> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final url = Uri.parse('http://ip-api.com/json/?fields=query,country,countryCode');
       final t0   = DateTime.now();
-      final resp = await http.get(url).timeout(const Duration(seconds: 8));
+      // ВАЖНО: Flutter на Windows использует WinHTTP, который НЕ следует
+      // маршрутной таблице ядра и обходит TUN-адаптер.
+      // Решение: делаем HTTP-запрос вручную через raw SOCKS5-сокет
+      // (127.0.0.1:10808 = xray/naive SOCKS5 прокси), который точно
+      // идёт через VPN-туннель.
+      final body = await _httpViaSocks5(
+        'ip-api.com', 80,
+      ).timeout(const Duration(seconds: 10));
       final rtt  = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
-      if (resp.statusCode == 200) {
-        final body    = resp.body;
-        final ip      = _extract(body, 'query');
-        final country = _extract(body, 'country');
-        final cc      = _extract(body, 'countryCode');
+      final ip      = _extract(body, 'query');
+      final country = _extract(body, 'country');
+      final cc      = _extract(body, 'countryCode');
+      if (ip.isNotEmpty) {
         setState(() {
           _ip      = ip;
           _country = country;
@@ -533,6 +538,107 @@ class _IpCheckerState extends State<_IpChecker> {
       }
     } catch (_) {
       if (mounted) setState(() { _ip = 'Нет ответа'; _rttMs = null; _loading = false; });
+    }
+  }
+
+  /// HTTP GET через SOCKS5 (127.0.0.1:10808) — обходит WinHTTP.
+  ///
+  /// xray и naive оба открывают SOCKS5 на порту 10808.
+  /// AWG не открывает SOCKS5 — для него фоллбэк на системный http.get(),
+  /// который корректен т.к. AWG пишет маршруты прямо в TUN-адаптер.
+  Future<String> _httpViaSocks5(String host, int remotePort) async {
+    const socksHost = '127.0.0.1';
+    const socksPort = 10808;
+
+    try {
+      final sock = await Socket.connect(
+        socksHost, socksPort,
+        timeout: const Duration(seconds: 4),
+      );
+      sock.setOption(SocketOption.tcpNoDelay, true);
+
+      // Собираем все входящие байты в один список через broadcast
+      final allBytes  = <int>[];
+      final done      = Completer<void>();
+
+      final sub = sock.listen(
+        allBytes.addAll,
+        onDone:  () { if (!done.isCompleted) done.complete(); },
+        onError: (e) { if (!done.isCompleted) done.completeError(e); },
+        cancelOnError: true,
+      );
+
+      // Ждём появления >= n байт в allBytes (poll каждые 10 мс, до timeout)
+      Future<void> need(int n, Duration timeout) async {
+        final deadline = DateTime.now().add(timeout);
+        while (allBytes.length < n) {
+          if (DateTime.now().isAfter(deadline)) {
+            throw TimeoutException('SOCKS5: нет ответа за ${timeout.inSeconds}с');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      }
+
+      try {
+        // ── Greeting: VER=5, NMETHODS=1, METHOD=0(noauth) ───────────
+        sock.add([0x05, 0x01, 0x00]);
+        await sock.flush();
+
+        await need(2, const Duration(seconds: 4));
+        if (allBytes[0] != 0x05 || allBytes[1] != 0x00) {
+          throw Exception('SOCKS5 auth rejected (method=${allBytes[1]})');
+        }
+
+        // ── CONNECT request ─────────────────────────────────────────
+        final hb = host.codeUnits;           // ASCII hostname bytes
+        sock.add([
+          0x05, 0x01, 0x00, 0x03,            // VER CMD RSV ATYP=domain
+          hb.length, ...hb,                  // len + hostname
+          (remotePort >> 8) & 0xFF, remotePort & 0xFF,
+        ]);
+        await sock.flush();
+
+        // Reply: VER REP RSV ATYP BND.ADDR BND.PORT
+        // Минимум 10 байт (IPv4): VER REP RSV ATYP(1) ADDR(4) PORT(2)
+        await need(4, const Duration(seconds: 5));
+        if (allBytes[1] != 0x00) {
+          throw Exception('SOCKS5 CONNECT failed rep=0x${allBytes[1].toRadixString(16)}');
+        }
+        // Пропускаем BND.ADDR+BND.PORT в зависимости от ATYP
+        final atyp = allBytes[3];
+        final skip = 4 + (atyp == 0x01 ? 6 : atyp == 0x04 ? 18 : 3) ;
+        await need(skip, const Duration(seconds: 5));
+
+        // ── HTTP GET ─────────────────────────────────────────────────
+        sock.write(
+          'GET /json/?fields=query,country,countryCode HTTP/1.1\r\n'
+          'Host: $host\r\n'
+          'Connection: close\r\n'
+          '\r\n',
+        );
+        await sock.flush();
+
+        // Читаем до закрытия TCP-соединения (сервер присылает Connection:close)
+        await done.future.timeout(const Duration(seconds: 8));
+
+        final raw = String.fromCharCodes(allBytes);
+        final sep = raw.indexOf('\r\n\r\n');
+        return sep >= 0 ? raw.substring(sep + 4) : raw;
+
+      } finally {
+        await sub.cancel();
+        sock.destroy();
+      }
+
+    } catch (_) {
+      // SOCKS5 не поднят (AWG-режим) или соединение не удалось →
+      // фоллбэк: системный HTTP (WinHTTP).
+      // AWG прописывает маршруты в ядро через TUN, поэтому WinHTTP
+      // тоже пойдёт через VPN (в отличие от xray/naive).
+      final url  = Uri.parse(
+          'http://$host:$remotePort/json/?fields=query,country,countryCode');
+      final resp = await http.get(url).timeout(const Duration(seconds: 8));
+      return resp.body;
     }
   }
 
