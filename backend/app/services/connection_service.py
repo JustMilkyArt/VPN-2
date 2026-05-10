@@ -243,9 +243,28 @@ def create_connections_batch(
 
     def _make(proto: Protocol, ctype: ConnectionType, eu_srv: Server, ru_srv: Optional[Server]):
         ctype_str = ctype.value if hasattr(ctype, 'value') else str(ctype)
-        # AWG cascade port must be assigned on RU server (that's where the tunnel lives)
-        srv_for_port = ru_srv if (ctype == ConnectionType.CASCADE and ru_srv and proto == Protocol.AMNEZIA_WG) else eu_srv
-        port = assign_free_port(db, srv_for_port.id, protocol=proto, connection_type=ctype_str)
+        is_cascade = (ctype == ConnectionType.CASCADE)
+
+        # ── PORT ASSIGNMENT ────────────────────────────────────────────────────
+        # CASCADE: the VPN port is listened on the RU server, not EU.
+        # So uniqueness MUST be enforced against ru_server_id, not eu server_id.
+        # DIRECT:  port is on EU server — check against EU server_id.
+        if is_cascade and ru_srv:
+            port = assign_free_port(
+                db,
+                server_id=eu_srv.id,        # EU server id (for logging)
+                protocol=proto,
+                connection_type=ctype_str,
+                ru_server_id=ru_srv.id,     # RU server id (actual uniqueness check)
+            )
+        else:
+            port = assign_free_port(
+                db,
+                server_id=eu_srv.id,
+                protocol=proto,
+                connection_type=ctype_str,
+            )
+
         conn = Connection(
             server_id            = eu_srv.id,
             ru_server_id         = ru_srv.id if ru_srv else None,
@@ -258,11 +277,13 @@ def create_connections_batch(
             split_tunnel_enabled = True,
             warp_enabled         = True,
         )
-        # Default parameters per protocol
+
+        # ── PROTOCOL DEFAULTS ──────────────────────────────────────────────────
         if proto == Protocol.VLESS_REALITY:
             conn.uuid                = generate_uuid()
             conn.reality_server_name = "www.microsoft.com"
             conn.reality_fingerprint = "chrome"
+
         elif proto == Protocol.AMNEZIA_WG:
             conn.awg_junk_packet_count    = 4
             conn.awg_junk_packet_min_size = 40
@@ -270,9 +291,22 @@ def create_connections_batch(
             conn.awg_s1 = 50;  conn.awg_s2 = 100
             conn.awg_h1 = 1;   conn.awg_h2 = 2
             conn.awg_h3 = 3;   conn.awg_h4 = 4
+
         elif proto == Protocol.NAIVE_PROXY:
             conn.password = generate_password(24)
             conn.np_user  = "vpnuser"
+            # ── AUTO np_domain ─────────────────────────────────────────────────
+            # NaiveProxy requires a real domain for TLS (HTTPS camouflage).
+            # Without a domain Caddy uses "tls internal" → self-signed cert →
+            # clients get "TLS alert: internal error" and connection fails.
+            #
+            # DIRECT:  NaiveProxy runs on EU server → use EU server domain.
+            # CASCADE: NaiveProxy listens on RU server → use RU server domain.
+            if is_cascade and ru_srv:
+                conn.np_domain = ru_srv.domain or None
+            else:
+                conn.np_domain = eu_srv.domain or None
+
         db.add(conn)
         db.flush()
         return conn.id

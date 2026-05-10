@@ -84,6 +84,55 @@ def _raw_log(connection: Connection, db: Session, msg: str) -> None:
     except Exception:
         db.rollback()
 
+
+def _assign_unique_cascade_port(
+    db: Session,
+    connection: Connection,
+    ru_server_id: int,
+    protocol: "Protocol",
+    base_port: int,
+    step: int = 1,
+) -> int:
+    """Return a port unique for (ru_server_id, protocol) among active cascade connections.
+
+    If connection.port already collides with another connection on the same
+    ru_server (same protocol), auto-increments until a free slot is found,
+    saves the new port to connection.port and commits.
+
+    Rules:
+      - VLESS cascade: base=2087, step=1  → 2087, 2088, 2089 …
+      - AWG  cascade: base=51821, step=1  → 51821, 51822 …
+      - NaiveProxy cascade: base=8443, step=1 → 8443, 8444 …
+    """
+    # Ports already occupied on this RU server by OTHER connections (same protocol)
+    used_ports = set(
+        r[0]
+        for r in db.query(Connection.port).filter(
+            Connection.ru_server_id == ru_server_id,
+            Connection.protocol == protocol,
+            Connection.is_active == True,
+            Connection.id != connection.id,
+        ).all()
+        if r[0] is not None
+    )
+
+    candidate = connection.port if connection.port else base_port
+    # If already unique — keep it
+    if candidate not in used_ports:
+        return candidate
+
+    # Find next free port
+    candidate = base_port
+    while candidate in used_ports:
+        candidate += step
+
+    connection.port = candidate
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+    return candidate
+
 def _ensure_server_ready(ssh, port: int, proto: str = "tcp") -> None:
     """
     Выполняется перед каждым деплоем подключения на сервер.
@@ -980,6 +1029,20 @@ def deploy_vless_reality_connection(
 
     try:
         mode = "CASCADE" if is_cascade else "DIRECT"
+
+        # CASCADE: гарантируем уникальный порт на RU сервере
+        # (каждый EU→RU туннель должен использовать отдельный порт)
+        if is_cascade and exit_server:
+            old_port = connection.port
+            connection.port = _assign_unique_cascade_port(
+                db, connection, exit_server.id,
+                Protocol.VLESS_REALITY, base_port=2087,
+            )
+            if connection.port != old_port:
+                _raw_log(connection, db,
+                    f"  CASCADE VLESS: порт изменён {old_port} → {connection.port} "
+                    f"(уникальный для EU={eu_server.ip} на RU={exit_server.ip})")
+
         S(1, "running", f"Подключение к {'RU' if is_cascade else 'EU'} серверу ({target_server.ip})")
         with SSHClient(target_server) as ssh:
             _ensure_server_ready(ssh, connection.port, proto="tcp")
@@ -1248,21 +1311,30 @@ def deploy_naiveproxy_connection(
     """
     S = lambda n, st, m: _step_log(connection, db, n, st, m)
     try:
-        password = connection.password
-        port     = connection.port
-
         # Step 1: Determine mode and target
         if is_cascade:
             if not ru_server:
                 S(1, "error", "CASCADE: ru_server не передан")
                 return False, "CASCADE: ru_server не передан"
+            # Гарантируем уникальный порт на RU сервере для этого EU
+            old_port = connection.port
+            connection.port = _assign_unique_cascade_port(
+                db, connection, ru_server.id,
+                Protocol.NAIVE_PROXY, base_port=8443,
+            )
+            if connection.port != old_port:
+                _raw_log(connection, db,
+                    f"  CASCADE NaiveProxy: порт изменён {old_port} → {connection.port}")
             target_server = ru_server
             domain = ru_server.domain or ru_server.ip
-            S(1, "ok", f"Режим CASCADE → Caddy-naive на RU сервере ({domain})")
+            S(1, "ok", f"Режим CASCADE → Caddy-naive на RU сервере ({domain}), порт {connection.port}")
         else:
             target_server = server
             domain = server.domain or server.ip
             S(1, "ok", f"Режим DIRECT → Caddy-naive на EU сервере ({domain})")
+
+        password = connection.password
+        port     = connection.port
 
         # Step 2: Install caddy-naive
         S(2, "running", f"Установка caddy-naive на {target_server.name} ({target_server.ip})")
@@ -1724,6 +1796,15 @@ def deploy_amnezia_wg_connection(
             if not ru_server:
                 S(1, "error", "CASCADE: ru_server не передан")
                 return False, "CASCADE: ru_server не передан"
+            # Гарантируем уникальный порт на RU сервере для этого EU
+            old_port = connection.port
+            connection.port = _assign_unique_cascade_port(
+                db, connection, ru_server.id,
+                Protocol.AMNEZIA_WG, base_port=51821,
+            )
+            if connection.port != old_port:
+                _raw_log(connection, db,
+                    f"  CASCADE AWG: порт изменён {old_port} → {connection.port}")
             target_server = ru_server
             endpoint_ip   = ru_server.ip
             S(1, "running",

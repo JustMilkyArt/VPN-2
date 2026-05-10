@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.server import Server, ServerRole, ServerStatus
+from app.models.domain import Domain
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,99 @@ def run_server_setup(server_id: int):
         logger.error(f"Setup crashed for server {server_id}: {e}", exc_info=True)
     finally:
         db.close()
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto-DNS: автоматическое назначение домена EU-серверу через Porkbun
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _auto_assign_domain(db: Session, server: Server) -> None:
+    """
+    Автоматически создаёт DNS A-запись для EU-сервера и сохраняет server.domain.
+
+    Алгоритм:
+    1. Ищем активный Domain с Porkbun API ключами в БД
+    2. Генерируем имя поддомена из названия сервера (например "fin1" из "FIN 1")
+    3. Создаём A-запись через Porkbun API (синхронно через requests)
+    4. Сохраняем full domain в server.domain и обновляем БД
+
+    Вызывается из setup_service._run() на шаге 4.5 для EU-серверов.
+    Fallback: если Porkbun API недоступен или ключей нет — пропускаем без ошибки.
+    """
+    import re
+    import requests as _req
+
+    # 1. Найти активный домен с Porkbun ключами
+    domain_obj = db.query(Domain).filter(
+        Domain.porkbun_api_key != None,
+        Domain.porkbun_secret_key != None,
+    ).first()
+
+    if not domain_obj:
+        logger.warning("auto_assign_domain: no Domain with Porkbun keys found in DB")
+        return
+
+    api_key    = domain_obj.porkbun_api_key
+    secret_key = domain_obj.porkbun_secret_key
+    base_domain = domain_obj.name  # e.g. "milkyims.com"
+
+    # 2. Генерируем поддомен из имени сервера
+    # "FIN 1" → "fin1", "SWE 2" → "swe2", "Helsinki EU" → "helsinkieu"
+    raw = (server.name or f"eu{server.id}").lower()
+    subdomain = re.sub(r"[^a-z0-9]", "", raw) or f"eu{server.id}"
+
+    # Проверяем — не занят ли уже этот поддомен другим сервером
+    existing = db.query(Server).filter(
+        Server.domain.like(f"{subdomain}.{base_domain}%"),
+        Server.id != server.id,
+    ).first()
+    if existing:
+        # Добавляем числовой суффикс чтобы не конфликтовать
+        subdomain = f"{subdomain}{server.id}"
+
+    full_domain = f"{subdomain}.{base_domain}"
+    target_ip   = server.ip
+
+    logger.info(f"auto_assign_domain: creating A-record {full_domain} → {target_ip}")
+
+    # 3. Создаём A-запись через Porkbun REST API (синхронно)
+    PORKBUN_BASE = "https://api.porkbun.com/api/json/v3"
+    try:
+        resp = _req.post(
+            f"{PORKBUN_BASE}/dns/create/{base_domain}",
+            json={
+                "apikey":       api_key,
+                "secretapikey": secret_key,
+                "name":         subdomain,
+                "type":         "A",
+                "content":      target_ip,
+                "ttl":          "600",
+            },
+            timeout=20,
+        )
+        data = resp.json()
+        if data.get("status") != "SUCCESS":
+            logger.warning(
+                f"auto_assign_domain: Porkbun returned error: {data.get('message')}"
+            )
+            # Check if record already exists (idempotency)
+            if "already exists" in str(data.get("message", "")).lower():
+                logger.info(f"auto_assign_domain: A-record already exists for {full_domain}")
+            else:
+                return
+        else:
+            record_id = data.get("id")
+            logger.info(f"auto_assign_domain: A-record created, id={record_id}")
+    except Exception as e:
+        logger.warning(f"auto_assign_domain: Porkbun API call failed: {e}")
+        return
+
+    # 4. Сохраняем домен в БД
+    server.domain = full_domain
+    db.add(server)
+    db.commit()
+    logger.info(f"auto_assign_domain: server {server.id} domain set to {full_domain}")
 
 
 def _run(db: Session, server: Server):
@@ -1110,6 +1204,38 @@ echo "PWAUTH=$(grep -rE '^PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/
             f"[4]    UFW       : {'✅ активен' if sec_ufw_active else '⚠️ неактивен'}")
         _update_setup(db, server, log_line=
             f"[4]    Passwd auth: {'✅ отключена' if sec_password_auth_disabled else '⚠️ включена'}")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # ШАГ 4.5 — Auto-DNS: создаём A-запись и устанавливаем server.domain
+        # (только для EU-серверов без домена)
+        # ═══════════════════════════════════════════════════════════════════════
+        if is_eu and not server.domain:
+            _update_setup(db, server, log_line="[4.5] 🌐 EU-сервер без домена — создаём DNS A-запись...")
+            try:
+                _auto_assign_domain(db, server)
+                if server.domain:
+                    _update_setup(db, server,
+                        log_line=f"[4.5] ✅ Домен назначен: {server.domain}")
+                    # Открываем порт 80 для Let's Encrypt ACME challenge
+                    try:
+                        _se(client, "ufw allow 80/tcp 2>/dev/null || true", use_sudo, timeout=10)
+                        _update_setup(db, server, log_line="[4.5] ✅ UFW: порт 80 открыт для ACME")
+                    except Exception:
+                        pass
+                else:
+                    _update_setup(db, server,
+                        log_line="[4.5] ⚠️ Домен не назначен — добавьте домен в разделе Domains")
+            except Exception as _dns_e:
+                _update_setup(db, server,
+                    log_line=f"[4.5] ⚠️ Auto-DNS не удался: {_dns_e} (не критично)")
+        elif is_eu and server.domain:
+            _update_setup(db, server,
+                log_line=f"[4.5] ✅ Домен уже установлен: {server.domain}")
+            # Убеждаемся что порт 80 открыт для ACME
+            try:
+                _se(client, "ufw allow 80/tcp 2>/dev/null || true", use_sudo, timeout=10)
+            except Exception:
+                pass
 
     except Exception as e:
         _update_setup(db, server, status="failed",
