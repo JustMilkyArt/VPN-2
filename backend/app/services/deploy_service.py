@@ -139,7 +139,8 @@ def _ensure_server_ready(ssh, port: int, proto: str = "tcp") -> None:
     Настраивает:
       1. IP-forwarding (сохраняется в sysctl.conf)
       2. /etc/resolv.conf — реальные DNS вместо systemd-resolved stub
-      3. UFW — открывает порт подключения
+      3. UFW — открывает порт подключения (если UFW активен)
+      4. iptables fallback — открывает порт если UFW неактивен
     Все операции идемпотентны (повторный запуск безопасен).
     """
     # 1. IP forwarding
@@ -164,11 +165,17 @@ def _ensure_server_ready(ssh, port: int, proto: str = "tcp") -> None:
         "fi"
     )
 
-    # 3. UFW — открываем порт (если UFW активен)
+    # 3. Открываем порт — UFW если активен, иначе iptables fallback
     ufw_proto = "udp" if proto == "udp" else "tcp"
+    ipt_proto = ufw_proto  # udp или tcp
     ssh.exec(
-        f"if command -v ufw > /dev/null 2>&1 && ufw status | grep -q 'Status: active'; then "
+        f"if command -v ufw > /dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then "
         f"  ufw allow {port}/{ufw_proto} > /dev/null 2>&1 || true; "
+        f"elif command -v iptables > /dev/null 2>&1; then "
+        f"  iptables -C INPUT -p {ipt_proto} --dport {port} -j ACCEPT > /dev/null 2>&1 || "
+        f"    iptables -I INPUT -p {ipt_proto} --dport {port} -j ACCEPT > /dev/null 2>&1 || true; "
+        f"  ip6tables -C INPUT -p {ipt_proto} --dport {port} -j ACCEPT > /dev/null 2>&1 || "
+        f"    ip6tables -I INPUT -p {ipt_proto} --dport {port} -j ACCEPT > /dev/null 2>&1 || true; "
         f"fi"
     )
 
@@ -1239,6 +1246,35 @@ def deploy_vless_reality_connection(
 
             S(4, "ok", f"Конфиг собран: {len(inbounds)} inbound(s), режим {mode}")
 
+            # Step 4b: Pre-deploy config validation (до загрузки на сервер)
+            # Проверяем конфиг локально через xray -test чтобы поймать
+            # синтаксические/логические ошибки ДО того какломаем рабочий сервис.
+            _raw_log(connection, db, "  Pre-deploy: валидация конфига через xray -test...")
+            import tempfile as _tempfile, os as _os
+            _tmp_cfg = _tempfile.NamedTemporaryFile(
+                mode='w', suffix='.json', delete=False, prefix='xray_precfg_'
+            )
+            _tmp_cfg.write(config_str)
+            _tmp_cfg.close()
+            try:
+                # Загружаем конфиг на сервер во временный файл и валидируем
+                _tmp_remote = f"/tmp/xray_precfg_{connection.id}.json"
+                ssh.upload_file(config_str, _tmp_remote)
+                code_test, out_test, err_test = ssh.exec(
+                    f"xray -test -config {_tmp_remote} 2>&1; rm -f {_tmp_remote}",
+                    timeout=20
+                )
+                if code_test != 0 or "error" in (err_test or "").lower():
+                    err_msg = (out_test or err_test or "unknown error")[:300]
+                    S(4, "error", f"Pre-deploy xray -test FAILED: {err_msg}")
+                    return False, f"xray config validation failed: {err_msg}"
+                _raw_log(connection, db, "  Pre-deploy: xray -test OK ✓")
+            except Exception as _e:
+                # xray -test недоступен — логируем предупреждение, не фейлим
+                _raw_log(connection, db, f"  Pre-deploy: xray -test недоступен ({_e}), пропуск")
+            finally:
+                _os.unlink(_tmp_cfg.name)
+
             # Step 5: Upload and reload Xray
             S(5, "running", "Загрузка конфига и перезапуск Xray")
             ssh.upload_file(config_str, "/usr/local/etc/xray/config.json")
@@ -1287,6 +1323,91 @@ def deploy_vless_reality_connection(
             connection.config_json = config_str
             db.commit()
             S(6, "ok", f"VLESS+Reality {mode} задеплоен успешно ✅ (endpoint={client_ip}:{connection.port})")
+
+            # Step 7: Post-deploy validation — реальная проверка что всё работает
+            S(7, "running", "Post-deploy валидация")
+            validation_ok = True
+            validation_notes = []
+
+            # 7a: xray service alive (повторная проверка после небольшой паузы)
+            import time
+            time.sleep(2)  # дать xray время полностью стартовать
+            _, xray_final, _ = ssh.exec("systemctl is-active xray 2>/dev/null || echo unknown")
+            xray_final = xray_final.strip()
+            if xray_final not in ("active",):
+                validation_ok = False
+                validation_notes.append(f"xray не active после паузы (статус={xray_final})")
+            else:
+                validation_notes.append(f"xray: {xray_final} ✓")
+
+            # 7b: порт действительно слушается (ss + netstat fallback)
+            _, ss_final, _ = ssh.exec(
+                f"ss -tlnp 2>/dev/null | grep ':{connection.port}' || "
+                f"netstat -tlnp 2>/dev/null | grep ':{connection.port}' || "
+                f"echo NOT_LISTENING"
+            )
+            if "NOT_LISTENING" in ss_final or str(connection.port) not in ss_final:
+                validation_ok = False
+                validation_notes.append(f"порт {connection.port}/tcp не слушается")
+            else:
+                validation_notes.append(f"порт {connection.port}/tcp: listening ✓")
+
+            # 7c: xray не пишет критических ошибок в лог (проверяем последние 30 строк)
+            _, xray_err_log, _ = ssh.exec(
+                "journalctl -u xray -n 30 --no-pager 2>/dev/null | grep -iE '(failed|error|panic|fatal)' "
+                "| grep -v 'INFO\\|WARN\\|debug' | head -5 || echo CLEAN"
+            )
+            if "CLEAN" in xray_err_log or not xray_err_log.strip():
+                validation_notes.append("xray logs: clean ✓")
+            else:
+                # Ошибки в логах — предупреждение, но не фатально (могут быть старые ошибки)
+                validation_notes.append(f"xray logs: WARNING — {xray_err_log.strip()[:150]}")
+
+            # 7d: исходящий интернет с сервера работает
+            _, curl_out, _ = ssh.exec(
+                "curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo CURL_FAIL"
+            )
+            curl_out = curl_out.strip()
+            if "CURL_FAIL" in curl_out or not curl_out or "." not in curl_out:
+                validation_notes.append("outbound internet: недоступен ⚠")
+            else:
+                validation_notes.append(f"outbound internet: {curl_out[:20]} ✓")
+
+            # 7e: Reality TLS handshake validation
+            # Пробуем установить TLS-соединение на наш порт с SNI из конфига.
+            # Если xray/Reality слушает и keypair корректен — соединение установится.
+            # Используем openssl s_client (доступен на всех VPS) с таймаутом.
+            _sni = connection.reality_server_name or "www.microsoft.com"
+            _reality_port = str(connection.port)
+            _reality_ip   = target_server.ip
+            _, tls_out, _ = ssh.exec(
+                f"echo | timeout 8 openssl s_client "
+                f"-connect {_reality_ip}:{_reality_port} "
+                f"-servername {_sni} "
+                f"-tls1_3 2>&1 | head -20 || echo TLS_FAIL",
+                timeout=15
+            )
+            tls_ok = False
+            if "TLS_FAIL" in tls_out or not tls_out.strip():
+                validation_notes.append(f"Reality TLS: openssl недоступен — пропуск")
+            elif any(x in tls_out for x in ["CONNECTED", "SSL handshake", "Certificate", "verify"]):
+                tls_ok = True
+                validation_notes.append(f"Reality TLS: handshake OK ✓ (SNI={_sni})")
+            elif any(x in tls_out for x in ["Connection refused", "connect: ", "errno"]):
+                validation_ok = False
+                validation_notes.append(f"Reality TLS: соединение отклонено — порт закрыт ✗")
+            else:
+                # Неоднозначный результат — не фатально
+                _tls_preview = tls_out.strip()[:80].replace('\n', ' ')
+                validation_notes.append(f"Reality TLS: неоднозначный ответ: {_tls_preview}")
+
+            notes_str = " | ".join(validation_notes)
+            if validation_ok:
+                S(7, "ok", f"Валидация пройдена: {notes_str}")
+            else:
+                S(7, "error", f"Валидация: проблемы обнаружены — {notes_str}")
+                _raw_log(connection, db, "  WARN: post-deploy валидация выявила проблемы, но конфиг сохранён")
+
             return True, "VLESS+Reality deployed"
 
     except Exception as e:
@@ -1829,6 +1950,92 @@ def deploy_amnezia_wg_connection(
         if not ok:
             return False, result
         iface_name = result  # returned iface name on success
+
+        # Step 8: CASCADE — configure Xray on RU to forward AWG subnet traffic → EU
+        if is_cascade:
+            S(8, "running",
+              f"CASCADE: настройка Xray на RU ({ru_server.ip}) "
+              f"для проброса трафика wg-подсети → EU ({server.ip})")
+            from app.models.connection import Protocol as P
+            eu_vless = db.query(Connection).filter(
+                Connection.server_id == server.id,
+                Connection.protocol == P.VLESS_REALITY,
+                Connection.is_active == True,
+                Connection.reality_public_key.isnot(None),
+            ).first()
+
+            eu_outbound = None
+            if (eu_vless and eu_vless.reality_public_key
+                    and eu_vless.reality_public_key != "auto-generated-run-xray-x25519"):
+                eu_outbound = gen_xray_outbound_to_eu(
+                    eu_ip=server.ip, eu_port=eu_vless.port, eu_uuid=eu_vless.uuid,
+                    eu_public_key=eu_vless.reality_public_key,
+                    eu_short_id=eu_vless.reality_short_id or "",
+                    eu_server_name=eu_vless.reality_server_name or "www.microsoft.com",
+                )
+                _raw_log(connection, db,
+                    f"  EU outbound: {server.ip}:{eu_vless.port} (VLESS+Reality)")
+            else:
+                _raw_log(connection, db,
+                    "  Нет активного VLESS+Reality на EU — трафик через direct")
+
+            # Собираем существующие VLESS inbounds для RU Xray
+            existing_ru_inbounds = []
+            ru_vless_conns = db.query(Connection).filter(
+                Connection.ru_server_id == ru_server.id,
+                Connection.protocol == P.VLESS_REALITY,
+                Connection.is_active == True,
+                Connection.uuid.isnot(None),
+                Connection.reality_private_key.isnot(None),
+            ).all()
+            for c in ru_vless_conns:
+                if (c.reality_public_key
+                        and c.reality_public_key != "auto-generated-run-xray-x25519"):
+                    existing_ru_inbounds.append(gen_xray_vless_reality_inbound(
+                        port=c.port, uuid_str=c.uuid, public_key=c.reality_public_key,
+                        private_key=c.reality_private_key, short_id=c.reality_short_id or "",
+                        server_name=c.reality_server_name or "www.microsoft.com",
+                    ))
+
+            warp_outbound = None
+            with SSHClient(ru_server) as ssh_ru:
+                _, out_w, _ = ssh_ru.exec(
+                    "systemctl is-active warp-svc 2>/dev/null || echo inactive")
+                warp_svc_awg = out_w.strip() == "active"
+                warp_enabled_awg = getattr(connection, "warp_enabled", True)
+                if warp_svc_awg and warp_enabled_awg:
+                    warp_outbound = gen_xray_warp_outbound()
+                    _raw_log(connection, db, "  WARP fallback: активен")
+                elif warp_svc_awg and not warp_enabled_awg:
+                    _raw_log(connection, db,
+                        "  WARP fallback: WARP сервис активен, но флаг warp_enabled=False")
+                else:
+                    _raw_log(connection, db, "  WARP fallback: не активен")
+
+                ru_config = build_ru_xray_config(
+                    inbounds=existing_ru_inbounds,
+                    eu_outbound=eu_outbound,
+                    warp_outbound=warp_outbound,
+                )
+                ssh_ru.upload_file(ru_config, "/usr/local/etc/xray/config.json")
+                code8, _, err8 = ssh_ru.exec(
+                    "systemctl reload xray 2>/dev/null || systemctl restart xray")
+                if code8 != 0:
+                    S(8, "error", f"Xray reload на RU провалился: {err8[:150]}")
+                else:
+                    _, ru_xray_status, _ = ssh_ru.exec(
+                        "systemctl is-active xray 2>/dev/null || echo unknown")
+                    eu_ob_str = "есть" if eu_outbound else "нет (direct)"
+                    warp_str = "есть" if warp_outbound else "нет"
+                    _raw_log(connection, db,
+                        f"  CASCADE AWG OK: RU Xray статус={ru_xray_status.strip()}, "
+                        f"{len(existing_ru_inbounds)} inbound(s), "
+                        f"EU outbound={eu_ob_str}, WARP={warp_str}")
+                    S(8, "ok",
+                        f"CASCADE: Xray на RU ({ru_server.ip}) перезагружен "
+                        f"→ проброс AWG-трафика на EU ({server.ip})")
+        else:
+            S(8, "skip", "Xray на RU не нужен (режим DIRECT)")
 
         # Step 7: Generate client config and link
         S(7, "running", "Генерация клиентского конфига и client link")

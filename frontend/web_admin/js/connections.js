@@ -189,18 +189,53 @@ function renderConnRow(conn, euSrv, type) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _wizardState = {
-  step:         1,
-  createDirect:  false,
-  createCascade: false,
-  canDirect:     false,
-  canCascade:    false,
-  euServers:     [],
-  ruServers:     [],
+  step:              1,
+  createDirect:      false,
+  createCascade:     false,
+  canDirect:         false,
+  canCascade:        false,
+  euServers:         [],
+  ruServers:         [],
+  selectedProtocols: ['vless_reality', 'amnezia_wg', 'naive_proxy'], // все по умолчанию
 };
+
+/**
+ * Синхронизирует визуальный степ-индикатор в заголовке wizard-модала
+ * с текущим _wizardState.step (1, 2 или 3).
+ */
+function _syncWizSteps() {
+  const cur = _wizardState.step;
+  [1, 2, 3].forEach(n => {
+    const dot   = document.getElementById(`wiz-step-dot-${n}`);
+    const label = document.getElementById(`wiz-step-label-${n}`);
+    const line  = document.getElementById(`wiz-step-line-${n}`);
+    if (!dot) return;
+    if (n < cur) {
+      // завершённый шаг — зелёная галочка
+      dot.className   = 'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all bg-green-600 text-white';
+      dot.innerHTML   = '<i class="fas fa-check text-[10px]"></i>';
+      if (label) label.className = 'text-xs font-medium text-green-400';
+      if (line)  line.style.background = '#16a34a';
+    } else if (n === cur) {
+      // текущий шаг — brand
+      dot.className   = 'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all bg-brand-600 text-white';
+      dot.innerHTML   = String(n);
+      if (label) label.className = 'text-xs font-medium text-white';
+      if (line)  line.style.background = '';
+    } else {
+      // будущий шаг — серый
+      dot.className   = 'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all bg-gray-700 text-gray-500';
+      dot.innerHTML   = String(n);
+      if (label) label.className = 'text-xs font-medium text-gray-500';
+      if (line)  line.style.background = '';
+    }
+  });
+}
 
 async function showAddConnectionModal() {
   _wizardState = { step: 1, createDirect: false, createCascade: false,
-                   canDirect: false, canCascade: false, euServers: [], ruServers: [] };
+                   canDirect: false, canCascade: false, euServers: [], ruServers: [],
+                   selectedProtocols: ['vless_reality', 'amnezia_wg', 'naive_proxy'] };
 
   // Load available servers
   const res = await api.get('/connections/available-servers');
@@ -219,6 +254,7 @@ async function showAddConnectionModal() {
 
 function _renderWizardStep1() {
   _wizardState.step = 1;
+  _syncWizSteps();
   const body = document.getElementById('wizard-body');
   const footer = document.getElementById('wizard-footer');
 
@@ -260,7 +296,7 @@ function _renderWizardStep1() {
 
   <div class="bg-gray-800/40 border border-gray-700/50 rounded-lg p-3 text-xs text-gray-500">
     <i class="fas fa-info-circle text-brand-400 mr-1.5"></i>
-    Будут автоматически созданы все протоколы: VLESS+Reality, AmneziaWG, NaiveProxy
+    Далее вы выберете протоколы для создания: VLESS+Reality, AmneziaWG, NaiveProxy
   </div>
 </div>`;
 
@@ -304,11 +340,164 @@ function wizToggleType(type) {
   nextBtn.disabled = !anySelected;
 }
 
-// ── STEP 2: server selection ─────────────────────────────────────────────────
+// ── STEP 2: protocol selection ───────────────────────────────────────────────
 
 function wizGoStep2() {
   if (!_wizardState.createDirect && !_wizardState.createCascade) return;
   _wizardState.step = 2;
+  _syncWizSteps();
+
+  const PROTO_OPTIONS = [
+    {
+      id:    'vless_reality',
+      icon:  'fa-shield-halved',
+      label: 'VLESS+Reality',
+      desc:  'XTLS Vision, obfuscation через TLS',
+      color: 'violet',
+    },
+    {
+      id:    'amnezia_wg',
+      icon:  'fa-lock',
+      label: 'AmneziaWG',
+      desc:  'WireGuard с junk-пакетами',
+      color: 'blue',
+    },
+    {
+      id:    'naive_proxy',
+      icon:  'fa-globe',
+      label: 'NaiveProxy',
+      desc:  'HTTPS forward proxy (Caddy)',
+      color: 'emerald',
+    },
+  ];
+
+  const colorMap = {
+    violet:  { border: 'border-violet-500', bg: 'bg-violet-900/20', icon: 'text-violet-400', check: 'bg-violet-600' },
+    blue:    { border: 'border-blue-500',   bg: 'bg-blue-900/20',   icon: 'text-blue-400',   check: 'bg-blue-600'   },
+    emerald: { border: 'border-emerald-500',bg: 'bg-emerald-900/20',icon: 'text-emerald-400',check: 'bg-emerald-600'},
+  };
+
+  const body   = document.getElementById('wizard-body');
+  const footer = document.getElementById('wizard-footer');
+
+  const cards = PROTO_OPTIONS.map(p => {
+    const sel = _wizardState.selectedProtocols.includes(p.id);
+    const c   = colorMap[p.color];
+    const selBorder = sel ? c.border : 'border-gray-700';
+    const selBg     = sel ? c.bg     : 'bg-gray-800/50';
+    return `
+<button id="wiz-proto-btn-${p.id}"
+  onclick="wizToggleProtocol('${p.id}')"
+  class="wiz-proto-btn relative flex items-center gap-3 w-full px-4 py-3.5 rounded-xl border-2 transition text-left cursor-pointer
+         ${selBorder} ${selBg} hover:border-gray-500">
+  <i class="fas ${p.icon} text-xl flex-shrink-0 ${sel ? c.icon : 'text-gray-500'}" id="wiz-proto-icon-${p.id}"></i>
+  <div class="flex-1 min-w-0">
+    <div class="font-semibold text-sm text-white">${p.label}</div>
+    <div class="text-[11px] text-gray-500 mt-0.5">${p.desc}</div>
+  </div>
+  <span id="wiz-proto-check-${p.id}"
+    class="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 transition
+           ${sel ? c.check + ' text-white' : 'bg-gray-700 text-gray-500'}">
+    <i class="fas ${sel ? 'fa-check' : 'fa-minus'}"></i>
+  </span>
+</button>`;
+  }).join('');
+
+  body.innerHTML = `
+<div class="space-y-3">
+  <p class="text-sm text-gray-400">Выберите протоколы для создания (можно несколько):</p>
+  <div class="space-y-2">
+    ${cards}
+  </div>
+  <div class="flex gap-2 pt-1">
+    <button onclick="wizSelectAllProtocols()"
+      class="flex-1 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition text-gray-400">
+      Выбрать все
+    </button>
+    <button onclick="wizClearAllProtocols()"
+      class="flex-1 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition text-gray-400">
+      Снять все
+    </button>
+  </div>
+</div>`;
+
+  footer.innerHTML = `
+<div class="flex justify-between items-center">
+  <button onclick="_renderWizardStep1()"
+    class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition flex items-center gap-2">
+    <i class="fas fa-arrow-left text-xs"></i> Назад
+  </button>
+  <button id="wiz-proto-next-btn" onclick="wizGoStep3()"
+    class="px-5 py-2 bg-brand-600 hover:bg-brand-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm font-semibold text-white transition flex items-center gap-2">
+    Далее <i class="fas fa-arrow-right text-xs"></i>
+  </button>
+</div>`;
+
+  _updateProtoNextBtn();
+}
+
+function wizToggleProtocol(protoId) {
+  const idx = _wizardState.selectedProtocols.indexOf(protoId);
+  if (idx === -1) {
+    _wizardState.selectedProtocols.push(protoId);
+  } else {
+    _wizardState.selectedProtocols.splice(idx, 1);
+  }
+  _refreshProtoCard(protoId);
+  _updateProtoNextBtn();
+}
+
+function wizSelectAllProtocols() {
+  _wizardState.selectedProtocols = ['vless_reality', 'amnezia_wg', 'naive_proxy'];
+  ['vless_reality', 'amnezia_wg', 'naive_proxy'].forEach(_refreshProtoCard);
+  _updateProtoNextBtn();
+}
+
+function wizClearAllProtocols() {
+  _wizardState.selectedProtocols = [];
+  ['vless_reality', 'amnezia_wg', 'naive_proxy'].forEach(_refreshProtoCard);
+  _updateProtoNextBtn();
+}
+
+function _refreshProtoCard(protoId) {
+  const colorDefs = {
+    vless_reality: { border: 'border-violet-500', bg: 'bg-violet-900/20', icon: 'text-violet-400', check: 'bg-violet-600' },
+    amnezia_wg:    { border: 'border-blue-500',   bg: 'bg-blue-900/20',   icon: 'text-blue-400',   check: 'bg-blue-600'   },
+    naive_proxy:   { border: 'border-emerald-500', bg: 'bg-emerald-900/20',icon: 'text-emerald-400',check: 'bg-emerald-600'},
+  };
+  const btn   = document.getElementById(`wiz-proto-btn-${protoId}`);
+  const iEl   = document.getElementById(`wiz-proto-icon-${protoId}`);
+  const chk   = document.getElementById(`wiz-proto-check-${protoId}`);
+  if (!btn) return;
+  const sel = _wizardState.selectedProtocols.includes(protoId);
+  const c   = colorDefs[protoId];
+
+  // border
+  btn.classList.toggle(c.border,      sel);
+  btn.classList.toggle(c.bg,          sel);
+  btn.classList.toggle('border-gray-700', !sel);
+  btn.classList.toggle('bg-gray-800/50',  !sel);
+  // icon color
+  if (iEl) { iEl.className = iEl.className.replace(/text-\w+-\d+|text-gray-\d+/g, '').trim() + ' ' + (sel ? c.icon : 'text-gray-500'); }
+  // check badge
+  if (chk) {
+    chk.className = chk.className.replace(/bg-\w+-\d+|text-\w+-\d+/g, '').trim()
+      + ' ' + (sel ? c.check + ' text-white' : 'bg-gray-700 text-gray-500');
+    chk.innerHTML = `<i class="fas ${sel ? 'fa-check' : 'fa-minus'}"></i>`;
+  }
+}
+
+function _updateProtoNextBtn() {
+  const btn = document.getElementById('wiz-proto-next-btn');
+  if (btn) btn.disabled = _wizardState.selectedProtocols.length === 0;
+}
+
+// ── STEP 3: server selection ──────────────────────────────────────────────────
+
+function wizGoStep3() {
+  if (_wizardState.selectedProtocols.length === 0) { toast('Выберите хотя бы один протокол', 'error'); return; }
+  _wizardState.step = 3;
+  _syncWizSteps();
 
   // If BOTH selected, cascade drives the EU choice (one EU covers both)
   const needEU = _wizardState.createDirect || _wizardState.createCascade;
@@ -366,7 +555,7 @@ function wizGoStep2() {
   const footer = document.getElementById('wizard-footer');
   footer.innerHTML = `
 <div class="flex justify-between items-center">
-  <button onclick="_renderWizardStep1()"
+  <button onclick="wizGoStep2()"
     class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium transition flex items-center gap-2">
     <i class="fas fa-arrow-left text-xs"></i> Назад
   </button>
@@ -396,6 +585,7 @@ async function wizSubmit() {
     ru_server_id:   ruServerId || null,
     create_direct:  _wizardState.createDirect,
     create_cascade: _wizardState.createCascade,
+    protocols:      _wizardState.selectedProtocols,
   });
 
   if (!res.ok) {
@@ -415,7 +605,7 @@ async function wizSubmit() {
   // Try new conn-setup modal; fall back to old deploy-log modal
   const connSetupModal = document.getElementById('modal-conn-setup');
   if (connSetupModal) {
-    openConnSetupModal(connection_ids, euName, connTypes);
+    openConnSetupModal(connection_ids, euName, connTypes, _wizardState.selectedProtocols);
     _startConnSetupPolling(connection_ids);
     // Also keep old polling for backward compat (updates deploy-log-body in background)
     _startDeployPolling(connection_ids);
@@ -623,296 +813,599 @@ function closeDeployLog() {
 // CONNECTION DETAIL MODAL
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _detailConnId = null;
+let _detailConnId     = null;
+let _detailRefreshInt = null;
+
+// ── Auto-refresh ──────────────────────────────────────────────────────────────
+
+function _startDetailAutoRefresh(connId) {
+  _stopDetailAutoRefresh();
+  _detailRefreshInt = setInterval(function() {
+    _silentRefreshStatus(connId);
+  }, 30000);
+}
+
+function _stopDetailAutoRefresh() {
+  if (_detailRefreshInt) {
+    clearInterval(_detailRefreshInt);
+    _detailRefreshInt = null;
+  }
+}
+
+async function _silentRefreshStatus(connId) {
+  try {
+    const res = await api.get('/connections/' + connId + '/health', { timeout: 15000 });
+    if (!res.ok) return;
+    const d = res.data;
+    // Update status tab content if visible
+    const el = document.getElementById('dstatus-content');
+    if (el) {
+      el.innerHTML = _buildStatusContent(d, connId);
+    }
+    // Update header badge
+    _updateDetailHeaderBadge(d);
+  } catch(e) {
+    console.warn('[autoRefresh] error:', e);
+  }
+}
+
+function _updateDetailHeaderBadge(d) {
+  const hbEl = document.getElementById('detail-health-badge');
+  if (hbEl && d && d.health_status) {
+    hbEl.outerHTML = _healthBadge(d.health_status);
+  }
+}
+
+// ── Main show/render ──────────────────────────────────────────────────────────
 
 async function showConnDetail(connId) {
   _detailConnId = connId;
+  _stopDetailAutoRefresh();
   openModal('modal-conn-detail');
 
   const header  = document.getElementById('conn-detail-header');
   const content = document.getElementById('conn-detail-content');
-  header.innerHTML  = `<span class="text-gray-500 text-sm">Загрузка…</span>`;
-  content.innerHTML = `<div class="flex justify-center py-8"><span class="spinner"></span></div>`;
+  header.innerHTML  = '<span class="text-gray-500 text-sm">Загрузка\u2026</span>';
+  content.innerHTML = '<div class="flex justify-center py-8"><span class="spinner"></span></div>';
 
-  const res = await api.get(`/connections/${connId}`, { timeout: 10000 });
+  const res = await api.get('/connections/' + connId, { timeout: 10000 });
 
-  // Если модал закрыли пока шла загрузка — ничего не рисуем
   if (document.getElementById('modal-conn-detail').classList.contains('hidden')) return;
 
   if (!res.ok) {
-    // 401 уже обработан в api.js (закрыл модал, показал логин)
     if (res.status === 401) return;
-    header.innerHTML  = `<span class="text-red-400 text-sm"><i class="fas fa-circle-exclamation mr-1"></i>Ошибка</span>`;
-    content.innerHTML = `<div class="text-red-400 text-sm p-4">
-      <i class="fas fa-triangle-exclamation mr-2"></i>${res.error || 'Неизвестная ошибка'}
-      <br><button onclick="showConnDetail(${connId})" class="mt-3 text-xs text-brand-400 hover:underline">
-        <i class="fas fa-rotate-right mr-1"></i>Повторить
-      </button></div>`;
+    header.innerHTML  = '<span class="text-red-400 text-sm"><i class="fas fa-circle-exclamation mr-1"></i>Ошибка</span>';
+    content.innerHTML = '<div class="text-red-400 text-sm p-4">'
+      + '<i class="fas fa-triangle-exclamation mr-2"></i>' + (res.error || 'Неизвестная ошибка')
+      + '<br><button onclick="showConnDetail(' + connId + ')" class="mt-3 text-xs text-brand-400 hover:underline">'
+      + '<i class="fas fa-rotate-right mr-1"></i>Повторить</button></div>';
     return;
   }
 
   try {
     _renderConnDetail(res.data);
+    _startDetailAutoRefresh(connId);
   } catch (err) {
     console.error('[showConnDetail] render error:', err);
-    const header  = document.getElementById('conn-detail-header');
-    const content = document.getElementById('conn-detail-content');
-    if (header)  header.innerHTML  = `<span class="text-red-400 text-sm"><i class="fas fa-circle-exclamation mr-1"></i>Ошибка рендера</span>`;
-    if (content) content.innerHTML = `<div class="text-red-400 text-sm p-4">
-      <i class="fas fa-bug mr-2"></i><b>JS ошибка:</b> ${err.message}
-      <br><pre class="mt-2 text-xs text-gray-400 whitespace-pre-wrap">${err.stack || ''}</pre>
-      <br><button onclick="showConnDetail(${connId})" class="mt-3 text-xs text-brand-400 hover:underline">
-        <i class="fas fa-rotate-right mr-1"></i>Повторить
-      </button></div>`;
+    if (header)  header.innerHTML  = '<span class="text-red-400 text-sm"><i class="fas fa-circle-exclamation mr-1"></i>Ошибка рендера</span>';
+    if (content) content.innerHTML = '<div class="text-red-400 text-sm p-4">'
+      + '<i class="fas fa-bug mr-2"></i><b>JS ошибка:</b> ' + err.message
+      + '<br><pre class="mt-2 text-xs text-gray-400 whitespace-pre-wrap">' + (err.stack || '') + '</pre>'
+      + '<br><button onclick="showConnDetail(' + connId + ')" class="mt-3 text-xs text-brand-400 hover:underline">'
+      + '<i class="fas fa-rotate-right mr-1"></i>Повторить</button></div>';
   }
 }
 
+// Stop refresh when modal closes
+(function() {
+  var _origClose = window.closeModal;
+  window.closeModal = function(id) {
+    if (id === 'modal-conn-detail') _stopDetailAutoRefresh();
+    if (_origClose) _origClose(id);
+  };
+})();
+
 function _renderConnDetail(conn) {
   const pm = PROTO_META[conn.protocol] || { icon: 'fa-network-wired', label: conn.protocol, color: 'text-gray-400 bg-gray-800 border-gray-700' };
-  const sm = STATUS_META[conn.status] || STATUS_META.inactive;
+  const sm = STATUS_META[conn.status]  || STATUS_META.inactive;
 
   const content = document.getElementById('conn-detail-content');
 
-  // Header
-  document.getElementById('conn-detail-header').innerHTML = `
-<div class="flex items-center gap-3">
-  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold ${pm.color}">
-    <i class="fas ${pm.icon} text-[10px]"></i>${pm.label}
-  </span>
-  <div class="flex items-center gap-1.5">
-    <span class="w-2 h-2 rounded-full ${sm.dot}"></span>
-    <span class="text-sm ${sm.text}">${sm.label}</span>
-  </div>
-</div>`;
+  const hs = conn.health_status || null;
 
-  content.innerHTML = `
-<!-- Tabs -->
-<div class="flex gap-1 mb-4 border-b border-gray-800 pb-0">
-  ${['configs','params','info'].map((t,i) => `
-  <button onclick="switchDetailTab('${t}')"
-    id="dtab-btn-${t}"
-    class="detail-tab-btn px-4 py-2 text-sm font-medium border-b-2 transition -mb-px
-           ${i===0 ? 'border-brand-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}">
-    ${ t==='configs' ? '<i class="fas fa-download mr-1.5"></i>Конфиги' :
-       t==='params'  ? '<i class="fas fa-sliders mr-1.5"></i>Параметры' :
-                       '<i class="fas fa-circle-info mr-1.5"></i>Инфо' }
-  </button>`).join('')}
-</div>
+  document.getElementById('conn-detail-header').innerHTML =
+    '<div class="flex items-center gap-3">'
+    + '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold ' + pm.color + '">'
+    + '<i class="fas ' + pm.icon + ' text-[10px]"></i>' + pm.label + '</span>'
+    + '<div class="flex items-center gap-1.5">'
+    + '<span class="w-2 h-2 rounded-full ' + sm.dot + '"></span>'
+    + '<span class="text-sm ' + sm.text + '">' + sm.label + '</span>'
+    + '</div>'
+    + (hs ? _healthBadge(hs) : '')
+    + '</div>';
 
-<!-- Configs tab -->
-<div id="dtab-configs" class="detail-tab-pane space-y-3">
-  ${_renderConfigsTab(conn)}
-</div>
+  // 5 tabs
+  var TABS = [
+    { id: 'status',  icon: 'fa-heart-pulse',    label: 'Статус' },
+    { id: 'config',  icon: 'fa-sliders',         label: 'Протокол' },
+    { id: 'routing', icon: 'fa-route',           label: 'Роутинг' },
+    { id: 'clients', icon: 'fa-download',        label: 'Клиенты' },
+    { id: 'diag',    icon: 'fa-stethoscope',     label: 'Диагностика' }
+  ];
 
-<!-- Params tab -->
-<div id="dtab-params" class="detail-tab-pane hidden space-y-3">
-  ${_renderParamsTab(conn)}
-</div>
+  var tabBtns = TABS.map(function(t, i) {
+    var active = i === 0
+      ? 'border-brand-500 text-white'
+      : 'border-transparent text-gray-500 hover:text-gray-300';
+    return '<button onclick="switchDetailTab(\'' + t.id + '\')"'
+      + ' id="dtab-btn-' + t.id + '"'
+      + ' class="detail-tab-btn px-3 py-2 text-xs font-medium border-b-2 transition -mb-px ' + active + '">'
+      + '<i class="fas ' + t.icon + ' mr-1.5"></i>' + t.label
+      + '</button>';
+  }).join('');
 
-<!-- Info tab -->
-<div id="dtab-info" class="detail-tab-pane hidden space-y-3">
-  ${_renderInfoTab(conn)}
-</div>`;
+  content.innerHTML =
+    '<div class="flex gap-0.5 mb-4 border-b border-gray-800 pb-0 flex-wrap">'
+    + tabBtns
+    + '</div>'
+    + '<div id="dtab-status"  class="detail-tab-pane space-y-3">'  + _renderStatusTab(conn)  + '</div>'
+    + '<div id="dtab-config"  class="detail-tab-pane hidden space-y-3">' + _renderConfigTab(conn)  + '</div>'
+    + '<div id="dtab-routing" class="detail-tab-pane hidden space-y-3">' + _renderRoutingTab(conn) + '</div>'
+    + '<div id="dtab-clients" class="detail-tab-pane hidden space-y-3">' + _renderClientsTab(conn) + '</div>'
+    + '<div id="dtab-diag"    class="detail-tab-pane hidden space-y-3">' + _renderDiagTab(conn)    + '</div>';
 
-  // QR generation
   _maybeGenQR(conn);
 }
 
 function switchDetailTab(name) {
-  document.querySelectorAll('.detail-tab-pane').forEach(el => el.classList.add('hidden'));
-  document.querySelectorAll('.detail-tab-btn').forEach(el => {
+  document.querySelectorAll('.detail-tab-pane').forEach(function(el) { el.classList.add('hidden'); });
+  document.querySelectorAll('.detail-tab-btn').forEach(function(el) {
     el.classList.remove('border-brand-500', 'text-white');
     el.classList.add('border-transparent', 'text-gray-500');
   });
-  document.getElementById(`dtab-${name}`).classList.remove('hidden');
-  const btn = document.getElementById(`dtab-btn-${name}`);
-  btn.classList.add('border-brand-500', 'text-white');
-  btn.classList.remove('border-transparent', 'text-gray-500');
+  var pane = document.getElementById('dtab-' + name);
+  if (pane) pane.classList.remove('hidden');
+  var btn = document.getElementById('dtab-btn-' + name);
+  if (btn) {
+    btn.classList.add('border-brand-500', 'text-white');
+    btn.classList.remove('border-transparent', 'text-gray-500');
+  }
+  // Generate QR when switching to clients tab
+  if (name === 'clients') {
+    var conn = window._lastDetailConn;
+    if (conn) _maybeGenQR(conn);
+  }
 }
 
-// ── Configs tab ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function _renderConfigsTab(conn) {
+function _healthBadge(hs) {
+  var cfg = {
+    HEALTHY:  { cls: 'bg-green-900/40  border-green-600/60  text-green-400',  icon: 'fa-circle-check',         label: 'HEALTHY'  },
+    DEGRADED: { cls: 'bg-yellow-900/40 border-yellow-600/60 text-yellow-400', icon: 'fa-triangle-exclamation', label: 'DEGRADED' },
+    BROKEN:   { cls: 'bg-red-900/40    border-red-600/60    text-red-400',    icon: 'fa-circle-xmark',         label: 'BROKEN'   }
+  };
+  var c = cfg[hs] || { cls: 'bg-gray-800 border-gray-700 text-gray-500', icon: 'fa-circle-question', label: hs || 'UNKNOWN' };
+  return '<span id="detail-health-badge" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold ' + c.cls + '">'
+    + '<i class="fas ' + c.icon + ' text-[9px]"></i>' + c.label + '</span>';
+}
+
+function _kv(label, val, mono) {
+  var valClass = mono ? 'text-xs text-gray-300 font-mono' : 'text-xs text-gray-300';
+  return '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60 last:border-0">'
+    + '<span class="text-xs text-gray-500 flex-shrink-0 mr-4">' + label + '</span>'
+    + '<span class="' + valClass + ' text-right break-all">' + (val !== null && val !== undefined && val !== '' ? escapeHtml(String(val)) : '<span class="text-gray-600">\u2014</span>') + '</span>'
+    + '</div>';
+}
+
+function _roRow(label, value, mono) {
+  var cls = mono ? 'font-mono text-xs text-gray-300 break-all' : 'text-xs text-gray-300';
+  return '<div class="flex items-start gap-3 py-2 border-b border-gray-800 last:border-0">'
+    + '<span class="text-xs text-gray-500 w-32 flex-shrink-0">' + label + '</span>'
+    + '<div class="flex-1 min-w-0 flex items-center gap-2">'
+    + '<span class="' + cls + '">' + (value !== null && value !== undefined && value !== '' ? escapeHtml(String(value)) : '<span class="text-gray-600">\u2014</span>') + '</span>'
+    + (value ? '<button onclick="navigator.clipboard.writeText(\'' + escapeHtml(String(value)).replace(/'/g, "\\'") + '\')" class="flex-shrink-0 text-gray-600 hover:text-gray-300 transition" title="Копировать"><i class="fas fa-copy text-[10px]"></i></button>' : '')
+    + '</div>'
+    + '</div>';
+}
+
+// ── Tab 1: Status & Health ────────────────────────────────────────────────────
+
+function _renderStatusTab(conn) {
+  window._lastDetailConn = conn;
+  return '<div id="dstatus-content">' + _buildStatusContent(conn, conn.id) + '</div>';
+}
+
+function _buildStatusContent(d, connId) {
+  var hs = d.health_status || null;
+
+  // Badge row
+  var badgeRow = '<div class="flex items-center justify-between mb-3">'
+    + '<div class="flex items-center gap-2">'
+    + '<span class="text-xs text-gray-400 font-medium">Health Status</span>'
+    + (hs ? _healthBadge(hs) : '<span class="text-xs text-gray-600">не проверялся</span>')
+    + '</div>'
+    + '<button onclick="runDeepHealthCheck(' + connId + ')" class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-brand-600 rounded-lg text-xs text-gray-300 hover:text-white transition">'
+    + '<i class="fas fa-rotate-right text-[10px]"></i>Проверить сейчас</button>'
+    + '</div>';
+
+  // Xray / Service block
+  var xrayOk   = d.last_check_ok !== false;
+  var tlsStatus = d.last_tls_status || null;
+
+  var serviceBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Сервис</div>'
+    + _kv('Xray/Caddy',  d.last_check_ok === true ? '\u2705 работает' : (d.last_check_ok === false ? '\u274c остановлен' : '\u2014'), false)
+    + _kv('Port', d.port ? d.port + '/tcp' : '\u2014', true)
+    + _kv('TLS handshake', tlsStatus === 'ok' ? '\u2705 OK' : (tlsStatus === 'failed' ? '\u274c failed' : (tlsStatus || '\u2014')), false)
+    + _kv('Протокол', d.protocol || '\u2014', false)
+    + '</div>';
+
+  // Network block
+  var networkBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Сеть</div>'
+    + _kv('Outbound IP',  d.last_outbound_ip  || '\u2014', true)
+    + _kv('Outbound Geo', d.last_outbound_geo || '\u2014', false)
+    + '</div>';
+
+  // Latency block
+  var lat   = d.latency_ms   !== null && d.latency_ms   !== undefined ? d.latency_ms.toFixed(1)   + ' ms' : '\u2014';
+  var jit   = d.jitter_ms    !== null && d.jitter_ms    !== undefined ? d.jitter_ms.toFixed(1)    + ' ms' : '\u2014';
+  var loss  = d.packet_loss_pct !== null && d.packet_loss_pct !== undefined ? d.packet_loss_pct.toFixed(1) + '%'  : '\u2014';
+  var lossColor = (d.packet_loss_pct > 30) ? 'text-red-400' : (d.packet_loss_pct > 5 ? 'text-yellow-400' : 'text-green-400');
+
+  var latencyBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Задержки</div>'
+    + _kv('Latency',     lat,  true)
+    + _kv('Jitter',      jit,  true)
+    + '<div class="flex justify-between items-center py-1.5">'
+    + '<span class="text-xs text-gray-500">Packet loss</span>'
+    + '<span class="text-xs font-mono ' + (d.packet_loss_pct !== null && d.packet_loss_pct !== undefined ? lossColor : 'text-gray-600') + '">' + loss + '</span>'
+    + '</div>'
+    + '</div>';
+
+  // Recovery block
+  var rs = d.recovery_status || null;
+  var rsLabel = { idle: '\u2014', recovering: '\u23f3 recovering\u2026', recovered: '\u2705 recovered', failed: '\u274c failed' };
+  var lastRecAt = d.last_recovery_at ? new Date(d.last_recovery_at).toLocaleString('ru-RU') : '\u2014';
+  var recCount  = d.recovery_count_24h || 0;
+
+  var recoveryBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Авто-рекавери</div>'
+    + _kv('Статус',          rsLabel[rs] || (rs || '\u2014'), false)
+    + _kv('Последний раз',   lastRecAt, false)
+    + _kv('Попыток за 24ч',  recCount, true)
+    + '</div>';
+
+  // Timestamps
+  var lastCheck = d.last_check_at ? new Date(d.last_check_at).toLocaleString('ru-RU') : '\u2014';
+  var lastActive = d.last_active_at ? new Date(d.last_active_at).toLocaleString('ru-RU') : '\u2014';
+  var uptimeSec = d.total_uptime_seconds || 0;
+  var uptimeStr = uptimeSec > 0 ? _fmtUptime(uptimeSec) : '\u2014';
+
+  var timeBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Время</div>'
+    + _kv('Последняя проверка', lastCheck, false)
+    + _kv('Последняя активность', lastActive, false)
+    + _kv('Суммарный аптайм', uptimeStr, true)
+    + '</div>';
+
+  return badgeRow + serviceBlock + networkBlock + latencyBlock + recoveryBlock + timeBlock;
+}
+
+function _fmtUptime(sec) {
+  var d = Math.floor(sec / 86400);
+  var h = Math.floor((sec % 86400) / 3600);
+  var m = Math.floor((sec % 3600) / 60);
+  var parts = [];
+  if (d > 0) parts.push(d + 'д');
+  if (h > 0) parts.push(h + 'ч');
+  if (m > 0) parts.push(m + 'м');
+  return parts.length ? parts.join(' ') : '< 1м';
+}
+
+async function runDeepHealthCheck(connId) {
+  var btn = event && event.currentTarget;
+  if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i> Проверка…';
+
+  try {
+    const res = await api.get('/connections/' + connId + '/health', { timeout: 30000 });
+    if (res.ok) {
+      var el = document.getElementById('dstatus-content');
+      if (el) el.innerHTML = _buildStatusContent(res.data, connId);
+      _updateDetailHeaderBadge(res.data);
+      toast('Health check завершён', 'success', 2000);
+    } else {
+      toast('Ошибка health check: ' + (res.error || 'unknown'), 'error');
+    }
+  } catch(e) {
+    toast('Health check error: ' + e.message, 'error');
+  }
+
+  if (btn) btn.innerHTML = '<i class="fas fa-rotate-right text-[10px]"></i>Проверить сейчас';
+}
+
+// ── Tab 2: Protocol Config ────────────────────────────────────────────────────
+
+function _renderConfigTab(conn) {
+  if (conn.protocol === 'vless_reality') return _configVless(conn);
+  if (conn.protocol === 'amnezia_wg')   return _configAwg(conn);
+  if (conn.protocol === 'naive_proxy')  return _configNaive(conn);
+  return '<div class="text-gray-500 text-sm text-center py-6">Параметры не доступны</div>';
+}
+
+function _paramRow(label, field, value, connId, type, opts) {
+  return _paramRowE(label, field, value, connId, type, opts);
+}
+
+function _paramRowE(label, field, value, connId, type, opts) {
+  type = type || 'text';
+  opts = opts || null;
+  var inputId = 'param-' + connId + '-' + field;
+  var inputEl;
+
+  if (type === 'select' && opts) {
+    inputEl = '<select id="' + inputId + '" class="form-input form-input-sm flex-1 min-w-0">'
+      + opts.map(function(o) {
+          return '<option value="' + escapeHtml(String(o.value)) + '" ' + (o.value == value ? 'selected' : '') + '>' + escapeHtml(o.label) + '</option>';
+        }).join('')
+      + '</select>';
+  } else if (type === 'toggle') {
+    inputEl = '<label class="toggle-switch">'
+      + '<input type="checkbox" id="' + inputId + '" ' + (value ? 'checked' : '') + '>'
+      + '<span class="toggle-slider"></span></label>';
+  } else {
+    inputEl = '<input type="' + type + '" id="' + inputId + '" value="' + escapeHtml(String(value || '')) + '"'
+      + ' class="form-input form-input-sm flex-1 min-w-0 font-mono text-xs">';
+  }
+
+  return '<div class="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">'
+    + '<span class="text-xs text-gray-500 w-36 flex-shrink-0">' + label + '</span>'
+    + '<div class="flex items-center gap-2 flex-1 min-w-0">'
+    + inputEl
+    + '<button onclick="applyParam(' + connId + ',\'' + field + '\',document.getElementById(\'' + inputId + '\'))"'
+    + ' class="flex-shrink-0 px-2.5 py-1 bg-gray-700 hover:bg-brand-600 rounded text-xs text-gray-300 hover:text-white transition flex items-center gap-1">'
+    + '<i class="fas fa-check text-[10px]"></i></button>'
+    + '</div></div>';
+}
+
+function _configVless(conn) {
+  var sniOptions = (window._sniListCache || []).map(function(s) {
+    return { value: s.domain, label: (s.best ? '\u2B50 ' : '') + s.domain };
+  });
+  var fpOptions = ['chrome','firefox','safari','ios','android','edge','360','qq','random','randomized']
+    .map(function(f) { return { value: f, label: f }; });
+
+  // Editable fields
+  var editBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Редактируемые параметры</div>'
+    + _paramRowE('Server Name (SNI)', 'reality_server_name', conn.reality_server_name, conn.id, 'select', sniOptions.length ? sniOptions : [{value: conn.reality_server_name, label: conn.reality_server_name}])
+    + _paramRowE('Fingerprint', 'reality_fingerprint', conn.reality_fingerprint, conn.id, 'select', fpOptions)
+    + _paramRowE('Port', 'port', conn.port, conn.id, 'number')
+    + _paramRowE('Transport', 'transport', conn.transport || 'tcp', conn.id, 'select', [{value:'tcp',label:'TCP'},{value:'ws',label:'WebSocket'},{value:'grpc',label:'gRPC'}])
+    + _paramRowE('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')
+    + _paramRowE('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')
+    + '</div>';
+
+  // Readonly fields
+  var roBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Только чтение</div>'
+    + _roRow('UUID', conn.uuid, true)
+    + _roRow('Public Key', conn.reality_public_key, true)
+    + _roRow('Short ID', conn.reality_short_id, true)
+    + '</div>';
+
+  return editBlock + roBlock;
+}
+
+function _configAwg(conn) {
+  var editBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">AWG параметры</div>'
+    + _paramRowE('Port',          'port',                    conn.port,                    conn.id, 'number')
+    + _paramRowE('Jc (count)',    'awg_junk_packet_count',   conn.awg_junk_packet_count,   conn.id, 'number')
+    + _paramRowE('Jmin',          'awg_junk_packet_min_size',conn.awg_junk_packet_min_size,conn.id, 'number')
+    + _paramRowE('Jmax',          'awg_junk_packet_max_size',conn.awg_junk_packet_max_size,conn.id, 'number')
+    + _paramRowE('S1',            'awg_s1', conn.awg_s1, conn.id, 'number')
+    + _paramRowE('S2',            'awg_s2', conn.awg_s2, conn.id, 'number')
+    + _paramRowE('H1',            'awg_h1', conn.awg_h1, conn.id, 'number')
+    + _paramRowE('H2',            'awg_h2', conn.awg_h2, conn.id, 'number')
+    + _paramRowE('H3',            'awg_h3', conn.awg_h3, conn.id, 'number')
+    + _paramRowE('H4',            'awg_h4', conn.awg_h4, conn.id, 'number')
+    + '</div>';
+
+  var roBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Только чтение</div>'
+    + _roRow('Client Public Key', conn.wg_client_public_key, true)
+    + _roRow('Client IP',         conn.wg_client_ip, true)
+    + '</div>';
+
+  return editBlock + roBlock;
+}
+
+function _configNaive(conn) {
+  var editBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">NaiveProxy параметры</div>'
+    + _paramRowE('Домен',         'np_domain', conn.np_domain, conn.id, 'text')
+    + _paramRowE('Username',      'np_user',   conn.np_user,   conn.id, 'text')
+    + _paramRowE('Password',      'password',  conn.password,  conn.id, 'text')
+    + _paramRowE('Port',          'port',      conn.port,      conn.id, 'number')
+    + _paramRowE('Split-tunnel',  'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')
+    + _paramRowE('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')
+    + '</div>';
+
+  return editBlock;
+}
+
+async function applyParam(connId, field, inputEl) {
+  var value = inputEl.type === 'checkbox' ? inputEl.checked : inputEl.value;
+  if (inputEl.type === 'number') value = parseInt(value);
+
+  var btn = inputEl.parentElement ? inputEl.parentElement.querySelector('button') : null;
+  if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i>';
+
+  const res = await api.patch('/connections/' + connId + '/param', { field: field, value: value });
+
+  if (btn) btn.innerHTML = res.ok
+    ? '<i class="fas fa-check text-[10px] text-green-400"></i>'
+    : '<i class="fas fa-xmark text-[10px] text-red-400"></i>';
+
+  setTimeout(function() {
+    if (btn) btn.innerHTML = '<i class="fas fa-check text-[10px]"></i>';
+  }, 2500);
+
+  if (!res.ok) toast('Ошибка: ' + res.error, 'error');
+  else toast('Параметр обновлён и применён', 'success', 2000);
+}
+
+// ── Tab 3: Routing & Network ──────────────────────────────────────────────────
+
+function _renderRoutingTab(conn) {
+  var typeLabel = conn.connection_type === 'direct' ? 'Прямое' : 'Каскадное';
+  var srv  = conn.server || {};
+  var flag = srv.flag_emoji || '';
+  var dname = srv.display_name || srv.name || srv.ip || '';
+  var euLabel = flag + ' ' + (dname || srv.ip || '\u2014');
+
+  // RU server (cascade)
+  var ruRow = '';
+  if (conn.ru_server) {
+    var ruF = conn.ru_server.flag_emoji || '';
+    ruRow = _kv('RU сервер (вход)', ruF + ' ' + escapeHtml(conn.ru_server.name || conn.ru_server.ip), false);
+  }
+
+  var topoBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Топология</div>'
+    + _kv('Режим', typeLabel, false)
+    + _kv('EU сервер (выход)', euLabel.trim(), false)
+    + ruRow
+    + _kv('Тип протокола', (conn.connection_type || 'direct'), false)
+    + '</div>';
+
+  var activeOutIP  = conn.last_outbound_ip  || '\u2014';
+  var activeOutGeo = conn.last_outbound_geo || '\u2014';
+  var exitSrv = conn.exit_server_id ? '#' + conn.exit_server_id : '\u2014';
+
+  var outboundBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Активный Outbound</div>'
+    + _kv('Exit IP',    activeOutIP,  true)
+    + _kv('Geo',        activeOutGeo, false)
+    + _kv('Exit server', exitSrv, true)
+    + '</div>';
+
+  // WARP toggle
+  var warpBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4">'
+    + '<div class="flex items-center justify-between">'
+    + '<div>'
+    + '<span class="text-xs text-gray-300 font-medium">WARP fallback</span>'
+    + '<p class="text-[10px] text-gray-600 mt-0.5">Cloudflare WARP как резервный outbound в Xray</p>'
+    + '</div>'
+    + '<label class="toggle-switch flex-shrink-0">'
+    + '<input type="checkbox" id="warp-toggle-' + conn.id + '" ' + (conn.warp_enabled ? 'checked' : '')
+    + ' onchange="toggleWarp(' + conn.id + ', this.checked)">'
+    + '<span class="toggle-slider"></span>'
+    + '</label>'
+    + '</div>'
+    + '</div>';
+
+  return topoBlock + outboundBlock + warpBlock;
+}
+
+// ── Tab 4: Client Configs ─────────────────────────────────────────────────────
+
+function _renderClientsTab(conn) {
+  window._lastDetailConn = conn;
   const hasUri  = !!conn.client_link;
   const hasConf = !!conn.config_text;
   const proto   = conn.protocol;
   const SUB_TOKEN = 'dnBuOm1pbGt5aW1zMjAyNA==';
-  const subBase = `${location.origin}/api/v1/subscribe/${SUB_TOKEN}`;
+  const subBase = location.origin + '/api/v1/subscribe/' + SUB_TOKEN;
 
-  if (!hasUri && !hasConf) return `
-<div class="text-center py-8 text-gray-500 text-sm">
-  <i class="fas fa-hourglass-half text-2xl mb-2 block"></i>
-  Конфиги ещё не сгенерированы — дождитесь завершения деплоя
-</div>`;
+  if (!hasUri && !hasConf) return '<div class="text-center py-8 text-gray-500 text-sm">'
+    + '<i class="fas fa-hourglass-half text-2xl mb-2 block"></i>'
+    + 'Конфиги ещё не сгенерированы — дождитесь завершения деплоя</div>';
 
-  // ── VLESS+Reality ──────────────────────────────────────────────────────────
-  if (proto === 'vless_reality') return `
+  if (proto === 'vless_reality') return ''
+    + '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div class="flex items-center justify-between">'
+    + '<div><span class="text-xs font-semibold text-white">URI / QR-код</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-mobile-alt mr-1"></i>v2rayTun · HAPP · AmneziaVPN · Hiddify · v2rayNG</div></div>'
+    + '<button class="copy-btn text-xs" data-copy-id="uri-' + conn.id + '"><i class="fas fa-copy mr-1"></i>Копировать</button>'
+    + '</div>'
+    + '<div id="uri-' + conn.id + '" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 break-all select-all max-h-24 overflow-y-auto border border-gray-700">' + escapeHtml(conn.client_link) + '</div>'
+    + '<div class="flex justify-center pt-1"><div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div></div>'
+    + '<p class="text-center text-xs text-gray-600">Отсканируй QR или скопируй URI</p>'
+    + '</div>'
+    + '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div><span class="text-xs font-semibold text-white">Subscription URL</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-mobile-alt mr-1"></i>sing-box · Hiddify · Clash/Mihomo</div>'
+    + '<p class="text-xs text-gray-600 mt-1">Одна ссылка — все активные подключения сразу</p></div>'
+    + '<div class="space-y-2">'
+    + '<div class="flex items-center gap-2"><span class="text-xs text-gray-400 w-20 shrink-0 font-medium">sing-box</span>'
+    + '<div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-sb-' + conn.id + '">' + subBase + '?format=singbox</div>'
+    + '<button class="copy-btn text-xs shrink-0" data-copy-id="sub-sb-' + conn.id + '"><i class="fas fa-copy"></i></button></div>'
+    + '<div class="flex items-center gap-2"><span class="text-xs text-gray-400 w-20 shrink-0 font-medium">Clash</span>'
+    + '<div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-cl-' + conn.id + '">' + subBase + '?format=clash</div>'
+    + '<button class="copy-btn text-xs shrink-0" data-copy-id="sub-cl-' + conn.id + '"><i class="fas fa-copy"></i></button></div>'
+    + '</div></div>';
 
-<!-- Способ 1: URI -->
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div class="flex items-center justify-between">
-    <div>
-      <span class="text-xs font-semibold text-white">Способ 1 — URI / QR-код</span>
-      <div class="text-xs text-gray-500 mt-0.5">
-        <i class="fas fa-mobile-alt mr-1"></i>v2rayTun · HAPP · AmneziaVPN · Hiddify · v2rayNG (Android)
-      </div>
-    </div>
-    <button class="copy-btn text-xs" data-copy-id="uri-${conn.id}">
-      <i class="fas fa-copy mr-1"></i>Копировать
-    </button>
-  </div>
-  <div id="uri-${conn.id}" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 break-all select-all max-h-24 overflow-y-auto border border-gray-700">${escapeHtml(conn.client_link)}</div>
-  <div class="flex justify-center pt-1">
-    <div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div>
-  </div>
-  <p class="text-center text-xs text-gray-600">Отсканируй QR или скопируй URI</p>
-</div>
+  if (proto === 'amnezia_wg') return ''
+    + '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div class="flex items-center justify-between">'
+    + '<div><span class="text-xs font-semibold text-white">.conf файл</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-mobile-alt mr-1"></i>AmneziaVPN (iOS / Android / Desktop)</div></div>'
+    + '<div class="flex gap-2">'
+    + '<button class="copy-btn text-xs" data-copy-id="conf-' + conn.id + '"><i class="fas fa-copy mr-1"></i>Копировать</button>'
+    + '<button onclick="downloadConfig(' + conn.id + ')" class="copy-btn text-xs"><i class="fas fa-download mr-1"></i>Скачать</button>'
+    + '</div></div>'
+    + '<pre id="conf-' + conn.id + '" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-44 overflow-y-auto border border-gray-700">' + escapeHtml(conn.config_text || '') + '</pre>'
+    + '</div>'
+    + '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div><span class="text-xs font-semibold text-white">QR-код</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-mobile-alt mr-1"></i>AmneziaVPN (iOS / Android)</div></div>'
+    + '<div class="flex justify-center"><div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div></div>'
+    + '<p class="text-center text-xs text-gray-600">Отсканируй QR в приложении AmneziaVPN</p>'
+    + '</div>'
+    + '<div class="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-3">'
+    + '<p class="text-xs text-yellow-400"><i class="fas fa-triangle-exclamation mr-1"></i>AmneziaWG работает <strong>только</strong> в приложении AmneziaVPN.</p>'
+    + '</div>';
 
-<!-- Способ 2: Subscription -->
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div>
-    <span class="text-xs font-semibold text-white">Способ 2 — Subscription URL</span>
-    <div class="text-xs text-gray-500 mt-0.5">
-      <i class="fas fa-mobile-alt mr-1"></i>sing-box · Hiddify · Clash/Mihomo
-    </div>
-    <p class="text-xs text-gray-600 mt-1">Одна ссылка — все активные подключения сразу</p>
-  </div>
-  <div class="space-y-2">
-    <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-400 w-20 shrink-0 font-medium">sing-box</span>
-      <div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-sb-${conn.id}">${subBase}?format=singbox</div>
-      <button class="copy-btn text-xs shrink-0" data-copy-id="sub-sb-${conn.id}"><i class="fas fa-copy"></i></button>
-    </div>
-    <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-400 w-20 shrink-0 font-medium">Clash</span>
-      <div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-cl-${conn.id}">${subBase}?format=clash</div>
-      <button class="copy-btn text-xs shrink-0" data-copy-id="sub-cl-${conn.id}"><i class="fas fa-copy"></i></button>
-    </div>
-  </div>
-</div>`;
+  if (proto === 'naive_proxy') return ''
+    + '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div><span class="text-xs font-semibold text-white">Subscription URL</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-mobile-alt mr-1"></i>sing-box · Hiddify · Clash/Mihomo</div>'
+    + '<p class="text-xs text-gray-600 mt-1">Одна ссылка — все активные подключения сразу</p></div>'
+    + '<div class="space-y-2">'
+    + '<div class="flex items-center gap-2"><span class="text-xs text-gray-400 w-20 shrink-0 font-medium">sing-box</span>'
+    + '<div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-sb-' + conn.id + '">' + subBase + '?format=singbox</div>'
+    + '<button class="copy-btn text-xs shrink-0" data-copy-id="sub-sb-' + conn.id + '"><i class="fas fa-copy"></i></button></div>'
+    + '<div class="flex items-center gap-2"><span class="text-xs text-gray-400 w-20 shrink-0 font-medium">Clash</span>'
+    + '<div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-cl-' + conn.id + '">' + subBase + '?format=clash</div>'
+    + '<button class="copy-btn text-xs shrink-0" data-copy-id="sub-cl-' + conn.id + '"><i class="fas fa-copy"></i></button></div>'
+    + '</div></div>'
+    + (hasConf ? '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div class="flex items-center justify-between">'
+    + '<div><span class="text-xs font-semibold text-white">JSON конфиг</span>'
+    + '<div class="text-xs text-gray-500 mt-0.5"><i class="fas fa-desktop mr-1"></i>NaiveProxy CLI</div></div>'
+    + '<div class="flex gap-2"><button class="copy-btn text-xs" data-copy-id="conf-' + conn.id + '"><i class="fas fa-copy mr-1"></i>Копировать</button>'
+    + '<button onclick="downloadConfig(' + conn.id + ')" class="copy-btn text-xs"><i class="fas fa-download mr-1"></i>Скачать</button></div></div>'
+    + '<pre id="conf-' + conn.id + '" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-44 overflow-y-auto border border-gray-700">' + escapeHtml(conn.config_text) + '</pre>'
+    + '</div>' : '')
+    + '<div class="bg-blue-900/30 border border-blue-700/50 rounded-xl p-3">'
+    + '<p class="text-xs text-blue-400"><i class="fas fa-circle-info mr-1"></i>NaiveProxy работает через HTTPS-прокси.</p>'
+    + '</div>';
 
-  // ── AmneziaWG ──────────────────────────────────────────────────────────────
-  if (proto === 'amnezia_wg') return `
-
-<!-- Способ 1: .conf файл -->
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div class="flex items-center justify-between">
-    <div>
-      <span class="text-xs font-semibold text-white">Способ 1 — .conf файл</span>
-      <div class="text-xs text-gray-500 mt-0.5">
-        <i class="fas fa-mobile-alt mr-1"></i>AmneziaVPN (iOS / Android / Desktop)
-      </div>
-    </div>
-    <div class="flex gap-2">
-      <button class="copy-btn text-xs" data-copy-id="conf-${conn.id}">
-        <i class="fas fa-copy mr-1"></i>Копировать
-      </button>
-      <button onclick="downloadConfig(${conn.id})" class="copy-btn text-xs">
-        <i class="fas fa-download mr-1"></i>Скачать
-      </button>
-    </div>
-  </div>
-  <pre id="conf-${conn.id}" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-44 overflow-y-auto border border-gray-700">${escapeHtml(conn.config_text || '')}</pre>
-</div>
-
-<!-- Способ 2: QR -->
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div>
-    <span class="text-xs font-semibold text-white">Способ 2 — QR-код</span>
-    <div class="text-xs text-gray-500 mt-0.5">
-      <i class="fas fa-mobile-alt mr-1"></i>AmneziaVPN (iOS / Android)
-    </div>
-  </div>
-  <div class="flex justify-center">
-    <div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div>
-  </div>
-  <p class="text-center text-xs text-gray-600">Отсканируй QR в приложении AmneziaVPN</p>
-</div>
-
-<div class="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-3">
-  <p class="text-xs text-yellow-400">
-    <i class="fas fa-triangle-exclamation mr-1"></i>
-    AmneziaWG работает <strong>только</strong> в приложении AmneziaVPN.
-    Стандартный WireGuard не подойдёт.
-  </p>
-</div>`;
-
-  // ── NaiveProxy ─────────────────────────────────────────────────────────────
-  if (proto === 'naive_proxy') return `
-
-<!-- Способ 1: Subscription -->
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div>
-    <span class="text-xs font-semibold text-white">Способ 1 — Subscription URL</span>
-    <div class="text-xs text-gray-500 mt-0.5">
-      <i class="fas fa-mobile-alt mr-1"></i>sing-box · Hiddify · Clash/Mihomo
-    </div>
-    <p class="text-xs text-gray-600 mt-1">Одна ссылка — все активные подключения сразу</p>
-  </div>
-  <div class="space-y-2">
-    <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-400 w-20 shrink-0 font-medium">sing-box</span>
-      <div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-sb-${conn.id}">${subBase}?format=singbox</div>
-      <button class="copy-btn text-xs shrink-0" data-copy-id="sub-sb-${conn.id}"><i class="fas fa-copy"></i></button>
-    </div>
-    <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-400 w-20 shrink-0 font-medium">Clash</span>
-      <div class="flex-1 font-mono text-xs text-gray-300 bg-gray-900 rounded-lg px-3 py-2 truncate border border-gray-700" id="sub-cl-${conn.id}">${subBase}?format=clash</div>
-      <button class="copy-btn text-xs shrink-0" data-copy-id="sub-cl-${conn.id}"><i class="fas fa-copy"></i></button>
-    </div>
-  </div>
-</div>
-
-<!-- Способ 2: JSON конфиг -->
-${hasConf ? `
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div class="flex items-center justify-between">
-    <div>
-      <span class="text-xs font-semibold text-white">Способ 2 — JSON конфиг</span>
-      <div class="text-xs text-gray-500 mt-0.5">
-        <i class="fas fa-desktop mr-1"></i>NaiveProxy CLI (Windows / macOS / Linux)
-      </div>
-    </div>
-    <div class="flex gap-2">
-      <button class="copy-btn text-xs" data-copy-id="conf-${conn.id}">
-        <i class="fas fa-copy mr-1"></i>Копировать
-      </button>
-      <button onclick="downloadConfig(${conn.id})" class="copy-btn text-xs">
-        <i class="fas fa-download mr-1"></i>Скачать
-      </button>
-    </div>
-  </div>
-  <pre id="conf-${conn.id}" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-44 overflow-y-auto border border-gray-700">${escapeHtml(conn.config_text)}</pre>
-</div>` : ''}
-
-<div class="bg-blue-900/30 border border-blue-700/50 rounded-xl p-3">
-  <p class="text-xs text-blue-400">
-    <i class="fas fa-circle-info mr-1"></i>
-    NaiveProxy работает через HTTPS-прокси. Добавляй через Subscription URL — так название отобразится корректно.
-  </p>
-</div>`;
-
-  // ── Fallback (неизвестный протокол) ────────────────────────────────────────
-  return `
-${hasUri ? `
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div class="flex items-center justify-between">
-    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">URI</span>
-    <button class="copy-btn text-xs" data-copy-id="uri-${conn.id}"><i class="fas fa-copy mr-1"></i>Копировать</button>
-  </div>
-  <div id="uri-${conn.id}" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 break-all select-all max-h-28 overflow-y-auto border border-gray-700">${escapeHtml(conn.client_link)}</div>
-</div>` : ''}
-${hasConf ? `
-<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-  <div class="flex items-center justify-between">
-    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Конфиг</span>
-    <button class="copy-btn text-xs" data-copy-id="conf-${conn.id}"><i class="fas fa-copy mr-1"></i>Копировать</button>
-  </div>
-  <pre id="conf-${conn.id}" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-40 overflow-y-auto border border-gray-700">${escapeHtml(conn.config_text)}</pre>
-</div>` : ''}
-<div class="flex justify-center pt-1">
-  <div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div>
-</div>`;
+  // Fallback
+  return (hasUri ? '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div class="flex items-center justify-between"><span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">URI</span>'
+    + '<button class="copy-btn text-xs" data-copy-id="uri-' + conn.id + '"><i class="fas fa-copy mr-1"></i>Копировать</button></div>'
+    + '<div id="uri-' + conn.id + '" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 break-all select-all max-h-28 overflow-y-auto border border-gray-700">' + escapeHtml(conn.client_link) + '</div>'
+    + '</div>' : '')
+    + (hasConf ? '<div class="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">'
+    + '<div class="flex items-center justify-between"><span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Конфиг</span>'
+    + '<button class="copy-btn text-xs" data-copy-id="conf-' + conn.id + '"><i class="fas fa-copy mr-1"></i>Копировать</button></div>'
+    + '<pre id="conf-' + conn.id + '" class="font-mono text-xs text-gray-300 bg-gray-900 rounded-lg p-3 whitespace-pre-wrap break-all select-all max-h-40 overflow-y-auto border border-gray-700">' + escapeHtml(conn.config_text) + '</pre>'
+    + '</div>' : '')
+    + '<div class="flex justify-center pt-1"><div id="conn-qr-canvas" class="bg-gray-900 rounded-xl p-2" style="min-width:180px;min-height:180px;display:flex;align-items:center;justify-content:center;"></div></div>';
 }
 
 function _maybeGenQR(conn) {
@@ -925,25 +1418,20 @@ function _maybeGenQR(conn) {
     return;
   }
 
-  // Для vless:// / trojan:// — убираем тег после # (эмодзи ломают QR-библиотеку).
-  // Тег после # — только косметика для клиента, на подключение не влияет.
-  // Для WireGuard .conf и NaiveProxy JSON — оставляем как есть.
   let qrData = raw;
   if (/^vless:\/\//i.test(raw) || /^trojan:\/\//i.test(raw)) {
     qrData = raw.split('#')[0];
   }
 
-  // Библиотека QRCode не умеет кодировать строки длиннее ~2953 байт (уровень L)
   if (qrData.length > 2048) {
     qrEl.innerHTML = '<div class="text-xs text-gray-600 text-center p-4">URI слишком длинный для QR</div>';
     return;
   }
 
-  qrEl.innerHTML = ''; // очищаем перед перегенерацией
+  qrEl.innerHTML = '';
   try {
     new QRCode(qrEl, {
-      text: qrData,
-      width: 196, height: 196,
+      text: qrData, width: 196, height: 196,
       colorDark: '#ffffff', colorLight: '#111827',
       correctLevel: QRCode.CorrectLevel.M,
     });
@@ -953,326 +1441,63 @@ function _maybeGenQR(conn) {
 }
 
 function downloadConfig(connId) {
-  window.open(`/api/v1/connections/${connId}/download`, '_blank');
+  window.open('/api/v1/connections/' + connId + '/download', '_blank');
 }
 
-// ── Params tab ───────────────────────────────────────────────────────────────
+// ── Tab 5: Diagnostics & Logs ─────────────────────────────────────────────────
 
-function _renderParamsTab(conn) {
-  if (conn.protocol === 'vless_reality') {
-    return _paramsVless(conn);
-  } else if (conn.protocol === 'amnezia_wg') {
-    return _paramsAwg(conn);
-  } else if (conn.protocol === 'naive_proxy') {
-    return _paramsNaive(conn);
-  }
-  return '<div class="text-gray-500 text-sm text-center py-6">Параметры не доступны</div>';
+function _renderDiagTab(conn) {
+  var deployLog  = conn.setup_log    || '';
+  var recovLog   = conn.recovery_log || '';
+
+  var deployBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3">'
+    + '<div class="flex items-center justify-between mb-2">'
+    + '<span class="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Deploy Log</span>'
+    + '<button onclick="_loadDiagLog(' + conn.id + ', \'setup\')" class="text-[10px] text-brand-400 hover:underline"><i class="fas fa-rotate-right mr-1"></i>Обновить</button>'
+    + '</div>'
+    + '<pre id="diag-deploy-log" class="font-mono text-[10px] text-gray-400 bg-gray-900 rounded-lg p-2.5 whitespace-pre-wrap max-h-48 overflow-y-auto border border-gray-800">'
+    + (deployLog ? escapeHtml(deployLog) : '<span class="text-gray-600">Лог недоступен</span>')
+    + '</pre>'
+    + '</div>';
+
+  var hcLogBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3">'
+    + '<div class="flex items-center justify-between mb-2">'
+    + '<span class="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Health Check</span>'
+    + '<div class="flex items-center gap-2">'
+    + (conn.last_check_at ? '<span class="text-[10px] text-gray-600">Последняя: ' + new Date(conn.last_check_at).toLocaleTimeString('ru-RU') + '</span>' : '')
+    + '</div>'
+    + '</div>'
+    + '<div class="space-y-1">'
+    + _kv('Статус', conn.health_status || '\u2014', false)
+    + _kv('Latency', conn.latency_ms !== null && conn.latency_ms !== undefined ? conn.latency_ms.toFixed(1) + ' ms' : '\u2014', true)
+    + _kv('Jitter', conn.jitter_ms !== null && conn.jitter_ms !== undefined ? conn.jitter_ms.toFixed(1) + ' ms' : '\u2014', true)
+    + _kv('Packet loss', conn.packet_loss_pct !== null && conn.packet_loss_pct !== undefined ? conn.packet_loss_pct.toFixed(1) + '%' : '\u2014', true)
+    + _kv('TLS', conn.last_tls_status || '\u2014', false)
+    + _kv('Outbound IP', conn.last_outbound_ip || '\u2014', true)
+    + _kv('Outbound Geo', conn.last_outbound_geo || '\u2014', false)
+    + '</div>'
+    + '</div>';
+
+  var recovBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3">'
+    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Recovery Log</div>'
+    + '<pre id="diag-recovery-log" class="font-mono text-[10px] text-gray-400 bg-gray-900 rounded-lg p-2.5 whitespace-pre-wrap max-h-40 overflow-y-auto border border-gray-800">'
+    + (recovLog ? escapeHtml(recovLog) : '<span class="text-gray-600">Нет записей</span>')
+    + '</pre>'
+    + '</div>';
+
+  return deployBlock + hcLogBlock + recovBlock;
 }
 
-function _paramRow(label, field, value, connId, type='text', opts=null) {
-  const inputId = `param-${connId}-${field}`;
-  let inputEl;
-
-  if (type === 'select' && opts) {
-    inputEl = `<select id="${inputId}" class="form-input form-input-sm flex-1 min-w-0">
-      ${opts.map(o => `<option value="${o.value}" ${o.value===value?'selected':''}>${escapeHtml(o.label)}</option>`).join('')}
-    </select>`;
-  } else if (type === 'toggle') {
-    inputEl = `<label class="toggle-switch">
-      <input type="checkbox" id="${inputId}" ${value ? 'checked' : ''}>
-      <span class="toggle-slider"></span>
-    </label>`;
-  } else {
-    inputEl = `<input type="${type}" id="${inputId}" value="${escapeHtml(String(value||''))}"
-      class="form-input form-input-sm flex-1 min-w-0 font-mono text-xs">`;
-  }
-
-  return `
-<div class="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
-  <span class="text-xs text-gray-500 w-32 flex-shrink-0">${label}</span>
-  <div class="flex items-center gap-2 flex-1 min-w-0">
-    ${inputEl}
-    <button onclick="applyParam(${connId},'${field}',document.getElementById('${inputId}'))"
-      class="flex-shrink-0 px-2.5 py-1 bg-gray-700 hover:bg-brand-600 rounded text-xs text-gray-300 hover:text-white transition flex items-center gap-1">
-      <i class="fas fa-check text-[10px]"></i>
-    </button>
-  </div>
-</div>`;
-}
-
-function _paramsVless(conn) {
-  const sniOptions = (window._sniListCache || []).map(s => ({ value: s.domain, label: (s.best?'⭐ ':'')+s.domain }));
-  const fpOptions  = ['chrome','firefox','safari','ios','android','edge','360','qq','random','randomized']
-    .map(f => ({ value: f, label: f }));
-
-  return `
-<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">
-  ${_paramRow('Server Name (SNI)', 'reality_server_name', conn.reality_server_name, conn.id, 'select', sniOptions.length ? sniOptions : [{value: conn.reality_server_name, label: conn.reality_server_name}])}
-  ${_paramRow('Fingerprint', 'reality_fingerprint', conn.reality_fingerprint, conn.id, 'select', fpOptions)}
-  ${_paramRow('Port', 'port', conn.port, conn.id, 'number')}
-  ${_paramRow('UUID', 'uuid', conn.uuid, conn.id, 'text')}
-  ${_paramRow('Public Key', 'reality_public_key', conn.reality_public_key, conn.id, 'text')}
-  ${_paramRow('Short ID', 'reality_short_id', conn.reality_short_id, conn.id, 'text')}
-  ${_paramRow('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')}
-  ${_paramRow('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')}
-</div>`;
-}
-
-function _paramsAwg(conn) {
-  return `
-<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">
-  ${_paramRow('Port',    'port', conn.port, conn.id, 'number')}
-  ${_paramRow('Jc (count)',   'awg_junk_packet_count',    conn.awg_junk_packet_count,    conn.id, 'number')}
-  ${_paramRow('Jmin (min)',   'awg_junk_packet_min_size', conn.awg_junk_packet_min_size, conn.id, 'number')}
-  ${_paramRow('Jmax (max)',   'awg_junk_packet_max_size', conn.awg_junk_packet_max_size, conn.id, 'number')}
-  ${_paramRow('S1',  'awg_s1', conn.awg_s1, conn.id, 'number')}
-  ${_paramRow('S2',  'awg_s2', conn.awg_s2, conn.id, 'number')}
-  ${_paramRow('H1',  'awg_h1', conn.awg_h1, conn.id, 'number')}
-  ${_paramRow('H2',  'awg_h2', conn.awg_h2, conn.id, 'number')}
-  ${_paramRow('H3',  'awg_h3', conn.awg_h3, conn.id, 'number')}
-  ${_paramRow('H4',  'awg_h4', conn.awg_h4, conn.id, 'number')}
-  <div class="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
-    <span class="text-xs text-gray-500 w-32 flex-shrink-0">Split-tunnel RU</span>
-    <div class="flex items-center gap-2 flex-1 min-w-0">
-      <label class="toggle-switch opacity-50 cursor-not-allowed" title="Недоступно для WireGuard — сплит-туннелинг работает через AllowedIPs или на уровне Xray на сервере">
-        <input type="checkbox" disabled ${conn.split_tunnel_enabled ? 'checked' : ''}>
-        <span class="toggle-slider"></span>
-      </label>
-      <span class="text-[10px] text-gray-600 italic">Через Xray (server-side). Для WG клиентских правил используй sing-box/NekoBox.</span>
-    </div>
-  </div>
-</div>`;
-}
-
-function _paramsNaive(conn) {
-  return `
-<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-1">
-  ${_paramRow('Домен',    'np_domain', conn.np_domain, conn.id, 'text')}
-  ${_paramRow('Username', 'np_user',   conn.np_user,   conn.id, 'text')}
-  ${_paramRow('Password', 'password',  conn.password,  conn.id, 'text')}
-  ${_paramRow('Port',     'port',      conn.port,      conn.id, 'number')}
-  ${_paramRow('Split-tunnel RU', 'split_tunnel_enabled', conn.split_tunnel_enabled, conn.id, 'toggle')}
-  ${_paramRow('WARP fallback', 'warp_enabled', conn.warp_enabled !== false, conn.id, 'toggle')}
-</div>`;
-}
-
-async function applyParam(connId, field, inputEl) {
-  let value = inputEl.type === 'checkbox' ? inputEl.checked : inputEl.value;
-  if (inputEl.type === 'number') value = parseInt(value);
-
-  const btn = inputEl.parentElement.querySelector('button');
-  if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i>';
-
-  const res = await api.patch(`/connections/${connId}/param`, { field, value });
-
-  if (btn) btn.innerHTML = res.ok
-    ? '<i class="fas fa-check text-[10px] text-green-400"></i>'
-    : '<i class="fas fa-xmark text-[10px] text-red-400"></i>';
-
-  setTimeout(() => {
-    if (btn) btn.innerHTML = '<i class="fas fa-check text-[10px]"></i>';
-  }, 2500);
-
-  if (!res.ok) toast(`Ошибка: ${res.error}`, 'error');
-  else toast('Параметр обновлён и применён', 'success', 2000);
-}
-
-// ── Info tab ─────────────────────────────────────────────────────────────────
-
-function _renderInfoTab(conn) {
-  const typeLabel = conn.connection_type === 'direct' ? 'Прямое' : 'Каскадное';
-  const created   = conn.created_at ? new Date(conn.created_at).toLocaleString('ru-RU') : '—';
-
-  // Название в клиенте: приоритет client_name из API, иначе строим сами
-  const srv        = conn.server || {};
-  const flag       = srv.flag_emoji   || '';
-  const dname      = srv.display_name || srv.name || srv.ip || '';
-  const protoLabel = { vless_reality: 'VLESS', amnezia_wg: 'AWG', naive_proxy: 'NaiveProxy' }[conn.protocol] || conn.protocol;
-  const ctype      = conn.connection_type || 'direct';
-  const clientName = conn.client_name || ([flag, dname].filter(Boolean).join(' ') + ` | ${protoLabel} (${ctype})`);
-
-  // RU сервер (для cascade)
-  let serverInfo = '';
-  if (conn.ru_server) {
-    const ruFlag = conn.ru_server.flag_emoji || getFlag(conn.ru_server.country);
-    serverInfo = `
-    <div class="flex justify-between py-2 border-b border-gray-800">
-      <span class="text-xs text-gray-500">RU сервер (вход)</span>
-      <span class="text-xs text-white">${ruFlag} ${escapeHtml(conn.ru_server.name)} (${conn.ru_server.ip})</span>
-    </div>`;
-  }
-
-  // EU сервер
-  const euFlag = flag || (srv.country ? getFlag(srv.country) : '');
-  const euLabel = dname ? `${euFlag} ${escapeHtml(dname)}` : (srv.ip || '—');
-
-  return `
-<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-0">
-
-  <!-- Название в клиенте — самая важная строка -->
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">Название в клиенте</span>
-    <span class="text-sm font-medium text-white">${escapeHtml(clientName)}</span>
-  </div>
-
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">ID</span>
-    <span class="text-xs text-gray-400 font-mono">#${conn.id}</span>
-  </div>
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">Тип</span>
-    <span class="text-xs text-white">${typeLabel}</span>
-  </div>
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">Протокол</span>
-    <span class="text-xs text-white">${(PROTO_META[conn.protocol]||{label:conn.protocol}).label}</span>
-  </div>
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">EU сервер (выход)</span>
-    <span class="text-xs text-white">${euLabel}</span>
-  </div>
-  ${serverInfo}
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">Порт</span>
-    <span class="text-xs text-gray-400 font-mono">${conn.port}</span>
-  </div>
-  <div class="flex justify-between py-2 border-b border-gray-800">
-    <span class="text-xs text-gray-500">Split-tunnel</span>
-    <span class="text-xs ${conn.split_tunnel_enabled ? 'text-green-400' : 'text-gray-500'}">${conn.split_tunnel_enabled ? 'Включён' : 'Выключен'}</span>
-  </div>
-  <div class="flex items-center justify-between py-2 border-b border-gray-800">
-    <div>
-      <span class="text-xs text-gray-500">WARP fallback</span>
-      <p class="text-[10px] text-gray-600 mt-0.5">Cloudflare WARP как запасной outbound в Xray</p>
-    </div>
-    <label class="toggle-switch flex-shrink-0" title="Включить/выключить WARP fallback">
-      <input type="checkbox" id="warp-toggle-${conn.id}" ${conn.warp_enabled ? 'checked' : ''}
-        onchange="toggleWarp(${conn.id}, this.checked)">
-      <span class="toggle-slider"></span>
-    </label>
-  </div>
-  <div class="flex justify-between py-2">
-    <span class="text-xs text-gray-500">Создан</span>
-    <span class="text-xs text-gray-400">${created}</span>
-  </div>
-</div>
-
-<div class="flex gap-2 mt-2">
-  <button onclick="checkConnLive(${conn.id})"
-    class="flex-1 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-xs font-medium transition flex items-center justify-center gap-2">
-    <i class="fas fa-stethoscope"></i> Проверить
-  </button>
-  <button onclick="redeployConnection(${conn.id})"
-    id="redeploy-btn-${conn.id}"
-    class="flex-1 py-2 bg-brand-900/30 hover:bg-brand-900/60 border border-brand-700/50 rounded-lg text-xs text-brand-300 font-medium transition flex items-center justify-center gap-2">
-    <i class="fas fa-rotate-right"></i> Поднять
-  </button>
-  <button onclick="confirmDeleteConnection(${conn.id})"
-    class="py-2 px-3 bg-red-900/30 hover:bg-red-900/50 border border-red-800/50 rounded-lg text-xs text-red-400 transition flex items-center gap-1.5">
-    <i class="fas fa-trash text-[10px]"></i> Удалить
-  </button>
-</div>`;
-}
-
-async function checkConnLive(connId) {
-  const res = await api.post(`/connections/${connId}/check`, {});
-  if (res.ok) {
-    const { alive, message } = res.data;
-    toast(alive ? `✅ ${message}` : `⚠️ ${message}`, alive ? 'success' : 'warning', 3000);
-    // Обновляем точку статуса прямо в строке без перерисовки всего списка
-    _applyConnStatusInRow(connId, res.data.status);
-    showConnDetail(connId);
-  } else {
-    toast(`Ошибка: ${res.error}`, 'error');
+async function _loadDiagLog(connId, type) {
+  const res = await api.get('/connections/' + connId, { timeout: 10000 });
+  if (!res.ok) return;
+  const d = res.data;
+  if (type === 'setup') {
+    var el = document.getElementById('diag-deploy-log');
+    if (el) el.innerHTML = d.setup_log ? escapeHtml(d.setup_log) : '<span class="text-gray-600">Лог недоступен</span>';
   }
 }
 
-async function redeployConnection(connId) {
-  const btn = document.getElementById(`redeploy-btn-${connId}`);
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Запуск...';
-  }
-  const res = await api.post(`/connections/${connId}/redeploy`, {});
-  if (res.ok) {
-    toast('🔄 Redeploy запущен — следите за логом в карточке', 'info', 4000);
-    // Запускаем поллинг статуса чтобы лог обновился
-    _pollRedeployStatus(connId);
-  } else {
-    toast(`Ошибка запуска: ${res.error}`, 'error');
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
-    }
-  }
-}
-
-function _pollRedeployStatus(connId) {
-  let attempts = 0;
-  const maxAttempts = 60; // до 5 минут (5 сек * 60)
-  const interval = setInterval(async () => {
-    attempts++;
-    const res = await api.get(`/connections/${connId}`);
-    if (!res.ok || attempts >= maxAttempts) {
-      clearInterval(interval);
-      const btn = document.getElementById(`redeploy-btn-${connId}`);
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
-      }
-      return;
-    }
-    const conn = res.data;
-    _applyConnStatusInRow(connId, conn.status);
-    if (conn.setup_status === 'done' || conn.setup_status === 'failed') {
-      clearInterval(interval);
-      const btn = document.getElementById(`redeploy-btn-${connId}`);
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-rotate-right"></i> Поднять';
-      }
-      const ok = conn.setup_status === 'done';
-      toast(ok ? `✅ Подключение поднято` : `❌ Redeploy не удался — смотри лог`, ok ? 'success' : 'error', 4000);
-      // Если панель детали открыта для этого подключения — обновить
-      if (typeof _detailConnId !== 'undefined' && _detailConnId === connId) {
-        showConnDetail(connId);
-      }
-    }
-  }, 5000);
-}
-
-// ─── CHECK ALL / CHECK GROUP ─────────────────────────────────────────────────
-
-/**
- * Обновляет точку статуса и текст в строке подключения на лету,
- * без перерисовки всего списка.
- */
-function _applyConnStatusInRow(connId, statusKey) {
-  const row = document.getElementById(`conn-row-${connId}`);
-  if (!row) return;
-  const sm  = STATUS_META[statusKey] || STATUS_META.inactive;
-  const dot = row.querySelector('.conn-status-dot');
-  const txt = row.querySelector('.conn-status-text');
-  if (dot) { dot.className = `conn-status-dot w-1.5 h-1.5 rounded-full ${sm.dot}`; }
-  if (txt) { txt.className = `conn-status-text text-xs ${sm.text}`; txt.textContent = sm.label; }
-}
-
-/**
- * Ставит кнопку обновления группы в состояние «крутится» или «готово».
- */
-function _setGroupBtnSpinning(srvId, spinning) {
-  const btn = document.getElementById(`refresh-group-btn-${srvId}`);
-  if (!btn) return;
-  btn.disabled  = spinning;
-  btn.innerHTML = spinning
-    ? '<span class="spinner" style="width:10px;height:10px;display:inline-block;"></span>'
-    : '<i class="fas fa-arrows-rotate text-xs"></i>';
-}
-
-/**
- * Проверяет подключения одного конкретного сервера (клик на кнопку группы).
- * Посылает check-all на бэкенд и применяет результаты только к этой группе.
- */
 async function checkServerGroup(srvId, connIds) {
   _setGroupBtnSpinning(srvId, true);
   // Используем общий /check-all — он проверяет всё, но мы применяем только нужные ids
@@ -1427,7 +1652,12 @@ window._loadSniList             = _loadSniList;
 window.showAddConnectionModal   = showAddConnectionModal;
 window.wizToggleType            = wizToggleType;
 window.wizGoStep2               = wizGoStep2;
+window.wizToggleProtocol        = wizToggleProtocol;
+window.wizSelectAllProtocols    = wizSelectAllProtocols;
+window.wizClearAllProtocols     = wizClearAllProtocols;
+window.wizGoStep3               = wizGoStep3;
 window.wizSubmit                = wizSubmit;
+window._syncWizSteps            = _syncWizSteps;
 window.closeDeployLog           = closeDeployLog;
 window.showConnDetail           = showConnDetail;
 window.switchDetailTab          = switchDetailTab;
@@ -1459,6 +1689,9 @@ window.checkServerGroup         = checkServerGroup;
 let _connSetupIds  = [];
 let _connSetupPoll = null;
 let _connSetupData = {};  // connId -> last known data snapshot
+// Динамический маппинг: protocol -> step index (заполняется в openConnSetupModal)
+let _csdDynStep    = {};  // { vless_reality: 1, amnezia_wg: 2, ... }
+let _csdDynTotal   = 0;   // кол-во точек в timeline
 
 // ── Mappings ──────────────────────────────────────────────────────────────
 
@@ -1621,33 +1854,46 @@ function _csdWorstState(states) {
 // ── Main render: called on every poll tick ────────────────────────────────
 
 function _csdRenderAll(connections) {
+  // Используем динамический маппинг (заполнен в openConnSetupModal)
+  const dynStep  = _csdDynStep;
+  const dynTotal = _csdDynTotal || 1;
+
+  // Индекс cascade-шага и финального шага (если есть)
+  const cascadeN = dynStep['__cascade__'] || 0;
+  const finishN  = dynStep['__finish__']  || 0;
+
   // Group connections by modal step
-  const stepConns = { 1:[], 2:[], 3:[], 4:[], 5:[] };
+  const stepConns = {};
+  for (let i = 1; i <= dynTotal; i++) stepConns[i] = [];
 
   for (const c of connections) {
     const proto = c.protocol || 'vless_reality';
-    const protoStep = _CSD_PROTO_STEP[proto] || 1;
-    stepConns[protoStep].push(c);
+    const protoStep = dynStep[proto] || 1;
+    if (stepConns[protoStep]) stepConns[protoStep].push(c);
 
-    // Cascade: any connection with connection_type=cascade also feeds step 4
-    if (c.connection_type === 'cascade') {
-      stepConns[4].push(c);
+    // Cascade step: connections with connection_type=cascade
+    if (c.connection_type === 'cascade' && cascadeN) {
+      if (!stepConns[cascadeN]) stepConns[cascadeN] = [];
+      stepConns[cascadeN].push(c);
     }
 
-    // Finish (step 5): plain info lines from all connections
-    stepConns[5].push(c);
+    // Finish step: all connections feed finish info
+    if (finishN) {
+      if (!stepConns[finishN]) stepConns[finishN] = [];
+      stepConns[finishN].push(c);
+    }
   }
 
   // Process each modal step
-  for (let n = 1; n <= 5; n++) {
-    const conns = stepConns[n];
+  for (let n = 1; n <= dynTotal; n++) {
+    const conns = stepConns[n] || [];
     if (!conns.length) continue;
 
     const dotStates = [];
 
     for (const c of conns) {
       const proto = c.protocol || 'vless_reality';
-      const protoStep = _CSD_PROTO_STEP[proto] || 1;
+      const protoStep = dynStep[proto] || 1;
       const typeLabel = c.connection_type === 'cascade' ? 'CASCADE' : 'DIRECT';
       const protoName = _CSD_STEP_LABEL[protoStep] || proto;
       const headerLabel = `${protoName} · ${typeLabel}`;
@@ -1657,14 +1903,14 @@ function _csdRenderAll(connections) {
       const infoItems = steps.filter(s => !s.is_step);
 
       // For step n == protoStep: show all [STEP:N:...] lines from this connection
-      if (n === protoStep) {
+      if (n === protoStep && n !== cascadeN && n !== finishN) {
         const lines = stepItems.map(s => `[${s.n}] ${s.msg}`);
         _csdAppendLog(n, headerLabel, lines, c.setup_status !== 'done' || stepItems.some(s => s.status === 'error'));
         dotStates.push(_csdConnDotState(c));
       }
 
-      // For cascade step 4: show only cascade-relevant log lines (DIRECT ones excluded)
-      if (n === 4 && c.connection_type === 'cascade') {
+      // For cascade step: show only cascade-relevant log lines (DIRECT ones excluded)
+      if (cascadeN && n === cascadeN && c.connection_type === 'cascade') {
         // Show last few steps (typically step 5+ in naiveproxy = cascade RU Xray routing)
         const cascadeLines = stepItems
           .filter(s => s.n >= 5)
@@ -1681,8 +1927,8 @@ function _csdRenderAll(connections) {
         else                                   dotStates.push('running');
       }
 
-      // For finish step 5: show WARP / split-tunnel info lines from all connections
-      if (n === 5) {
+      // For finish step: show WARP / split-tunnel info lines from all connections
+      if (finishN && n === finishN) {
         const finishLines = infoItems
           .filter(l => /warp|split.tunnel|split_tunnel|sni|fallback|финал|finish|mtu|mss/i.test(l.msg))
           .map(l => l.msg);
@@ -1715,7 +1961,7 @@ function _csdRenderAll(connections) {
       if (iconEl) iconEl.textContent = _csdStepIcon(dotState);
 
       // Connector to next step: light up if this step is terminal and not error
-      if (n < 5 && allTerminal && dotState !== 'error') {
+      if (n < dynTotal && allTerminal && dotState !== 'error') {
         _csdSetConn(n, true);
       }
 
@@ -1737,8 +1983,8 @@ function _csdRenderAll(connections) {
     const running = connections.filter(c => c.setup_status !== 'done' && c.setup_status !== 'failed');
     if (running.length) {
       const activeProtos = [...new Set(running.map(c => {
-        const s = _CSD_PROTO_STEP[c.protocol] || 1;
-        return _CSD_STEP_LABEL[s];
+        const s = dynStep[c.protocol] || 1;
+        return _CSD_STEP_LABEL[s] || c.protocol;
       }))];
       subtEl.textContent = `Выполняется: ${activeProtos.join(', ')}...`;
     }
@@ -1754,57 +2000,107 @@ function _csdRenderAll(connections) {
 
 // ── Open modal ────────────────────────────────────────────────────────────
 
-function openConnSetupModal(connIds, euServerName, connectionTypes) {
+function openConnSetupModal(connIds, euServerName, connectionTypes, selectedProtocols) {
   _connSetupIds  = connIds;
   _connSetupData = {};
 
   const modal = document.getElementById('modal-conn-setup');
   if (!modal) { console.error('[ConnSetup] modal not found!'); return; }
 
-  // Header
+  // ── Определяем набор протоколов и флаг cascade ──────────────────────
+  // selectedProtocols — массив из wizard (приоритет, до поллинга)
+  // connectionTypes   — массив из API: [{protocol, connection_type}, ...]
+  const hasProto = { vless_reality:false, amnezia_wg:false, naive_proxy:false };
+  let hasCascade = false;
+
+  // Приоритет: selectedProtocols из wizard (известны сразу при открытии)
+  if (selectedProtocols && selectedProtocols.length) {
+    selectedProtocols.forEach(p => { if (p in hasProto) hasProto[p] = true; });
+  }
+  // Дополнительно connectionTypes из API (уточняет cascade-флаг)
+  (connectionTypes || []).forEach(ct => {
+    if (ct.protocol in hasProto) hasProto[ct.protocol] = true;
+    if (ct.connection_type === 'cascade') hasCascade = true;
+  });
+
+  // ── Строим динамический список слотов ───────────────────────────────
+  // Порядок: выбранные протоколы → Cascade (если есть) → Финал (если > 1 или cascade)
+  const PROTO_DEFS = [
+    { key: 'vless_reality', label: 'VLESS+Reality', dotLabel: 'VLESS'      },
+    { key: 'amnezia_wg',    label: 'AmneziaWG',     dotLabel: 'AWG'        },
+    { key: 'naive_proxy',   label: 'NaiveProxy',    dotLabel: 'NaiveProxy' },
+  ];
+
+  const slots = [];
+  PROTO_DEFS.forEach(pd => { if (hasProto[pd.key]) slots.push(pd); });
+  if (hasCascade) slots.push({ key: '__cascade__', label: 'Cascade / RU Xray routing', dotLabel: 'Cascade' });
+  if (hasCascade || slots.length > 1) {
+    slots.push({ key: '__finish__', label: 'WARP / Split-tunnel / Финал', dotLabel: 'Финал' });
+  }
+
+  // ── Записываем динамический маппинг ─────────────────────────────────
+  _csdDynStep  = {};
+  _csdDynTotal = slots.length;
+  slots.forEach((s, idx) => { _csdDynStep[s.key] = idx + 1; });
+
+  // Синхронизируем _CSD_STEP_LABEL под текущий набор слотов
+  slots.forEach((s, idx) => { _CSD_STEP_LABEL[idx + 1] = s.label; });
+
+  // ── Рендерим timeline-точки в #csd-timeline-wrap ────────────────────
+  const timelineWrap = document.getElementById('csd-timeline-wrap');
+  if (timelineWrap) {
+    timelineWrap.innerHTML = '';
+    slots.forEach((s, idx) => {
+      const n = idx + 1;
+      const dotWrap = document.createElement('div');
+      dotWrap.className = 'flex flex-col items-center';
+      dotWrap.innerHTML =
+        '<div class="stp-dot stp-pending" id="csd-dot-' + n + '"></div>' +
+        '<span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">' + s.dotLabel + '</span>';
+      timelineWrap.appendChild(dotWrap);
+      // Коннектор между точками (не после последней)
+      if (n < slots.length) {
+        const conn = document.createElement('div');
+        conn.className = 'stp-connector flex-1';
+        conn.id = 'csd-conn-' + n;
+        timelineWrap.appendChild(conn);
+      }
+    });
+  }
+
+  // ── Сбрасываем и показываем accordion-блоки ─────────────────────────
+  // Фиксированные HTML-номера accordion: VLESS=1, AWG=2, Naive=3, Cascade=4, Финал=5
+  for (let i = 1; i <= 5; i++) {
+    const wrap = document.getElementById('csd-step-' + i + '-wrap');
+    const log  = document.getElementById('csd-log-' + i);
+    const icon = document.getElementById('csd-icon-' + i);
+    const chev = document.getElementById('csd-chev-' + i);
+    if (wrap) wrap.classList.add('hidden');
+    if (log)  { log.innerHTML = ''; log.classList.add('hidden'); }
+    if (icon) icon.textContent = '·';
+    if (chev) chev.style.transform = '';
+  }
+  // Показываем только accordion'ы для реально выбранных слотов
+  const HTML_ACCORDION = { vless_reality:1, amnezia_wg:2, naive_proxy:3, __cascade__:4, __finish__:5 };
+  slots.forEach(s => {
+    const htmlN = HTML_ACCORDION[s.key];
+    if (!htmlN) return;
+    const wrap = document.getElementById('csd-step-' + htmlN + '-wrap');
+    if (!wrap) return;
+    wrap.classList.remove('hidden');
+    // Обновляем текст заголовка accordion под текущий слот
+    // Ищем span с заголовком (класс text-[11px] font-semibold в кнопке accordion)
+    const labelSpan = wrap.querySelector('button span.flex-1');
+    if (labelSpan) labelSpan.textContent = s.label;
+  });
+
+  // ── Header ──────────────────────────────────────────────────────────
   const titleEl = document.getElementById('conn-setup-title');
   const subtEl  = document.getElementById('conn-setup-subtitle');
   const srvEl   = document.getElementById('conn-setup-server-name');
   if (titleEl) titleEl.textContent = 'Настройка подключений';
   if (subtEl)  subtEl.textContent  = 'Шаги выполняются последовательно';
   if (srvEl)   srvEl.textContent   = euServerName || '';
-
-  // Reset step dots
-  for (let i = 1; i <= 5; i++) {
-    _csdSetDot(i, 'pending');
-    _csdSetConn(i, false);
-    const log  = document.getElementById(`csd-log-${i}`);
-    const wrap = document.getElementById(`csd-step-${i}-wrap`);
-    const icon = document.getElementById(`csd-icon-${i}`);
-    const chev = document.getElementById(`csd-chev-${i}`);
-    if (log)  { log.innerHTML = ''; log.classList.add('hidden'); }
-    if (wrap) wrap.classList.add('hidden');
-    if (icon) icon.textContent = '·';
-    if (chev) chev.style.transform = '';
-  }
-
-  // Show steps that are relevant for the connections being deployed
-  const hasProto = { vless_reality:false, amnezia_wg:false, naive_proxy:false };
-  let hasCascade = false;
-  (connectionTypes || []).forEach(ct => {
-    if (ct.protocol in hasProto) hasProto[ct.protocol] = true;
-    if (ct.connection_type === 'cascade') hasCascade = true;
-  });
-
-  // Pre-show step wrappers for present protocols
-  const protoToStep = { vless_reality:1, amnezia_wg:2, naive_proxy:3 };
-  Object.entries(hasProto).forEach(([p, present]) => {
-    if (present) {
-      const wrap = document.getElementById(`csd-step-${protoToStep[p]}-wrap`);
-      if (wrap) wrap.classList.remove('hidden');
-      _csdSetDot(protoToStep[p], 'running');
-    }
-  });
-  if (hasCascade) {
-    const w4 = document.getElementById('csd-step-4-wrap');
-    if (w4) w4.classList.remove('hidden');
-    _csdSetDot(4, 'pending');
-  }
 
   _cdSetDot('running');
   _cdSetProgress(0);
@@ -1816,7 +2112,9 @@ function openConnSetupModal(connIds, euServerName, connectionTypes) {
   _cdShowBtn('conn-setup-btn-cancel', true);
 
   modal.classList.remove('hidden');
-  console.log('[ConnSetup] Modal opened for ids:', connIds);
+  console.log('[ConnSetup] Opened | ids:', connIds,
+    '| slots:', slots.map(s => s.dotLabel).join(' + '),
+    '| dynStep:', JSON.stringify(_csdDynStep));
 }
 
 // ── Polling ───────────────────────────────────────────────────────────────
@@ -1851,7 +2149,7 @@ function _startConnSetupPolling(connIds) {
         : `${done} подключений задеплоено ✅`;
 
       // Mark all pending dots as skip (not used in this batch)
-      for (let i = 1; i <= 5; i++) {
+      for (let i = 1; i <= (_csdDynTotal || 5); i++) {
         const dot = document.getElementById(`csd-dot-${i}`);
         if (dot && dot.className.includes('pending')) _csdSetDot(i, 'skip');
       }
@@ -1893,7 +2191,7 @@ async function retryConnSetup() {
   if (errBlock) errBlock.classList.add('hidden');
   _cdSetDot('running');
   _cdSetProgress(0);
-  for (let i = 1; i <= 5; i++) _csdSetDot(i, 'pending');
+  for (let i = 1; i <= (_csdDynTotal || 5); i++) _csdSetDot(i, 'pending');
   _cdShowBtn('conn-setup-btn-retry',  false);
   _cdShowBtn('conn-setup-btn-done',   false);
   _cdShowBtn('conn-setup-btn-cancel', true);

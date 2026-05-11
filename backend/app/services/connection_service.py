@@ -193,6 +193,24 @@ def _conn_row(db: Session, c: Connection) -> dict:
         "password":  c.password,
         "np_domain": c.np_domain,
         "np_user":   c.np_user,
+        # Health monitoring (v3)
+        "health_status":      getattr(c, 'health_status',      None),
+        "last_check_at":      getattr(c, 'last_check_at',      None).isoformat() if getattr(c, 'last_check_at', None) else None,
+        "last_check_ok":      getattr(c, 'last_check_ok',      None),
+        "last_outbound_ip":   getattr(c, 'last_outbound_ip',   None),
+        "last_outbound_geo":  getattr(c, 'last_outbound_geo',  None),
+        "last_tls_status":    getattr(c, 'last_tls_status',    None),
+        "latency_ms":         getattr(c, 'latency_ms',         None),
+        "jitter_ms":          getattr(c, 'jitter_ms',          None),
+        "packet_loss_pct":    getattr(c, 'packet_loss_pct',    None),
+        # Auto-recovery
+        "recovery_status":    getattr(c, 'recovery_status',    None),
+        "last_recovery_at":   getattr(c, 'last_recovery_at',   None).isoformat() if getattr(c, 'last_recovery_at', None) else None,
+        "recovery_log":       getattr(c, 'recovery_log',       None),
+        "recovery_count_24h": getattr(c, 'recovery_count_24h', 0),
+        # Uptime
+        "last_active_at":     getattr(c, 'last_active_at',    None).isoformat() if getattr(c, 'last_active_at', None) else None,
+        "total_uptime_seconds": getattr(c, 'total_uptime_seconds', 0),
     }
 
 
@@ -204,6 +222,7 @@ def create_connections_batch(
     ru_server_id: Optional[int],
     create_direct: bool,
     create_cascade: bool,
+    protocols: Optional[List[str]] = None,
 ) -> List[int]:
     """
     Создаёт записи Connection — ровно по ОДНОЙ на каждый протокол × тип.
@@ -228,6 +247,19 @@ def create_connections_batch(
         ru_server = db.query(Server).filter(Server.id == ru_server_id).first()
         if not ru_server:
             raise ValueError("RU server not found")
+
+    # Фильтрация протоколов: None = все три, иначе только выбранные
+    _PROTO_MAP = {
+        "vless_reality": Protocol.VLESS_REALITY,
+        "amnezia_wg":    Protocol.AMNEZIA_WG,
+        "naive_proxy":   Protocol.NAIVE_PROXY,
+    }
+    if protocols:
+        filtered_protocols = [_PROTO_MAP[p] for p in protocols if p in _PROTO_MAP]
+        if not filtered_protocols:
+            raise ValueError("Не выбран ни один корректный протокол")
+    else:
+        filtered_protocols = PROTOCOLS_ALL
 
     created_ids = []
 
@@ -312,7 +344,7 @@ def create_connections_batch(
         return conn.id
 
     if create_direct:
-        for proto in PROTOCOLS_ALL:
+        for proto in filtered_protocols:
             if _already_exists(proto, ConnectionType.DIRECT):
                 logger.info(f"Skipping duplicate DIRECT {proto} for EU server {eu_server_id}")
                 continue
@@ -320,7 +352,7 @@ def create_connections_batch(
             created_ids.append(cid)
 
     if create_cascade and ru_server:
-        for proto in PROTOCOLS_ALL:
+        for proto in filtered_protocols:
             if _already_exists(proto, ConnectionType.CASCADE):
                 logger.info(f"Skipping duplicate CASCADE {proto} for EU server {eu_server_id}")
                 continue
@@ -484,7 +516,7 @@ def _check_alive_on_server(ssh, conn: Connection) -> bool:
         _, out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
         return "interface" in out.lower()
     elif conn.protocol == Protocol.NAIVE_PROXY:
-        _, out, _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
+        _, out, _ = ssh.exec("systemctl is-active caddy 2>/dev/null")
         return out.strip() == "active"
     return False
 
@@ -606,7 +638,7 @@ def check_all_connections(db: Session) -> Dict[int, dict]:
                     _, ss_out,  _ = ssh.exec("ss -tlnp 2>/dev/null")
                     _, ss_udp,  _ = ssh.exec("ss -ulnp 2>/dev/null")
                     _, awg_out, _ = ssh.exec("awg show 2>/dev/null || wg show 2>/dev/null")
-                    _, np_out,  _ = ssh.exec("systemctl is-active caddy-naive 2>/dev/null")
+                    _, np_out,  _ = ssh.exec("systemctl is-active caddy 2>/dev/null")
 
                 np_alive  = np_out.strip() == "active"
                 awg_alive = "interface" in awg_out.lower()

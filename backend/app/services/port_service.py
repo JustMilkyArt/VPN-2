@@ -57,7 +57,7 @@ PROTOCOL_PREFERRED_PORTS = {
 PROTOCOL_PREFERRED_PORTS_BY_TYPE = {
     'naive_proxy_direct':    [443, 8443, 2053, 2083, 2087, 2096],
     'naive_proxy_cascade':   [8443, 8444, 2096, 2087, 2053],  # avoid 443 — EU server owns it
-    'vless_reality_direct':  [2053, 2083, 2087, 2096, 8443],
+    'vless_reality_direct':  [443, 2053, 2083, 2087, 2096, 8443],
     'vless_reality_cascade': [2087, 2088, 2089, 2083, 2053, 2096],
     'amnezia_wg_direct':     [51820, 51821, 51822, 4500, 500],
     'amnezia_wg_cascade':    [51821, 51822, 51823, 4500, 500],

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.db.init_db import init_db
 from app.api.v1 import api_router
+from app.services.health_check_service import start_health_check_worker, stop_health_check_worker
 
 # Configure logging
 logging.basicConfig(
@@ -25,7 +26,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting VPN Admin Backend...")
     init_db()
     logger.info("Database initialized")
+    # Запускаем фоновый health-check (каждые 5 минут проверяет все active подключения)
+    start_health_check_worker()
     yield
+    # Останавливаем health-check при shutdown
+    stop_health_check_worker()
     logger.info("Shutting down...")
 
 

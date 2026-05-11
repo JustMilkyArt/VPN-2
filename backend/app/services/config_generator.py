@@ -131,16 +131,38 @@ def gen_xray_freedom_outbound() -> Dict:
     }
 
 
+def gen_xray_block_outbound() -> Dict:
+    """Blackhole outbound — drops all unmatched traffic (fail-safe).
+
+    Used as defaultOutboundTag instead of 'direct' to prevent
+    silent data leaks when routing rules don't match.
+    Traffic that should go direct is explicitly routed via 'direct' outbound.
+    """
+    return {
+        "tag": "block",
+        "protocol": "blackhole",
+        "settings": {
+            "response": {"type": "none"}
+        }
+    }
+
+
 def gen_xray_routing(inbound_tags: list, eu_available: bool = True, warp_available: bool = False) -> Dict:
     """Generate routing rules for RU (cascade entry) server.
 
-    Traffic flow:
-    1. Private IPs   → direct  (LAN traffic never goes through VPN)
-    2. RU geoip/geosite → direct  (SPLIT TUNNELING: RU users reach RU sites even with VPN on)
-    3. Everything else:
-       - eu_available  → eu-exit  (forward to EU exit node)
-       - warp_available only → warp-fallback
-       - neither       → direct  (best-effort)
+    Policy-based routing hierarchy (high → low priority):
+
+    1. Private IPs → direct          (LAN never goes through VPN)
+    2. geoip:ru / geosite:ru → direct  (split tunneling — RU sites bypass VPN)
+    3. inboundTag → eu-exit          (если EU доступен — forward через EU)
+       └─ если EU падает → клиент переподключается (xray не имеет нативного
+          per-rule fallback, но eu-exit вернёт ошибку и клиент ретраит)
+    4. inboundTag → warp-fallback    (если EU недоступен, WARP есть)
+    5. defaultOutboundTag → block    (fail-safe: дропаем неизвестный трафик)
+
+    НЕ используем inboundTag для redirect когда EU доступен И warp доступен:
+    WARP на RU-сервере не нужен в роли fallback — если EU-exit не работает,
+    это проблема конфига/сети, нужен редеплой, а не тихий redirect через WARP.
     """
     rules = [
         # Rule 1: LAN / private ranges → always direct
@@ -149,8 +171,8 @@ def gen_xray_routing(inbound_tags: list, eu_available: bool = True, warp_availab
             "ip": ["geoip:private"],
             "outboundTag": "direct"
         },
-        # Rule 2: SPLIT TUNNELING — RU IPs and domains go direct (bypass VPN)
-        # This ensures Russian sites/apps work even when VPN is enabled.
+        # Rule 2: SPLIT TUNNELING — RU IPs/domains exit directly
+        # Russian sites work without VPN even when tunnel is active.
         {
             "type": "field",
             "ip": ["geoip:ru"],
@@ -164,26 +186,34 @@ def gen_xray_routing(inbound_tags: list, eu_available: bool = True, warp_availab
     ]
 
     if eu_available:
+        # Rule 3a: Основной путь — через EU exit node
         rules.append({
             "type": "field",
             "inboundTag": inbound_tags,
             "outboundTag": "eu-exit"
         })
     elif warp_available:
+        # Rule 3b: EU недоступен, WARP есть — fallback через WARP
         rules.append({
             "type": "field",
             "inboundTag": inbound_tags,
             "outboundTag": "warp-fallback"
         })
     else:
+        # Rule 3c: Нет ни EU ни WARP — прямой выход (last resort)
         rules.append({
             "type": "field",
             "inboundTag": inbound_tags,
             "outboundTag": "direct"
         })
 
+    # defaultOutboundTag = block (fail-safe)
+    # Любой трафик, который не попал ни под одно правило (не из inbound,
+    # не private, не RU) — дропается. На RU-сервере не должно быть
+    # «случайного» трафика — только то, что пришло через наши inbounds.
     return {
         "domainStrategy": "IPIfNonMatch",
+        "defaultOutboundTag": "block",
         "rules": rules
     }
 
@@ -191,13 +221,17 @@ def gen_xray_routing(inbound_tags: list, eu_available: bool = True, warp_availab
 def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, warp_outbound: Optional[Dict] = None) -> str:
     """Build complete Xray config for RU (entry/cascade) server.
 
-    Outbound priority:
-      eu-exit      — forward to EU exit node (cascade mode)
-      warp-fallback — Cloudflare WARP (if installed and active)
-      direct        — plain internet (last resort)
+    Outbound chain (priority high → low):
+      eu-exit       — forward all VPN traffic to EU exit node (cascade mode)
+      warp-fallback — Cloudflare WARP (if EU is down or WARP-only mode)
+      direct        — plain internet (last resort, only for RU split-tunnel traffic)
+      block         — blackhole for anything unclassified (fail-safe)
 
-    Routing includes RU split-tunneling so Russian IPs/domains
-    always go direct even when VPN is enabled.
+    gen_xray_routing() sets defaultOutboundTag = 'block' so any traffic
+    that doesn't match explicit rules is silently dropped, not leaked.
+
+    The warp-fallback stub is always included so config stays valid even
+    when warp-svc is not installed — xray won't error on missing outbound.
     """
     outbounds = []
 
@@ -207,12 +241,14 @@ def build_ru_xray_config(inbounds: list, eu_outbound: Optional[Dict] = None, war
     if warp_outbound:
         outbounds.append(warp_outbound)
     else:
-        # Always include warp-fallback stub — Xray won't crash if warp-svc is down,
-        # it just won't route there. This also prepares the config for when WARP
-        # gets installed later without needing a full redeploy.
+        # Always include warp-fallback stub even if warp-svc is inactive.
+        # Xray won't crash on missing outbound — it just won't route there.
+        # This also prepares the config for when WARP is installed later
+        # without needing a full redeploy.
         outbounds.append(gen_xray_warp_outbound())
 
     outbounds.append(gen_xray_freedom_outbound())
+    outbounds.append(gen_xray_block_outbound())  # fail-safe blackhole
 
     inbound_tags = [ib.get("tag", "") for ib in inbounds]
 
@@ -255,20 +291,33 @@ def build_eu_xray_config(
 ) -> str:
     """Build Xray config for EU (exit/direct) server.
 
-    EU server is the final exit node — all traffic leaves to the internet here.
-    Routing rules (split_tunnel_enabled=True):
-      - private IPs → direct  (LAN never through VPN)
-      - geoip:ru / geosite:category-ru → direct  (RU traffic bypasses VPN)
-      - everything else → direct or warp (EU exit to internet)
-    WARP outbound is included when available for optional use.
+    EU server is the final exit node — all traffic exits to internet here.
+
+    Routing policy (high → low priority):
+      1. private IPs           → direct     (LAN bypass — never through VPN)
+      2. geoip:ru / geosite:ru → direct     (split tunneling — RU sites exit directly)
+      3. все остальное         → warp-fallback  (если WARP активен)
+                               → direct         (если WARP недоступен)
+
+    Fail-safe архитектура:
+      - defaultOutboundTag = warp-fallback (если WARP есть) → весь некатегоризированный
+        трафик выходит через WARP, а не напрямую через наш EU IP
+      - defaultOutboundTag = direct (если WARP нет) → прямой выход
+      - block outbound включён для явного дропа при необходимости
+
+    ВАЖНО: НЕТ catch-all rule "network tcp,udp → X".
+    НЕТ inboundTag-redirect — это слишком агрессивно.
+    Вместо этого defaultOutboundTag контролирует куда идёт весь прочий трафик.
     """
     outbounds = []
     if warp_outbound:
         outbounds.append(warp_outbound)
     outbounds.append(gen_xray_freedom_outbound())
+    outbounds.append(gen_xray_block_outbound())  # fail-safe blackhole
 
     routing_rules = [
-        # Private ranges → always direct
+        # Rule 1: LAN / private ranges → always direct
+        # Серверный трафик (управление, SSH) не должен идти через VPN.
         {
             "type": "field",
             "ip": ["geoip:private"],
@@ -277,8 +326,9 @@ def build_eu_xray_config(
     ]
 
     if split_tunnel_enabled:
-        # Split tunneling: Russian IPs/domains bypass VPN and exit directly on EU node
-        # (effectively the same as being unrouted — EU node reaches RU directly)
+        # Rule 2: RU split tunneling
+        # RU-адреса и домены выходят напрямую с EU ноды.
+        # С точки зрения пользователя: российские сайты доступны без VPN-маршрутизации.
         routing_rules.append({
             "type": "field",
             "ip": ["geoip:ru"],
@@ -290,12 +340,13 @@ def build_eu_xray_config(
             "outboundTag": "direct"
         })
 
-    # All other traffic exits to internet via EU node
-    routing_rules.append({
-        "type": "field",
-        "network": "tcp,udp",
-        "outboundTag": "direct"
-    })
+    # Весь остальной трафик управляется через defaultOutboundTag:
+    # - WARP есть → defaultOutboundTag = warp-fallback (IP-анонимизация)
+    # - WARP нет  → defaultOutboundTag = direct         (прямой выход)
+    #
+    # НЕ используем inboundTag для redirect — это перехватывает ВСЁ от inbound
+    # включая служебные соединения. defaultOutboundTag точнее и безопаснее.
+    default_tag = "warp-fallback" if warp_outbound else "direct"
 
     config = {
         "log": {
@@ -311,7 +362,22 @@ def build_eu_xray_config(
         },
         "routing": {
             "domainStrategy": "IPIfNonMatch",
+            "defaultOutboundTag": default_tag,
             "rules": routing_rules
+        },
+        "policy": {
+            "levels": {
+                "0": {
+                    "handshake": 4,
+                    "connIdle": 300,
+                    "uplinkOnly": 1,
+                    "downlinkOnly": 1
+                }
+            },
+            "system": {
+                "statsInboundUplink": False,
+                "statsInboundDownlink": False
+            }
         }
     }
 

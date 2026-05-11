@@ -25,6 +25,7 @@ class ConnectionCreateRequest(BaseModel):
     ru_server_id:   Optional[int] = None
     create_direct:  bool = True
     create_cascade: bool = False
+    protocols:      Optional[List[str]] = None  # None = все три; subset = выбранные
 
 
 class PatchParamRequest(BaseModel):
@@ -131,6 +132,7 @@ def create_connections_batch(
             ru_server_id=req.ru_server_id,
             create_direct=req.create_direct,
             create_cascade=req.create_cascade,
+            protocols=req.protocols,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -254,6 +256,28 @@ def check_connection(
         raise HTTPException(status_code=404, detail="Подключение не найдено")
     alive, msg = connection_service.check_connection_live(db, conn)
     return {"alive": alive, "message": msg, "status": conn.status}
+
+
+@router.get("/{connection_id}/health", summary="Deep health check подключения (xray + порт + outbound)")
+def health_check_connection(
+    connection_id: int,
+    db: Session = Depends(get_db),
+    _: AdminUser = Depends(get_current_user)
+):
+    """
+    Выполняет полную проверку здоровья подключения:
+    - xray.service active
+    - Порт слушается
+    - Outbound internet работает с сервера
+
+    Медленнее чем /check (SSH подключение), используйте для диагностики.
+    """
+    try:
+        from app.services.health_check_service import get_connection_health_status
+        result = get_connection_health_status(db, connection_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check error: {e}")
 
 
 @router.post("/{connection_id}/redeploy", summary="Повторно задеплоить подключение")

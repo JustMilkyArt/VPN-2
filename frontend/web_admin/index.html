@@ -612,7 +612,8 @@
 
 <!-- ═══ WIZARD: CREATE CONNECTIONS ═══════════════════════════════════════ -->
 <div id="modal-wizard-conn" class="modal-overlay hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md flex flex-col" style="max-height:90vh;">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col" style="max-height:90vh;">
+    <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-gray-800 flex-shrink-0">
       <h3 class="text-base font-bold text-white flex items-center gap-2">
         <i class="fas fa-network-wired text-brand-400"></i>Создать подключения
@@ -620,6 +621,32 @@
       <button onclick="closeModal('modal-wizard-conn')" class="text-gray-500 hover:text-white transition p-1">
         <i class="fas fa-xmark text-lg"></i>
       </button>
+    </div>
+    <!-- Step indicator -->
+    <div class="flex items-center gap-0 px-6 py-3 border-b border-gray-800/60 flex-shrink-0 select-none">
+      <!-- Step 1 -->
+      <div class="flex items-center gap-2">
+        <span id="wiz-step-dot-1"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all
+                 bg-brand-600 text-white">1</span>
+        <span id="wiz-step-label-1" class="text-xs font-medium text-white">Тип</span>
+      </div>
+      <div class="flex-1 mx-2 h-px bg-gray-700" id="wiz-step-line-1"></div>
+      <!-- Step 2 -->
+      <div class="flex items-center gap-2">
+        <span id="wiz-step-dot-2"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all
+                 bg-gray-700 text-gray-500">2</span>
+        <span id="wiz-step-label-2" class="text-xs font-medium text-gray-500">Протоколы</span>
+      </div>
+      <div class="flex-1 mx-2 h-px bg-gray-700" id="wiz-step-line-2"></div>
+      <!-- Step 3 -->
+      <div class="flex items-center gap-2">
+        <span id="wiz-step-dot-3"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all
+                 bg-gray-700 text-gray-500">3</span>
+        <span id="wiz-step-label-3" class="text-xs font-medium text-gray-500">Серверы</span>
+      </div>
     </div>
     <div id="wizard-body" class="p-6 flex-1 overflow-y-auto"></div>
     <div id="wizard-footer" class="px-6 py-4 border-t border-gray-800 flex-shrink-0"></div>
@@ -691,40 +718,9 @@
            style="width:0%;background:linear-gradient(90deg,#6d28d9,#7c3aed,#8b5cf6)"></div>
     </div>
 
-    <!-- Steps timeline (5 steps) -->
+    <!-- Steps timeline — динамически генерируется в openConnSetupModal() -->
     <div class="px-6 pt-5 pb-3">
-      <div class="flex items-center">
-
-        <div class="flex flex-col items-center">
-          <div class="stp-dot stp-pending" id="csd-dot-1"></div>
-          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">VLESS</span>
-        </div>
-        <div class="stp-connector flex-1" id="csd-conn-1"></div>
-
-        <div class="flex flex-col items-center">
-          <div class="stp-dot stp-pending" id="csd-dot-2"></div>
-          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">AWG</span>
-        </div>
-        <div class="stp-connector flex-1" id="csd-conn-2"></div>
-
-        <div class="flex flex-col items-center">
-          <div class="stp-dot stp-pending" id="csd-dot-3"></div>
-          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">NaiveProxy</span>
-        </div>
-        <div class="stp-connector flex-1" id="csd-conn-3"></div>
-
-        <div class="flex flex-col items-center">
-          <div class="stp-dot stp-pending" id="csd-dot-4"></div>
-          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Cascade</span>
-        </div>
-        <div class="stp-connector flex-1" id="csd-conn-4"></div>
-
-        <div class="flex flex-col items-center">
-          <div class="stp-dot stp-pending" id="csd-dot-5"></div>
-          <span class="text-[9px] text-gray-600 mt-1.5 whitespace-nowrap">Финал</span>
-        </div>
-
-      </div>
+      <div id="csd-timeline-wrap" class="flex items-center"></div>
     </div>
 
     <!-- Per-step log accordions -->

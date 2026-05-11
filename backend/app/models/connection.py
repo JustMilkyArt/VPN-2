@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, Float, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -82,11 +82,46 @@ class Connection(Base):
     status    = Column(String(20), nullable=False, default=ConnectionStatus.INACTIVE)
     is_active = Column(Boolean,   nullable=False, default=True)
 
-    # прогресс создания (как у автонастройки сервера)
+    # прогресс создания
     setup_status = Column(String(20), nullable=True)   # pending|in_progress|done|failed
     setup_step   = Column(String(50), nullable=True)
     setup_log    = Column(Text, nullable=True)
     setup_error  = Column(Text, nullable=True)
+
+    # ── Health monitoring (runtime) ─────────────────────────────────────────
+    # Итоговый статус последнего health-check: HEALTHY|DEGRADED|BROKEN
+    health_status        = Column(String(20),  nullable=True)
+    # Время последней проверки
+    last_check_at        = Column(DateTime(timezone=True), nullable=True)
+    # Результат последней проверки (True=прошла без BROKEN)
+    last_check_ok        = Column(Boolean, nullable=True)
+    # Outbound IP с сервера (что видит ipify.org)
+    last_outbound_ip     = Column(String(64),  nullable=True)
+    # Геолокация outbound (страна/код)
+    last_outbound_geo    = Column(String(64),  nullable=True)
+    # TLS handshake статус: CONNECTED|REFUSED|TIMEOUT|UNAVAILABLE|UNKNOWN
+    last_tls_status      = Column(String(32),  nullable=True)
+
+    # ── Latency / jitter / packet loss ─────────────────────────────────────
+    latency_ms           = Column(Float,   nullable=True)   # средняя задержка ping (мс)
+    jitter_ms            = Column(Float,   nullable=True)   # jitter (мс)
+    packet_loss_pct      = Column(Float,   nullable=True)   # потери пакетов (%)
+
+    # ── Auto-recovery ──────────────────────────────────────────────────────
+    # Статус последнего авто-рекавери: idle|recovering|recovered|failed
+    recovery_status      = Column(String(20),  nullable=True)
+    # Время последнего авто-рекавери
+    last_recovery_at     = Column(DateTime(timezone=True), nullable=True)
+    # Лог авто-рекавери (последние события)
+    recovery_log         = Column(Text,        nullable=True)
+    # Счётчик авто-рекавери за последние 24ч (anti-flap)
+    recovery_count_24h   = Column(Integer, nullable=True, default=0)
+
+    # ── Uptime tracking ────────────────────────────────────────────────────
+    # Когда последний раз статус стал ACTIVE
+    last_active_at       = Column(DateTime(timezone=True), nullable=True)
+    # Суммарное время аптайма (секунды, накапливается)
+    total_uptime_seconds = Column(Integer, nullable=True, default=0)
 
     # meta
     notes      = Column(Text, nullable=True)
