@@ -199,7 +199,7 @@ class VpnEngine {
     _proxyProcess!.stdout.transform(utf8.decoder).listen(logBuf.write);
     _proxyProcess!.stderr.transform(utf8.decoder).listen(logBuf.write);
 
-    await Future.delayed(const Duration(milliseconds: 1500));
+    await Future.delayed(const Duration(seconds: 3));
     await _assertAlive(_proxyProcess!, 'naive.exe', logBuf);
 
     await _startTun2socks(engineDir);
