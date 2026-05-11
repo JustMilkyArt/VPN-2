@@ -534,10 +534,11 @@ class _IpCheckerState extends State<_IpChecker> {
           _loading = false;
         });
       } else {
-        setState(() { _ip = '—'; _rttMs = null; _loading = false; });
+        // Пустой ответ = оба метода (SOCKS5 и WinHTTP) недоступны
+        setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
       }
     } catch (_) {
-      if (mounted) setState(() { _ip = 'Нет ответа'; _rttMs = null; _loading = false; });
+      if (mounted) setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
     }
   }
 
@@ -665,10 +666,16 @@ class _IpCheckerState extends State<_IpChecker> {
       // фоллбэк: системный HTTP (WinHTTP).
       // AWG /installtunnelservice пишет маршруты прямо в ядро через WinTUN,
       // поэтому WinHTTP тоже идёт через VPN-туннель (в отличие от xray/naive).
-      final url  = Uri.parse(
-          'http://$host:$remotePort/json/?fields=query,country,countryCode');
-      final resp = await http.get(url).timeout(const Duration(seconds: 8));
-      return resp.body;
+      // ВАЖНО: fallback НЕ бросает исключение — возвращает пустую строку
+      // если WinHTTP тоже недоступен, чтобы внешний catch не затёр IP.
+      try {
+        final url  = Uri.parse(
+            'http://$host:$remotePort/json/?fields=query,country,countryCode');
+        final resp = await http.get(url).timeout(const Duration(seconds: 8));
+        return resp.body;
+      } catch (_) {
+        return '';
+      }
     }
   }
 
@@ -731,8 +738,8 @@ class _IpCheckerState extends State<_IpChecker> {
                 Flexible(
                   child: Text(
                     _isRu
-                        ? '⚠️ $_ip ($_country) — трафик не через VPN!'
-                        : 'IP: $_ip  •  $_country',
+                        ? '⚠️ $_ip${_country != null ? " ($_country)" : ""} — трафик не через VPN!'
+                        : _country != null ? 'IP: $_ip  •  $_country' : 'IP: $_ip',
                     style: TextStyle(
                       color: _isRu
                           ? const Color(0xFFFF4D6D)
