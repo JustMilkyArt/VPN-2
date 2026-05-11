@@ -519,7 +519,7 @@ class _IpCheckerState extends State<_IpChecker> {
       // идёт через VPN-туннель.
       final body = await _httpViaSocks5(
         'ip-api.com', 80,
-      ).timeout(const Duration(seconds: 10));
+      ); // inner timeouts: 4s connect + 4s greeting + 5s CONNECT reply + 8s HTTP = 21s max
       final rtt  = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
       final ip      = _extract(body, 'query');
