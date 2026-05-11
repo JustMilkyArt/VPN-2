@@ -8,7 +8,6 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/connection.dart';
-import '../services/vpn_engine.dart';
 import '../services/vpn_provider.dart';
 import '../widgets/connection_card.dart';
 import '../widgets/connect_button.dart';
@@ -512,23 +511,15 @@ class _IpCheckerState extends State<_IpChecker> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final t0 = DateTime.now();
-
-      // AWG использует kernel-mode WinTUN драйвер — маршруты прописаны прямо
-      // в ядро, WinHTTP их ВИДИТ. SOCKS5 при AWG не нужен и не открыт.
-      // Для xray/naive: WinHTTP НЕ видит TUN-маршруты → нужен raw SOCKS5.
-      final isAwg = VpnEngine.instance.activeEngine == EngineType.awg;
-
-      final String body;
-      if (isAwg) {
-        // AWG: WinHTTP напрямую (идёт через WinTUN маршруты ядра)
-        body = await _httpViaWinHttp('ip-api.com', 80);
-      } else {
-        // xray / naive: через raw SOCKS5 (обходит WinHTTP)
-        body = await _httpViaSocks5('ip-api.com', 80);
-      }
-
-      final rtt = DateTime.now().difference(t0).inMilliseconds;
+      final t0   = DateTime.now();
+      // Стратегия:
+      //   1) Пробуем SOCKS5 на 127.0.0.1:10808 (xray/naive слушают там).
+      //      SOCKS5 гарантированно идёт через VPN-туннель.
+      //   2) Если SOCKS5 недоступен (AWG-режим: нет xray/naive процесса)
+      //      → фоллбэк на WinHTTP. AWG пишет маршруты в ядро через WinTUN,
+      //      поэтому WinHTTP тоже идёт через VPN.
+      final body = await _httpViaSocks5('ip-api.com', 80);
+      final rtt  = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
       final ip      = _extract(body, 'query');
       final country = _extract(body, 'country');
@@ -546,19 +537,6 @@ class _IpCheckerState extends State<_IpChecker> {
       }
     } catch (_) {
       if (mounted) setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
-    }
-  }
-
-  /// HTTP GET через системный WinHTTP (для AWG-режима).
-  /// AWG прописывает маршруты через WinTUN прямо в таблицу маршрутизации ядра,
-  /// поэтому WinHTTP корректно использует VPN-туннель.
-  Future<String> _httpViaWinHttp(String host, int port) async {
-    try {
-      final url  = Uri.parse('http://$host:$port/json/?fields=query,country,countryCode');
-      final resp = await http.get(url).timeout(const Duration(seconds: 10));
-      return resp.body;
-    } catch (_) {
-      return '';
     }
   }
 
@@ -688,11 +666,19 @@ class _IpCheckerState extends State<_IpChecker> {
         sock.destroy();
       }
 
-    } catch (e) {
-      // SOCKS5 не удался (порт недоступен, туннель не установлен и т.д.)
-      // Бросаем исключение вверх — _checkIp сам покажет "Нет ответа".
-      // (AWG обрабатывается отдельно в _checkIp через _httpViaWinHttp)
-      rethrow;
+    } catch (_) {
+      // SOCKS5 недоступен (AWG-режим: нет xray/naive, порт 10808 не слушает)
+      // → фоллбэк на WinHTTP. AWG пишет маршруты прямо в ядро через WinTUN,
+      // поэтому WinHTTP тоже идёт через VPN-туннель (в отличие от xray/naive).
+      // Возвращаем '' если и WinHTTP упал — _checkIp покажет "Нет ответа".
+      try {
+        final url  = Uri.parse(
+            'http://$host:$remotePort/json/?fields=query,country,countryCode');
+        final resp = await http.get(url).timeout(const Duration(seconds: 10));
+        return resp.body;
+      } catch (_) {
+        return '';
+      }
     }
   }
 
