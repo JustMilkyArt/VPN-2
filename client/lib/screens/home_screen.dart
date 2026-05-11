@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/connection.dart';
+import '../services/vpn_engine.dart';
 import '../services/vpn_provider.dart';
 import '../widgets/connection_card.dart';
 import '../widgets/connect_button.dart';
@@ -497,7 +498,14 @@ class _IpCheckerState extends State<_IpChecker> {
   @override
   void initState() {
     super.initState();
-    _checkIp();
+    // Задержка 5с перед первой проверкой:
+    //   AWG: нужно время на WireGuard handshake (1-3с) после установки туннеля.
+    //   VLESS/Naive: xray/naive делают первое подключение к серверу лениво
+    //   (при первом запросе через SOCKS5), что занимает до 3с.
+    //   Без задержки первая проверка всегда показывала бы 'Нет ответа'.
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) _checkIp();
+    });
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _checkIp());
   }
 
@@ -511,15 +519,31 @@ class _IpCheckerState extends State<_IpChecker> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final t0   = DateTime.now();
-      // Стратегия:
-      //   1) Пробуем SOCKS5 на 127.0.0.1:10808 (xray/naive слушают там).
-      //      SOCKS5 гарантированно идёт через VPN-туннель.
-      //   2) Если SOCKS5 недоступен (AWG-режим: нет xray/naive процесса)
-      //      → фоллбэк на WinHTTP. AWG пишет маршруты в ядро через WinTUN,
-      //      поэтому WinHTTP тоже идёт через VPN.
-      final body = await _httpViaSocks5('ip-api.com', 80);
-      final rtt  = DateTime.now().difference(t0).inMilliseconds;
+      final t0     = DateTime.now();
+      final engine = VpnEngine.instance.activeEngine;
+
+      // Стратегия выбора метода проверки IP:
+      //
+      // AWG (amneziawg.exe):
+      //   Нет локального SOCKS5 — amneziawg прописывает маршруты AllowedIPs
+      //   прямо в таблицу маршрутизации Windows через WinTUN. Dart-сокеты
+      //   используют kernel routing → трафик идёт через AWG-туннель.
+      //   → _httpViaWinHttp() (dart:io HttpClient, kernel routes)
+      //
+      // xray / naive (VLESS+Reality, NaiveProxy):
+      //   Локальный SOCKS5 на 127.0.0.1:10808. Dart-сокеты на Windows
+      //   могут НЕ видеть TUN-маршруты (зависит от WinTUN-драйвера),
+      //   поэтому используем raw SOCKS5 — он гарантированно идёт через туннель.
+      //   → _httpViaSocks5() (raw TCP SOCKS5, порт 10808)
+      final String body;
+      if (engine == EngineType.awg) {
+        body = await _httpViaWinHttp('ip-api.com', 80);
+      } else {
+        // xray или naive (или null если только что подключились — пробуем SOCKS5)
+        body = await _httpViaSocks5('ip-api.com', 80);
+      }
+
+      final rtt = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
       final ip      = _extract(body, 'query');
       final country = _extract(body, 'country');
@@ -533,27 +557,60 @@ class _IpCheckerState extends State<_IpChecker> {
           _loading = false;
         });
       } else {
+        // Пустое тело — повторяем через 5с (возможно VPN ещё устанавливается)
         setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
+        _scheduleRetry();
       }
     } catch (_) {
-      if (mounted) setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
+      if (mounted) {
+        setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
+        _scheduleRetry();
+      }
     }
   }
 
-  /// HTTP GET через SOCKS5 (127.0.0.1:10808) — обходит WinHTTP.
+  // Авто-повтор однократно через 5с при первом 'Нет ответа'.
+  // Защищает от случая когда VPN только установился, но туннель ещё не готов.
+  bool _retryScheduled = false;
+  void _scheduleRetry() {
+    if (_retryScheduled) return; // не более одного повтора подряд
+    _retryScheduled = true;
+    Future.delayed(const Duration(seconds: 5), () {
+      _retryScheduled = false;
+      if (mounted) _checkIp();
+    });
+  }
+
+  /// HTTP GET через системный стек (dart:io HttpClient).
+  /// Используется только для AWG: amneziawg.exe прописывает AllowedIPs=0.0.0.0/0
+  /// прямо в таблицу маршрутизации ядра Windows через WinTUN. Dart-сокеты
+  /// используют kernel routing, поэтому запрос идёт через AWG-туннель.
+  Future<String> _httpViaWinHttp(String host, int port) async {
+    try {
+      final url  = Uri.parse('http://$host:$port/json/?fields=query,country,countryCode');
+      final resp = await http.get(url).timeout(const Duration(seconds: 10));
+      return resp.body;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// HTTP GET через SOCKS5 (127.0.0.1:10808) — используется для xray и naive.
   ///
-  /// xray и naive оба открывают SOCKS5 на порту 10808.
-  /// AWG не открывает SOCKS5 — для него фоллбэк на системный http.get(),
-  /// который корректен т.к. AWG пишет маршруты прямо в ядро через WinTUN.
+  /// xray (VLESS+Reality) и naive (NaiveProxy) оба открывают SOCKS5-прокси
+  /// на 127.0.0.1:10808. Мы подключаемся к нему напрямую через raw TCP-сокет,
+  /// минуя Windows HTTP-стек. Это гарантирует что запрос идёт через VPN-туннель.
   ///
-  /// ВАЖНО про смещения (RFC 1928):
-  ///   Greeting reply:  [VER=05][METHOD=00]          → 2 байта, offset 0
-  ///   CONNECT reply:   [VER][REP][RSV][ATYP][ADDR][PORT]
-  ///                    начинается с offset 2 в allBytes
-  ///     ATYP=01(IPv4) → ADDR=4B + PORT=2B → всего с offset 2: 4+4+2=10 байт
-  ///     ATYP=04(IPv6) → ADDR=16B + PORT=2B → 4+16+2=22 байт
-  ///     ATYP=03(dom)  → 1B_len + NB_dom + PORT=2B → 4+1+N+2 байт
-  ///   allBytes.length нужен >= (2 + размер_CONNECT_reply) до отправки HTTP.
+  /// НЕ содержит WinHTTP-фоллбэк: если SOCKS5 недоступен — бросаем исключение.
+  /// _checkIp поймает его и покажет 'Нет ответа' + авто-повтор через 5с.
+  ///
+  /// Смещения в allBytes (RFC 1928):
+  ///   [0..1]  Greeting reply:  VER=05, METHOD=00
+  ///   [2..N]  CONNECT reply:   VER REP RSV ATYP ADDR PORT
+  ///     ATYP=01 (IPv4):   N=2+10=12,  httpStart=12
+  ///     ATYP=04 (IPv6):   N=2+22=24,  httpStart=24
+  ///     ATYP=03 (domain): N=2+4+1+L+2, httpStart=N
+  ///   [httpStart..]  HTTP response (headers + body)
   Future<String> _httpViaSocks5(String host, int remotePort) async {
     const socksHost = '127.0.0.1';
     const socksPort = 10808;
@@ -666,19 +723,14 @@ class _IpCheckerState extends State<_IpChecker> {
         sock.destroy();
       }
 
-    } catch (_) {
-      // SOCKS5 недоступен (AWG-режим: нет xray/naive, порт 10808 не слушает)
-      // → фоллбэк на WinHTTP. AWG пишет маршруты прямо в ядро через WinTUN,
-      // поэтому WinHTTP тоже идёт через VPN-туннель (в отличие от xray/naive).
-      // Возвращаем '' если и WinHTTP упал — _checkIp покажет "Нет ответа".
-      try {
-        final url  = Uri.parse(
-            'http://$host:$remotePort/json/?fields=query,country,countryCode');
-        final resp = await http.get(url).timeout(const Duration(seconds: 10));
-        return resp.body;
-      } catch (_) {
-        return '';
-      }
+    } catch (e) {
+      // SOCKS5 недоступен или timeout — пробрасываем исключение.
+      // _checkIp покажет 'Нет ответа' и запустит авто-повтор через 5с.
+      // WinHTTP-фоллбэк здесь НАМЕРЕННО отсутствует:
+      //   для VLESS/Naive http.get() через TUN → tun2socks → SOCKS5(10808) →
+      //   создаёт зависимость от того же SOCKS5, что и при прямом вызове.
+      //   Если SOCKS5 не работает — WinHTTP тоже не поможет.
+      rethrow;
     }
   }
 
