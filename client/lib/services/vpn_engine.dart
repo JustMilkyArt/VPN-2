@@ -57,6 +57,11 @@ class VpnEngine {
 
   bool get isConnected => status.value == VpnStatus.connected;
 
+  /// Тип активного движка (xray, awg, naive) или null если отключено.
+  /// Используется IP-чекером: AWG не открывает SOCKS5, поэтому
+  /// для него нужен WinHTTP фоллбэк, а не SOCKS5 путь.
+  EngineType? get activeEngine => _activeEngine;
+
   // ═══════════════════════════════════════════════════════
   // Public API
   // ═══════════════════════════════════════════════════════

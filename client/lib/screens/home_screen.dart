@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import '../models/connection.dart';
+import '../services/vpn_engine.dart';
 import '../services/vpn_provider.dart';
 import '../widgets/connection_card.dart';
 import '../widgets/connect_button.dart';
@@ -511,16 +512,23 @@ class _IpCheckerState extends State<_IpChecker> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final t0   = DateTime.now();
-      // ВАЖНО: Flutter на Windows использует WinHTTP, который НЕ следует
-      // маршрутной таблице ядра и обходит TUN-адаптер.
-      // Решение: делаем HTTP-запрос вручную через raw SOCKS5-сокет
-      // (127.0.0.1:10808 = xray/naive SOCKS5 прокси), который точно
-      // идёт через VPN-туннель.
-      final body = await _httpViaSocks5(
-        'ip-api.com', 80,
-      ); // inner timeouts: 4s connect + 4s greeting + 5s CONNECT reply + 8s HTTP = 21s max
-      final rtt  = DateTime.now().difference(t0).inMilliseconds;
+      final t0 = DateTime.now();
+
+      // AWG использует kernel-mode WinTUN драйвер — маршруты прописаны прямо
+      // в ядро, WinHTTP их ВИДИТ. SOCKS5 при AWG не нужен и не открыт.
+      // Для xray/naive: WinHTTP НЕ видит TUN-маршруты → нужен raw SOCKS5.
+      final isAwg = VpnEngine.instance.activeEngine == EngineType.awg;
+
+      final String body;
+      if (isAwg) {
+        // AWG: WinHTTP напрямую (идёт через WinTUN маршруты ядра)
+        body = await _httpViaWinHttp('ip-api.com', 80);
+      } else {
+        // xray / naive: через raw SOCKS5 (обходит WinHTTP)
+        body = await _httpViaSocks5('ip-api.com', 80);
+      }
+
+      final rtt = DateTime.now().difference(t0).inMilliseconds;
       if (!mounted) return;
       final ip      = _extract(body, 'query');
       final country = _extract(body, 'country');
@@ -534,11 +542,23 @@ class _IpCheckerState extends State<_IpChecker> {
           _loading = false;
         });
       } else {
-        // Пустой ответ = оба метода (SOCKS5 и WinHTTP) недоступны
         setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
       }
     } catch (_) {
       if (mounted) setState(() { _ip = 'Нет ответа'; _country = null; _rttMs = null; _isRu = false; _loading = false; });
+    }
+  }
+
+  /// HTTP GET через системный WinHTTP (для AWG-режима).
+  /// AWG прописывает маршруты через WinTUN прямо в таблицу маршрутизации ядра,
+  /// поэтому WinHTTP корректно использует VPN-туннель.
+  Future<String> _httpViaWinHttp(String host, int port) async {
+    try {
+      final url  = Uri.parse('http://$host:$port/json/?fields=query,country,countryCode');
+      final resp = await http.get(url).timeout(const Duration(seconds: 10));
+      return resp.body;
+    } catch (_) {
+      return '';
     }
   }
 
@@ -638,6 +658,10 @@ class _IpCheckerState extends State<_IpChecker> {
         }
         await need(2 + connectReplyLen, const Duration(seconds: 5));
 
+        // httpStart = где заканчивается SOCKS5 оболочка и начинается HTTP
+        // allBytes = [greeting(2)] + [connect_reply(connectReplyLen)] + [HTTP...]
+        final httpStart = 2 + connectReplyLen;
+
         // ── 4. HTTP GET — теперь туннель открыт ─────────────────────
         sock.write(
           'GET /json/?fields=query,country,countryCode HTTP/1.1\r\n'
@@ -648,11 +672,14 @@ class _IpCheckerState extends State<_IpChecker> {
         await sock.flush();
 
         // Читаем до закрытия TCP-соединения (сервер присылает Connection:close)
-        await done.future.timeout(const Duration(seconds: 8));
+        // Таймаут 12с: ip-api.com обычно отвечает <500мс, но через VPN может 5-8с
+        await done.future.timeout(const Duration(seconds: 12));
 
-        // HTTP-ответ начинается сразу за SOCKS5-оберткой:
-        // allBytes = [greeting_reply(2)] + [connect_reply(N)] + [HTTP response]
-        final raw = String.fromCharCodes(allBytes);
+        // HTTP-ответ начинается с httpStart (после SOCKS5 обёртки).
+        // ВАЖНО: искать \r\n\r\n только в HTTP-части, иначе бинарный SOCKS5
+        // заголовок может случайно содержать эти байты → тело обрезается.
+        final httpBytes = allBytes.sublist(httpStart);
+        final raw = String.fromCharCodes(httpBytes);
         final sep = raw.indexOf('\r\n\r\n');
         return sep >= 0 ? raw.substring(sep + 4) : raw;
 
@@ -661,21 +688,11 @@ class _IpCheckerState extends State<_IpChecker> {
         sock.destroy();
       }
 
-    } catch (_) {
-      // SOCKS5 недоступен (AWG-режим) или соединение не удалось →
-      // фоллбэк: системный HTTP (WinHTTP).
-      // AWG /installtunnelservice пишет маршруты прямо в ядро через WinTUN,
-      // поэтому WinHTTP тоже идёт через VPN-туннель (в отличие от xray/naive).
-      // ВАЖНО: fallback НЕ бросает исключение — возвращает пустую строку
-      // если WinHTTP тоже недоступен, чтобы внешний catch не затёр IP.
-      try {
-        final url  = Uri.parse(
-            'http://$host:$remotePort/json/?fields=query,country,countryCode');
-        final resp = await http.get(url).timeout(const Duration(seconds: 8));
-        return resp.body;
-      } catch (_) {
-        return '';
-      }
+    } catch (e) {
+      // SOCKS5 не удался (порт недоступен, туннель не установлен и т.д.)
+      // Бросаем исключение вверх — _checkIp сам покажет "Нет ответа".
+      // (AWG обрабатывается отдельно в _checkIp через _httpViaWinHttp)
+      rethrow;
     }
   }
 
