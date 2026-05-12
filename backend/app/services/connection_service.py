@@ -211,6 +211,8 @@ def _conn_row(db: Session, c: Connection) -> dict:
         # Uptime
         "last_active_at":     getattr(c, 'last_active_at',    None).isoformat() if getattr(c, 'last_active_at', None) else None,
         "total_uptime_seconds": getattr(c, 'total_uptime_seconds', 0),
+        # Setup log (for diagnostics tab)
+        "setup_log":          c.setup_log,
     }
 
 

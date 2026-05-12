@@ -578,7 +578,14 @@ async function wizSubmit() {
   if (!euServerId) { toast('Выберите EU сервер', 'error'); return; }
   if (_wizardState.createCascade && !ruServerId) { toast('Выберите RU сервер', 'error'); return; }
 
-  closeModal('modal-wizard-conn');
+  // ── Show loading state in wizard footer BEFORE sending request ──
+  const footer = document.getElementById('wizard-footer');
+  if (footer) {
+    footer.innerHTML = '<div class="flex items-center justify-center gap-3 py-1">'
+      + '<span class="inline-block w-4 h-4 rounded-full border-2 border-brand-400 border-t-transparent animate-spin"></span>'
+      + '<span class="text-sm text-gray-400">Создание подключений…</span>'
+      + '</div>';
+  }
 
   const res = await api.post('/connections/batch', {
     eu_server_id:   euServerId,
@@ -588,27 +595,37 @@ async function wizSubmit() {
     protocols:      _wizardState.selectedProtocols,
   });
 
+  // ── Close wizard only after response ──
+  closeModal('modal-wizard-conn');
+
   if (!res.ok) {
-    toast(`Ошибка создания: ${res.error}`, 'error');
+    toast('Ошибка создания: ' + (res.error || 'Неизвестная ошибка'), 'error');
     return;
   }
 
   const { connection_ids, connections } = res.data;
 
-  // Collect connection metadata for conn-setup modal
-  const connTypes = (connections || connection_ids.map(id => ({ id, protocol: '?', connection_type: '?' })));
+  if (!connection_ids || connection_ids.length === 0) {
+    toast('Все выбранные подключения уже существуют', 'info');
+    loadConnectionsGrouped();
+    return;
+  }
 
-  // Determine EU server name from wizard state
-  const euSrv = (_wizardState.servers || []).find(s => s.id === euServerId);
+  // connTypes: используем connections из API (batch теперь возвращает их),
+  // либо строим из selectedProtocols как fallback
+  const connTypes = connections && connections.length
+    ? connections
+    : connection_ids.map(id => ({ id, protocol: '?', connection_type: '?' }));
+
+  // EU server name — из wizardState.euServers (правильный ключ)
+  const euSrv = (_wizardState.euServers || []).find(function(s) { return s.id === euServerId; });
   const euName = euSrv ? (euSrv.display_name || euSrv.name || euSrv.ip) : '';
 
-  // Try new conn-setup modal; fall back to old deploy-log modal
+  // Открываем modal-conn-setup (без _startDeployPolling — только один polling)
   const connSetupModal = document.getElementById('modal-conn-setup');
   if (connSetupModal) {
     openConnSetupModal(connection_ids, euName, connTypes, _wizardState.selectedProtocols);
     _startConnSetupPolling(connection_ids);
-    // Also keep old polling for backward compat (updates deploy-log-body in background)
-    _startDeployPolling(connection_ids);
   } else {
     _openDeployLogModal();
     _startDeployPolling(connection_ids);
@@ -884,7 +901,22 @@ async function showConnDetail(connId) {
 
   try {
     _renderConnDetail(res.data);
-    _startDetailAutoRefresh(connId);
+    // If deploying — poll faster (every 3s) until done
+    if (res.data.setup_status === 'deploying' || res.data.setup_status === 'pending') {
+      _stopDetailAutoRefresh();
+      _detailRefreshInt = setInterval(async function() {
+        const r2 = await api.get('/connections/' + connId, { timeout: 10000 });
+        if (!r2.ok) return;
+        _renderConnDetail(r2.data);
+        // Stop fast polling once done
+        if (r2.data.setup_status !== 'deploying' && r2.data.setup_status !== 'pending') {
+          _stopDetailAutoRefresh();
+          _startDetailAutoRefresh(connId);
+        }
+      }, 3000);
+    } else {
+      _startDetailAutoRefresh(connId);
+    }
   } catch (err) {
     console.error('[showConnDetail] render error:', err);
     if (header)  header.innerHTML  = '<span class="text-red-400 text-sm"><i class="fas fa-circle-exclamation mr-1"></i>Ошибка рендера</span>';
@@ -944,8 +976,35 @@ function _renderConnDetail(conn) {
       + '</button>';
   }).join('');
 
+  // ── Deploying banner ─────────────────────────────────────────────────────
+  var deployBanner = '';
+  if (conn.setup_status === 'deploying' || conn.setup_status === 'pending') {
+    var stepTxt = conn.setup_step ? (' — ' + conn.setup_step) : '';
+    deployBanner = '<div class="flex items-center gap-3 mb-4 px-4 py-3 bg-brand-900/30 border border-brand-600/40 rounded-xl">'
+      + '<span class="inline-block w-4 h-4 rounded-full border-2 border-brand-400 border-t-transparent animate-spin flex-shrink-0"></span>'
+      + '<div>'
+      + '<div class="text-xs font-medium text-brand-300">Деплой в процессе' + stepTxt + '</div>'
+      + '<div class="text-[10px] text-gray-500 mt-0.5">Параметры появятся после завершения настройки</div>'
+      + '</div>'
+      + '<button onclick="showConnDetail(' + conn.id + ')" class="ml-auto text-[10px] text-brand-400 hover:underline flex-shrink-0">'
+      + '<i class="fas fa-rotate-right mr-1"></i>Обновить</button>'
+      + '</div>';
+  } else if (conn.setup_status === 'error') {
+    var errTxt = conn.setup_error ? (' ' + conn.setup_error) : '';
+    deployBanner = '<div class="flex items-center gap-3 mb-4 px-4 py-3 bg-red-900/30 border border-red-600/40 rounded-xl">'
+      + '<i class="fas fa-circle-xmark text-red-400 flex-shrink-0"></i>'
+      + '<div>'
+      + '<div class="text-xs font-medium text-red-300">Ошибка деплоя' + errTxt + '</div>'
+      + '<div class="text-[10px] text-gray-500 mt-0.5">Смотрите вкладку Диагностика → Deploy Log</div>'
+      + '</div>'
+      + '<button onclick="showConnDetail(' + conn.id + ')" class="ml-auto text-[10px] text-red-400 hover:underline flex-shrink-0">'
+      + '<i class="fas fa-rotate-right mr-1"></i>Обновить</button>'
+      + '</div>';
+  }
+
   content.innerHTML =
-    '<div class="flex gap-0.5 mb-4 border-b border-gray-800 pb-0 flex-wrap">'
+    deployBanner
+    + '<div class="flex gap-0.5 mb-4 border-b border-gray-800 pb-0 flex-wrap">'
     + tabBtns
     + '</div>'
     + '<div id="dtab-status"  class="detail-tab-pane space-y-3">'  + _renderStatusTab(conn)  + '</div>'

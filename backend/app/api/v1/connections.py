@@ -137,7 +137,22 @@ def create_connections_batch(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return {"connection_ids": conn_ids, "total": len(conn_ids)}
+    # Возвращаем connections с protocol/connection_type для UI modal
+    from app.models.connection import Connection
+    conn_objs = db.query(Connection).filter(Connection.id.in_(conn_ids)).all()
+    connections_info = [
+        {
+            "id":              c.id,
+            "protocol":        str(c.protocol.value) if hasattr(c.protocol, 'value') else str(c.protocol),
+            "connection_type": str(c.connection_type.value) if hasattr(c.connection_type, 'value') else str(c.connection_type),
+        }
+        for c in conn_objs
+    ]
+    return {
+        "connection_ids": conn_ids,
+        "total":          len(conn_ids),
+        "connections":    connections_info,
+    }
 
 
 # ─── Поллинг статуса создания ───────────────────────────────────────────────
@@ -174,8 +189,8 @@ def get_batch_status(
 
         results.append({
             "id":              cid,
-            "protocol":        conn.protocol,
-            "connection_type": conn.connection_type,
+            "protocol":        str(conn.protocol.value) if hasattr(conn.protocol, 'value') else str(conn.protocol),
+            "connection_type": str(conn.connection_type.value) if hasattr(conn.connection_type, 'value') else str(conn.connection_type),
             "setup_status":    conn.setup_status,
             "setup_step":      conn.setup_step,
             "setup_error":     conn.setup_error,
