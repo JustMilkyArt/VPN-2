@@ -381,12 +381,24 @@ def check_connection_health(db: Session, conn: Connection,
             result["tunnel_latency_ms"]  = e2e_result.get("tunnel_latency_ms")
             result["validation_errors"]  = e2e_result.get("validation_errors", [])
             result["client_validated_at"] = e2e_result.get("validated_at")
+            # ── Новые поля из DB (накопленное состояние) ──────────────────────
+            result["tunnel_ip_cached"]    = getattr(conn, "tunnel_ip",         None)
+            result["tunnel_geo_cached"]   = getattr(conn, "tunnel_geo",        None)
+            result["routing_detail"]      = getattr(conn, "routing_detail",    None)
         else:
-            # Берём из ранее сохранённых данных БД
-            result["tunnel_ok"]   = getattr(conn, "tunnel_ok",   None)
-            result["routing_ok"]  = getattr(conn, "routing_ok",  None)
-            result["dns_ok"]      = getattr(conn, "dns_ok",      None)
-            result["warp_active"] = base["warp_active"]
+            # Берём из ранее сохранённых данных БД (кэшированное состояние)
+            result["tunnel_ok"]          = getattr(conn, "tunnel_ok",         None)
+            result["routing_ok"]         = getattr(conn, "routing_ok",        None)
+            result["dns_ok"]             = getattr(conn, "dns_ok",            None)
+            result["traffic_ok"]         = getattr(conn, "traffic_ok",        None)
+            result["internet_ok"]        = getattr(conn, "internet_ok",       None)
+            result["tunnel_ip"]          = getattr(conn, "tunnel_ip",         None)
+            result["tunnel_geo"]         = getattr(conn, "tunnel_geo",        None)
+            result["tunnel_latency_ms"]  = getattr(conn, "tunnel_latency_ms", None)
+            result["routing_detail"]     = getattr(conn, "routing_detail",    None)
+            result["client_validated_at"] = getattr(conn, "client_validated_at", None)
+            result["last_validation_error"] = getattr(conn, "last_validation_error", None)
+            result["warp_active"]        = base["warp_active"]
 
         return result
 
@@ -446,11 +458,46 @@ def _update_connection_health(db: Session, conn: Connection, health: dict) -> No
             _set("dns_ok",       health["dns_ok"])
         if "routing_ok" in health:
             _set("routing_ok",   health["routing_ok"])
+        # ── Новые e2e поля (traffic, internet, tunnel IP/geo/latency) ─────────
+        if "traffic_ok" in health:
+            if hasattr(conn, "traffic_ok"):
+                conn.traffic_ok = health["traffic_ok"]
+        if "internet_ok" in health:
+            if hasattr(conn, "internet_ok"):
+                conn.internet_ok = health["internet_ok"]
+        if health.get("tunnel_ip") and hasattr(conn, "tunnel_ip"):
+            conn.tunnel_ip = health["tunnel_ip"]
+        if health.get("tunnel_geo") and hasattr(conn, "tunnel_geo"):
+            conn.tunnel_geo = health["tunnel_geo"]
+        if health.get("tunnel_latency_ms") is not None and hasattr(conn, "tunnel_latency_ms"):
+            conn.tunnel_latency_ms = health["tunnel_latency_ms"]
+        # ── routing_detail: SHORT-CIRCUIT объяснение ──────────────────────────
+        if hasattr(conn, "routing_detail"):
+            routing_ok = health.get("routing_ok")
+            tunnel_ip  = health.get("tunnel_ip")
+            server_ip  = health.get("server_ip")
+            val_errs   = health.get("validation_errors") or []
+            if routing_ok is False:
+                detail_parts = []
+                if tunnel_ip and server_ip:
+                    detail_parts.append(f"tunnel_ip={tunnel_ip} == server_ip={server_ip}")
+                sc_errs = [e for e in val_errs if "short-circuit" in e.lower() or "routing" in e.lower() or "bypass" in e.lower()]
+                if sc_errs:
+                    detail_parts.extend(sc_errs[:2])
+                conn.routing_detail = "; ".join(detail_parts)[:500] if detail_parts else "traffic bypass detected"
+            elif routing_ok is True:
+                if tunnel_ip:
+                    conn.routing_detail = f"OK: exit={tunnel_ip}" + (f" ({health.get('tunnel_geo','')}" + ")" if health.get("tunnel_geo") else "")
+                else:
+                    conn.routing_detail = "OK"
+            elif routing_ok is None and val_errs:
+                conn.routing_detail = "not_collected: " + "; ".join(val_errs[:2])[:200]
         if "client_validated_at" in health and health["client_validated_at"]:
             _set("client_validated_at", health["client_validated_at"])
         if "validation_errors" in health:
             errs = health["validation_errors"] or []
-            _set("last_validation_error", "; ".join(errs)[:500] if errs else None)
+            if hasattr(conn, "last_validation_error"):
+                conn.last_validation_error = "; ".join(errs)[:500] if errs else None
 
         # ── Tunnel IP/geo (приоритет у e2e, иначе server-side) ───────────────
         if health.get("tunnel_ip"):

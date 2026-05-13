@@ -1193,13 +1193,40 @@ function _buildStatusContent(d, connId) {
     internetOk = outboundOk;  // fallback
   }
 
+  // ── NOT COLLECTED state helper ──────────────────────────────────────────
+  // null/undefined = not collected yet (needs e2e run)
+  // true/false = real result from e2e
+
   var runtimeRows = '';
   runtimeRows += _statusRow('Tunnel Established',  tunnelOk,  tunnelOk === true ? 'OK' : tunnelOk === false ? 'FAILED' : null);
   runtimeRows += _statusRow('Client Connectivity', tunnelOk !== false && routingOk !== false ? (tunnelOk === true ? true : null) : false, null);
-  runtimeRows += _statusRow('Traffic Forwarding',  trafficOk !== undefined ? trafficOk : (tunnelOk === true ? true : null), null);
-  runtimeRows += _statusRow('DNS Resolution',       dnsOk,    dnsOk === true ? 'OK' : dnsOk === false ? 'FAILED' : null);
-  runtimeRows += _statusRow('Internet Access',      internetOk, null);
-  runtimeRows += _statusRow('Routing Validation',   routingOk, routingOk === false ? 'SHORT-CIRCUIT' : routingOk === true ? 'OK' : null);
+  runtimeRows += _statusRow('Traffic Forwarding',  trafficOk !== null && trafficOk !== undefined ? trafficOk : (tunnelOk === true ? null : null),
+    trafficOk === true ? 'OK' : trafficOk === false ? 'FAILED' : 'not collected');
+  runtimeRows += _statusRow('DNS Resolution',       dnsOk,    dnsOk === true ? 'OK' : dnsOk === false ? 'FAILED' : 'not collected');
+  runtimeRows += _statusRow('Internet Access',      internetOk !== null && internetOk !== undefined ? internetOk : null,
+    internetOk === true ? 'OK' : internetOk === false ? 'FAILED' : 'not collected');
+
+  // Routing Validation с детальным SHORT-CIRCUIT описанием
+  var routingDetail = d.routing_detail || null;
+  var routingLabel;
+  if (routingOk === false) {
+    routingLabel = 'SHORT-CIRCUIT';
+  } else if (routingOk === true) {
+    routingLabel = routingDetail ? routingDetail.substring(0, 40) : 'OK';
+  } else {
+    routingLabel = 'not collected';
+  }
+  runtimeRows += _statusRow('Routing Validation',   routingOk, routingLabel);
+  // SHORT-CIRCUIT details inline block
+  if (routingOk === false && routingDetail) {
+    runtimeRows += '<div class="ml-1 mb-1 px-2 py-1.5 bg-red-950/30 border border-red-800/30 rounded-lg">'
+      + '<p class="text-[10px] text-red-400 leading-relaxed">'
+      + '<i class="fas fa-route mr-1"></i><strong>SHORT-CIRCUIT:</strong> '
+      + escapeHtml(routingDetail.substring(0, 300))
+      + '</p>'
+      + '<p class="text-[10px] text-gray-500 mt-0.5">Traffic is exiting directly from VPN server instead of being routed through tunnel.</p>'
+      + '</div>';
+  }
 
   var isVless = (proto === 'vless_reality');
   var isNaive = (proto === 'naive_proxy');
@@ -1237,6 +1264,12 @@ function _buildStatusContent(d, connId) {
   metricsContent += _metricBar('Packet Loss',      loss, 100, '%',  5,  30);
   if (tLat !== null && tLat !== undefined) {
     metricsContent += _metricBar('Tunnel RTT (e2e)', tLat, 500, 'ms', 150, 350);
+  } else {
+    // Показываем "not collected" если e2e ещё не запускался
+    metricsContent += '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60 last:border-0">'
+      + '<span class="text-xs text-gray-400">Tunnel RTT (e2e)</span>'
+      + '<span class="text-[10px] text-gray-600">not collected — run health check</span>'
+      + '</div>';
   }
 
   var metricsSection = _sectionCard('Network Metrics', 'fa-chart-line', metricsContent);
@@ -1246,16 +1279,47 @@ function _buildStatusContent(d, connId) {
   var exitGeo = d.tunnel_geo || d.last_outbound_geo || null;
 
   var exitContent = '';
-  exitContent += _kv('Outbound IP',     exitIp  || '—', true);
-  exitContent += _kv('Geo / Country',   exitGeo || '—', false);
-  exitContent += _kv('TLS Status',      d.last_tls_status || '—', false);
+  // Приоритет: tunnel_ip (e2e реальный exit) > last_outbound_ip (server-side)
+  var exitIpLabel = exitIp
+    ? escapeHtml(exitIp) + (d.tunnel_ip && d.last_outbound_ip && d.tunnel_ip !== d.last_outbound_ip
+        ? ' <span class="text-[9px] text-gray-500">(e2e)</span>' : '')
+    : '<span class="text-gray-500 text-[10px]">not collected — run health check</span>';
+  var exitGeoLabel = exitGeo || '<span class="text-gray-500 text-[10px]">not collected</span>';
+  var tlsLabel = d.last_tls_status
+    ? ('<span class="' + (d.last_tls_status === 'CONNECTED' ? 'text-green-400' : d.last_tls_status === 'REFUSED' || d.last_tls_status === 'TIMEOUT' ? 'text-red-400' : 'text-gray-400') + '">' + escapeHtml(d.last_tls_status) + '</span>')
+    : '<span class="text-gray-500 text-[10px]">not collected</span>';
+
+  exitContent += '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60">'
+    + '<span class="text-xs text-gray-500 flex-shrink-0 mr-4">Outbound IP</span>'
+    + '<span class="text-xs text-gray-300 font-mono text-right">' + exitIpLabel + '</span>'
+    + '</div>';
+  exitContent += '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60">'
+    + '<span class="text-xs text-gray-500 flex-shrink-0 mr-4">Geo / Country</span>'
+    + '<span class="text-xs text-gray-300 text-right">' + exitGeoLabel + '</span>'
+    + '</div>';
+  exitContent += '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60">'
+    + '<span class="text-xs text-gray-500 flex-shrink-0 mr-4">TLS Status</span>'
+    + '<span class="text-xs text-right">' + tlsLabel + '</span>'
+    + '</div>';
   exitContent += _kv('Exit Protocol',   proto || '—', false);
   exitContent += _kv('Connection Type', d.connection_type || '—', false);
+  if (d.tunnel_latency_ms !== null && d.tunnel_latency_ms !== undefined) {
+    exitContent += _kv('Tunnel RTT', d.tunnel_latency_ms.toFixed(1) + ' ms', true);
+  }
   if (d.ru_server) {
     exitContent += _kv('Entry Server (RU)', (d.ru_server.flag_emoji || '') + ' ' + (d.ru_server.display_name || d.ru_server.ip || '—'), false);
   }
   if (d.server) {
     exitContent += _kv('Exit Server (EU)', (d.server.flag_emoji || '') + ' ' + (d.server.display_name || d.server.ip || '—'), false);
+  }
+  // Routing detail block
+  if (routingDetail && routingOk !== null) {
+    var rdColor = routingOk === true ? 'text-green-400' : routingOk === false ? 'text-red-400' : 'text-gray-400';
+    exitContent += '<div class="mt-1 px-2 py-1.5 bg-gray-900/50 border border-gray-700/40 rounded-lg">'
+      + '<p class="text-[10px] ' + rdColor + ' leading-relaxed">'
+      + '<i class="fas fa-route mr-1"></i>'
+      + escapeHtml(routingDetail.substring(0, 200))
+      + '</p></div>';
   }
   var exitSection = _sectionCard('Exit Information', 'fa-earth-europe', exitContent);
 
@@ -1315,12 +1379,19 @@ function _buildStatusContent(d, connId) {
   var uptimeStr   = uptimeSec > 0 ? _fmtUptime(uptimeSec) : '—';
   var createdAt   = d.created_at          ? new Date(d.created_at).toLocaleString('ru-RU')          : '—';
 
+  // e2e validation state
+  var valState = d.client_validated_at ? lastVal
+    : '<span class="text-[10px] text-yellow-500/80"><i class="fas fa-triangle-exclamation mr-0.5 text-[9px]"></i>not collected — click "Проверить"</span>';
+
   var timeContent = ''
-    + _kv('Last Health Check',    lastCheck,  false)
-    + _kv('Last Client Validation', lastVal,  false)
-    + _kv('Last Active',          lastActive, false)
-    + _kv('Uptime',               uptimeStr,  true)
-    + _kv('Created',              createdAt,  false);
+    + _kv('Last Health Check',     lastCheck,  false)
+    + '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60">'
+    +   '<span class="text-xs text-gray-500 flex-shrink-0 mr-4">Last E2E Validation</span>'
+    +   '<span class="text-xs text-right">' + valState + '</span>'
+    + '</div>'
+    + _kv('Last Active',           lastActive, false)
+    + _kv('Uptime',                uptimeStr,  true)
+    + _kv('Created',               createdAt,  false);
   var timeSection = _sectionCard('Time & Runtime', 'fa-clock', timeContent);
 
   return headerRow

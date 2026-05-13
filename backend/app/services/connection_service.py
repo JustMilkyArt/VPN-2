@@ -223,6 +223,13 @@ def _conn_row(db: Session, c: Connection) -> dict:
         "client_validated_at": getattr(c, "client_validated_at",   None).isoformat()
                                if getattr(c, "client_validated_at", None) else None,
         "last_validation_error": getattr(c, "last_validation_error", None),
+        # ── Extended E2E observability fields (v5) ──────────────────────────
+        "traffic_ok":          getattr(c, "traffic_ok",           None),
+        "internet_ok":         getattr(c, "internet_ok",          None),
+        "tunnel_ip":           getattr(c, "tunnel_ip",            None),
+        "tunnel_geo":          getattr(c, "tunnel_geo",           None),
+        "tunnel_latency_ms":   getattr(c, "tunnel_latency_ms",    None),
+        "routing_detail":      getattr(c, "routing_detail",       None),
     }
 
 
@@ -450,12 +457,44 @@ def _deploy_one(db: Session, conn: Connection, eu_server: Server, ru_server: Opt
             _log(db, conn, f"✅ {msg}")
             conn.status = ConnectionStatus.ACTIVE
             _set_status(db, conn, "done")
+            db.commit()
+            # ── POST-DEPLOY: немедленный runtime sync ─────────────────────────
+            # Запускаем full health-check + e2e сразу после deploy
+            # чтобы заполнить все observability поля без ожидания планировщика
+            try:
+                _log(db, conn, "[Runtime Sync] Запуск post-deploy health check...")
+                from app.services.health_check_service import (
+                    check_connection_health, _update_connection_health
+                )
+                health = check_connection_health(db, conn, run_e2e=True)
+                _update_connection_health(db, conn, health)
+                h_status = health.get("health_status", "UNKNOWN")
+                t_ok     = health.get("tunnel_ok")
+                r_ok     = health.get("routing_ok")
+                out_ip   = health.get("tunnel_ip") or health.get("outbound_ip") or "—"
+                tls      = health.get("tls_status") or "—"
+                lat      = health.get("latency_ms")
+                tun_lat  = health.get("tunnel_latency_ms")
+                errs     = health.get("validation_errors") or []
+                _log(db, conn, f"[Runtime Sync] Health: {h_status}")
+                _log(db, conn, f"[Runtime Sync]   xray={health.get('xray_active')} port={health.get('port_listening')} tls={tls}")
+                _log(db, conn, f"[Runtime Sync]   tunnel={t_ok} routing={r_ok} exit_ip={out_ip}")
+                if lat is not None:
+                    _log(db, conn, f"[Runtime Sync]   latency={lat}ms" + (f" tunnel_rtt={tun_lat}ms" if tun_lat else ""))
+                if errs:
+                    _log(db, conn, f"[Runtime Sync]   errors: {'; '.join(errs[:3])}")
+                if r_ok is False:
+                    rd = getattr(conn, 'routing_detail', '') or ''
+                    _log(db, conn, f"[Runtime Sync]   SHORT-CIRCUIT: {rd}")
+                _log(db, conn, "[Runtime Sync] Observability sync завершён ✓")
+            except Exception as hc_err:
+                logger.warning(f"post-deploy health check error conn {conn.id}: {hc_err}")
+                _log(db, conn, f"[Runtime Sync] Sync skipped: {hc_err}")
         else:
             _log(db, conn, f"❌ {msg}")
             conn.status = ConnectionStatus.ERROR
             _set_status(db, conn, "failed", msg)
-
-        db.commit()
+            db.commit()
 
     except Exception as e:
         _log(db, conn, f"❌ Исключение: {e}")

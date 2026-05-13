@@ -140,6 +140,18 @@ class Connection(Base):
     client_validated_at  = Column(DateTime(timezone=True), nullable=True)
     # Последняя ошибка валидации
     last_validation_error = Column(Text, nullable=True)
+    # Traffic forwarding OK (HTTP ответ получен через tunnel)
+    traffic_ok            = Column(Boolean, nullable=True)
+    # Internet access OK через tunnel
+    internet_ok           = Column(Boolean, nullable=True)
+    # Реальный IP выхода через tunnel (e2e)
+    tunnel_ip             = Column(String(64),  nullable=True)
+    # Геолокация через tunnel
+    tunnel_geo            = Column(String(64),  nullable=True)
+    # Задержка через tunnel (мс)
+    tunnel_latency_ms     = Column(Float, nullable=True)
+    # Детали routing validation (для SHORT-CIRCUIT diagnostics)
+    routing_detail        = Column(Text, nullable=True)
 
     # meta
     notes      = Column(Text, nullable=True)
