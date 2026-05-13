@@ -1375,7 +1375,6 @@ async function runDeepHealthCheck(connId) {
   }
 }
 
-}
 
 // ── Tab 2: Protocol Config ────────────────────────────────────────────────────
 
@@ -1769,6 +1768,19 @@ async function checkServerGroup(srvId, connIds) {
     }
   });
   toast(`Проверено: ${active}/${total} активно`, active === total ? 'success' : 'info', 3000);
+}
+
+async function checkConnLive(connId) {
+  const res = await api.post(`/connections/${connId}/check`, {});
+  if (res.ok) {
+    const { alive, message } = res.data;
+    toast(alive ? `✅ ${message}` : `⚠️ ${message}`, alive ? 'success' : 'warning', 3000);
+    // Обновляем точку статуса прямо в строке без перерисовки всего списка
+    _applyConnStatusInRow(connId, res.data.status);
+    showConnDetail(connId);
+  } else {
+    toast(`Ошибка: ${res.error}`, 'error');
+  }
 }
 
 /**
