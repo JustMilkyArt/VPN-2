@@ -273,7 +273,7 @@ def check_connection(
     return {"alive": alive, "message": msg, "status": conn.status}
 
 
-@router.get("/{connection_id}/health", summary="Deep health check подключения (xray + порт + outbound)")
+@router.get("/{connection_id}/health", summary="Full observability: e2e tunnel + routing + DNS + traffic")
 def health_check_connection(
     connection_id: int,
     db: Session = Depends(get_db),

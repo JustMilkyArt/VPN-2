@@ -213,6 +213,16 @@ def _conn_row(db: Session, c: Connection) -> dict:
         "total_uptime_seconds": getattr(c, 'total_uptime_seconds', 0),
         # Setup log (for diagnostics tab)
         "setup_log":          c.setup_log,
+        # Client E2E validation fields
+        "xray_active":         getattr(c, "xray_active",          None),
+        "port_listening":      getattr(c, "port_listening",        None),
+        "tunnel_ok":           getattr(c, "tunnel_ok",             None),
+        "dns_ok":              getattr(c, "dns_ok",                None),
+        "routing_ok":          getattr(c, "routing_ok",            None),
+        "warp_active":         getattr(c, "warp_active",           None),
+        "client_validated_at": getattr(c, "client_validated_at",   None).isoformat()
+                               if getattr(c, "client_validated_at", None) else None,
+        "last_validation_error": getattr(c, "last_validation_error", None),
     }
 
 

@@ -1070,6 +1070,78 @@ function _roRow(label, value, mono) {
 
 // ── Tab 1: Status & Health ────────────────────────────────────────────────────
 
+
+// ── Observability helpers ──────────────────────────────────────────────────
+
+function _statusRow(label, state, detail) {
+  // state: true=ok, false=fail, null=unknown, 'warn'=degraded, 'n/a'=na
+  var icon, cls;
+  if (state === true)        { icon = 'fa-circle-check';       cls = 'text-green-400'; }
+  else if (state === false)  { icon = 'fa-circle-xmark';       cls = 'text-red-400'; }
+  else if (state === 'warn') { icon = 'fa-triangle-exclamation'; cls = 'text-yellow-400'; }
+  else if (state === 'n/a')  { icon = 'fa-minus-circle';       cls = 'text-gray-600'; }
+  else                       { icon = 'fa-circle-question';    cls = 'text-gray-500'; }
+
+  var detailHtml = detail
+    ? '<span class="text-[10px] text-gray-600 ml-1 truncate max-w-[120px]">' + escapeHtml(String(detail)) + '</span>'
+    : '';
+
+  return '<div class="flex items-center justify-between py-1.5 border-b border-gray-800/60 last:border-0">'
+    + '<span class="text-xs text-gray-400">' + label + '</span>'
+    + '<div class="flex items-center gap-1.5">'
+    + detailHtml
+    + '<i class="fas ' + icon + ' text-[11px] ' + cls + '"></i>'
+    + '</div>'
+    + '</div>';
+}
+
+function _metricBar(label, val, max, unit, warnThresh, critThresh) {
+  if (val === null || val === undefined) {
+    return '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60 last:border-0">'
+      + '<span class="text-xs text-gray-400">' + label + '</span>'
+      + '<span class="text-xs text-gray-600">—</span>'
+      + '</div>';
+  }
+  var pct = Math.min(100, (val / max) * 100);
+  var barCls = val >= critThresh ? 'bg-red-500' : (val >= warnThresh ? 'bg-yellow-500' : 'bg-green-500');
+  var valCls = val >= critThresh ? 'text-red-400' : (val >= warnThresh ? 'text-yellow-400' : 'text-green-400');
+  return '<div class="py-1.5 border-b border-gray-800/60 last:border-0">'
+    + '<div class="flex justify-between items-center mb-1">'
+    + '<span class="text-xs text-gray-400">' + label + '</span>'
+    + '<span class="text-xs font-mono ' + valCls + '">' + val.toFixed(1) + ' ' + unit + '</span>'
+    + '</div>'
+    + '<div class="w-full bg-gray-800 rounded-full h-1">'
+    + '<div class="' + barCls + ' h-1 rounded-full transition-all" style="width:' + pct + '%"></div>'
+    + '</div>'
+    + '</div>';
+}
+
+function _sectionCard(title, icon, content) {
+  return '<div class="bg-gray-800/50 border border-gray-700/80 rounded-xl overflow-hidden">'
+    + '<div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60 bg-gray-800/30">'
+    + '<i class="fas ' + icon + ' text-[10px] text-gray-500"></i>'
+    + '<span class="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">' + title + '</span>'
+    + '</div>'
+    + '<div class="px-3 py-1">' + content + '</div>'
+    + '</div>';
+}
+
+function _tunnelStatusBadge(tunnelOk, routingOk, trafficOk) {
+  if (tunnelOk === true && routingOk !== false && trafficOk !== false) {
+    return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold bg-green-900/40 border-green-600/60 text-green-400">'
+      + '<i class="fas fa-circle-check text-[9px]"></i>CONNECTED</span>';
+  } else if (tunnelOk === false) {
+    return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold bg-red-900/40 border-red-600/60 text-red-400">'
+      + '<i class="fas fa-circle-xmark text-[9px]"></i>FAILED</span>';
+  } else if (tunnelOk === null || tunnelOk === undefined) {
+    return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold bg-gray-800 border-gray-700 text-gray-500">'
+      + '<i class="fas fa-circle-question text-[9px]"></i>NOT CHECKED</span>';
+  } else {
+    return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold bg-yellow-900/40 border-yellow-600/60 text-yellow-400">'
+      + '<i class="fas fa-triangle-exclamation text-[9px]"></i>DEGRADED</span>';
+  }
+}
+
 function _renderStatusTab(conn) {
   window._lastDetailConn = conn;
   return '<div id="dstatus-content">' + _buildStatusContent(conn, conn.id) + '</div>';
@@ -1077,79 +1149,186 @@ function _renderStatusTab(conn) {
 
 function _buildStatusContent(d, connId) {
   var hs = d.health_status || null;
+  var proto = d.protocol || '';
 
-  // Badge row
-  var badgeRow = '<div class="flex items-center justify-between mb-3">'
+  // ── Header: Health badge + кнопка проверки ──────────────────────────────
+  var headerRow = '<div class="flex items-center justify-between mb-3">'
     + '<div class="flex items-center gap-2">'
-    + '<span class="text-xs text-gray-400 font-medium">Health Status</span>'
-    + (hs ? _healthBadge(hs) : '<span class="text-xs text-gray-600">не проверялся</span>')
+    + '<span class="text-xs text-gray-400 font-medium">Итоговый статус</span>'
+    + (hs ? _healthBadge(hs) : '<span class="text-xs text-gray-600">—</span>')
     + '</div>'
-    + '<button onclick="runDeepHealthCheck(' + connId + ')" class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-brand-600 rounded-lg text-xs text-gray-300 hover:text-white transition">'
-    + '<i class="fas fa-rotate-right text-[10px]"></i>Проверить сейчас</button>'
+    + '<button onclick="runDeepHealthCheck(' + connId + ')" id="hc-btn-' + connId + '" '
+    + 'class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-brand-600 rounded-lg text-xs text-gray-300 hover:text-white transition">'
+    + '<i class="fas fa-rotate-right text-[10px]"></i>Проверить</button>'
     + '</div>';
 
-  // Xray / Service block
-  var xrayOk   = d.last_check_ok !== false;
-  var tlsStatus = d.last_tls_status || null;
+  // ── Section 1: VPN Runtime Status ────────────────────────────────────────
 
-  var serviceBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
-    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Сервис</div>'
-    + _kv('Xray/Caddy',  d.last_check_ok === true ? '\u2705 работает' : (d.last_check_ok === false ? '\u274c остановлен' : '\u2014'), false)
-    + _kv('Port', d.port ? d.port + '/tcp' : '\u2014', true)
-    + _kv('TLS handshake', tlsStatus === 'ok' ? '\u2705 OK' : (tlsStatus === 'failed' ? '\u274c failed' : (tlsStatus || '\u2014')), false)
-    + _kv('Протокол', d.protocol || '\u2014', false)
-    + '</div>';
+  // Tunnel status
+  var tunnelOk   = d.tunnel_ok;
+  var routingOk  = d.routing_ok;
+  var trafficOk  = d.traffic_ok;
+  var dnsOk      = d.dns_ok;
 
-  // Network block
-  var networkBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
-    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Сеть</div>'
-    + _kv('Outbound IP',  d.last_outbound_ip  || '\u2014', true)
-    + _kv('Outbound Geo', d.last_outbound_geo || '\u2014', false)
-    + '</div>';
+  // Xray / service
+  var xrayOk   = d.xray_active;
+  if (xrayOk === null || xrayOk === undefined) {
+    // fallback: если поле не заполнено, используем last_check_ok
+    xrayOk = (d.last_check_ok === true) ? true : (d.last_check_ok === false ? false : null);
+  }
+  var portOk   = d.port_listening;
+  var tlsOk    = d.last_tls_status === 'CONNECTED' ? true
+               : (d.last_tls_status === 'REFUSED' || d.last_tls_status === 'TIMEOUT') ? false
+               : (d.last_tls_status === 'UNAVAILABLE') ? 'n/a'
+               : null;
+  var warpOk   = d.warp_enabled ? (d.warp_active === true ? true : d.warp_active === false ? false : null) : 'n/a';
+  var splitOk  = d.split_tunnel_enabled ? true : 'n/a';
 
-  // Latency block
-  var lat   = d.latency_ms   !== null && d.latency_ms   !== undefined ? d.latency_ms.toFixed(1)   + ' ms' : '\u2014';
-  var jit   = d.jitter_ms    !== null && d.jitter_ms    !== undefined ? d.jitter_ms.toFixed(1)    + ' ms' : '\u2014';
-  var loss  = d.packet_loss_pct !== null && d.packet_loss_pct !== undefined ? d.packet_loss_pct.toFixed(1) + '%'  : '\u2014';
-  var lossColor = (d.packet_loss_pct > 30) ? 'text-red-400' : (d.packet_loss_pct > 5 ? 'text-yellow-400' : 'text-green-400');
+  // Routing
+  var outboundOk = d.last_outbound_ip ? true : null;
 
-  var latencyBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
-    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Задержки</div>'
-    + _kv('Latency',     lat,  true)
-    + _kv('Jitter',      jit,  true)
-    + '<div class="flex justify-between items-center py-1.5">'
-    + '<span class="text-xs text-gray-500">Packet loss</span>'
-    + '<span class="text-xs font-mono ' + (d.packet_loss_pct !== null && d.packet_loss_pct !== undefined ? lossColor : 'text-gray-600') + '">' + loss + '</span>'
+  // Internet
+  var internetOk = d.internet_ok;
+  if (internetOk === null || internetOk === undefined) {
+    internetOk = outboundOk;  // fallback
+  }
+
+  var runtimeRows = '';
+  runtimeRows += _statusRow('Tunnel Established',  tunnelOk,  tunnelOk === true ? 'OK' : tunnelOk === false ? 'FAILED' : null);
+  runtimeRows += _statusRow('Client Connectivity', tunnelOk !== false && routingOk !== false ? (tunnelOk === true ? true : null) : false, null);
+  runtimeRows += _statusRow('Traffic Forwarding',  trafficOk !== undefined ? trafficOk : (tunnelOk === true ? true : null), null);
+  runtimeRows += _statusRow('DNS Resolution',       dnsOk,    dnsOk === true ? 'OK' : dnsOk === false ? 'FAILED' : null);
+  runtimeRows += _statusRow('Internet Access',      internetOk, null);
+  runtimeRows += _statusRow('Routing Validation',   routingOk, routingOk === false ? 'SHORT-CIRCUIT' : routingOk === true ? 'OK' : null);
+
+  var isVless = (proto === 'vless_reality');
+  var isNaive = (proto === 'naive_proxy');
+  if (isVless || isNaive) {
+    runtimeRows += _statusRow('Reality / TLS',
+      tlsOk,
+      d.last_tls_status || null
+    );
+  }
+  runtimeRows += _statusRow('Port Listening',   portOk,   portOk === true ? (d.port ? d.port + '/tcp' : 'OK') : portOk === false ? 'NOT LISTENING' : null);
+  runtimeRows += _statusRow('Xray / Service',   xrayOk,   xrayOk === true ? 'active' : xrayOk === false ? 'stopped' : null);
+  runtimeRows += _statusRow('WARP Fallback',    warpOk,   warpOk === true ? 'connected' : warpOk === false ? 'disconnected' : warpOk === 'n/a' ? 'disabled' : null);
+  runtimeRows += _statusRow('Split Tunnel',     splitOk,  splitOk === true ? 'enabled' : 'disabled');
+
+  var tunnelBadge = _tunnelStatusBadge(tunnelOk, routingOk, trafficOk);
+  var runtimeSection = _sectionCard(
+    'VPN Runtime Status',
+    'fa-shield-halved',
+    '<div class="flex items-center justify-between py-2 border-b border-gray-800/80 mb-0.5">'
+      + '<span class="text-xs text-gray-300 font-medium">Tunnel</span>'
+      + tunnelBadge
+      + '</div>'
+      + runtimeRows
+  );
+
+  // ── Section 2: Network Metrics ────────────────────────────────────────────
+  var lat  = d.latency_ms;
+  var jit  = d.jitter_ms;
+  var loss = d.packet_loss_pct;
+  var tLat = d.tunnel_latency_ms;
+
+  var metricsContent = '';
+  metricsContent += _metricBar('Latency (ping)',   lat,  300, 'ms', 80, 200);
+  metricsContent += _metricBar('Jitter',           jit,  100, 'ms', 20, 50);
+  metricsContent += _metricBar('Packet Loss',      loss, 100, '%',  5,  30);
+  if (tLat !== null && tLat !== undefined) {
+    metricsContent += _metricBar('Tunnel RTT (e2e)', tLat, 500, 'ms', 150, 350);
+  }
+
+  var metricsSection = _sectionCard('Network Metrics', 'fa-chart-line', metricsContent);
+
+  // ── Section 3: Exit Information ───────────────────────────────────────────
+  var exitIp  = d.tunnel_ip || d.last_outbound_ip  || null;
+  var exitGeo = d.tunnel_geo || d.last_outbound_geo || null;
+
+  var exitContent = '';
+  exitContent += _kv('Outbound IP',     exitIp  || '—', true);
+  exitContent += _kv('Geo / Country',   exitGeo || '—', false);
+  exitContent += _kv('TLS Status',      d.last_tls_status || '—', false);
+  exitContent += _kv('Exit Protocol',   proto || '—', false);
+  exitContent += _kv('Connection Type', d.connection_type || '—', false);
+  if (d.ru_server) {
+    exitContent += _kv('Entry Server (RU)', (d.ru_server.flag_emoji || '') + ' ' + (d.ru_server.display_name || d.ru_server.ip || '—'), false);
+  }
+  if (d.server) {
+    exitContent += _kv('Exit Server (EU)', (d.server.flag_emoji || '') + ' ' + (d.server.display_name || d.server.ip || '—'), false);
+  }
+  var exitSection = _sectionCard('Exit Information', 'fa-earth-europe', exitContent);
+
+  // ── Section 4: Recovery & Stability ──────────────────────────────────────
+  var rs       = d.recovery_status || null;
+  var rsLabels = {
+    idle:       '<span class="text-gray-500">—</span>',
+    recovering: '<span class="text-yellow-400"><i class="fas fa-spinner fa-spin mr-1 text-[9px]"></i>recovering…</span>',
+    recovered:  '<span class="text-green-400"><i class="fas fa-circle-check mr-1 text-[9px]"></i>recovered</span>',
+    failed:     '<span class="text-red-400"><i class="fas fa-circle-xmark mr-1 text-[9px]"></i>failed</span>',
+  };
+  var rsHtml     = rsLabels[rs] || (rs ? '<span class="text-gray-400">' + escapeHtml(rs) + '</span>' : '<span class="text-gray-600">—</span>');
+  var lastRecAt  = d.last_recovery_at ? new Date(d.last_recovery_at).toLocaleString('ru-RU') : '—';
+  var recCount   = d.recovery_count_24h || 0;
+  var lastValErr = d.last_validation_error;
+  var validErr   = lastValErr
+    ? '<div class="mt-2 px-2 py-1.5 bg-red-900/20 border border-red-800/40 rounded-lg">'
+      + '<p class="text-[10px] text-red-400 break-words">'
+      + '<i class="fas fa-triangle-exclamation mr-1"></i>'
+      + escapeHtml(lastValErr.substring(0, 200))
+      + '</p></div>'
+    : '';
+
+  var recoveryContent = ''
+    + '<div class="flex justify-between items-center py-1.5 border-b border-gray-800/60">'
+    + '<span class="text-xs text-gray-400">Auto-Recovery</span>'
+    + '<span class="text-xs">' + rsHtml + '</span>'
     + '</div>'
-    + '</div>';
+    + _kv('Attempts (24h)',   recCount > 0 ? recCount : '0', true)
+    + _kv('Last Recovery',    lastRecAt, false)
+    + validErr;
 
-  // Recovery block
-  var rs = d.recovery_status || null;
-  var rsLabel = { idle: '\u2014', recovering: '\u23f3 recovering\u2026', recovered: '\u2705 recovered', failed: '\u274c failed' };
-  var lastRecAt = d.last_recovery_at ? new Date(d.last_recovery_at).toLocaleString('ru-RU') : '\u2014';
-  var recCount  = d.recovery_count_24h || 0;
+  // Stability score
+  var stabilityScore = 100;
+  if (hs === 'DEGRADED')  stabilityScore = 65;
+  if (hs === 'BROKEN')    stabilityScore = 20;
+  if (recCount > 0)       stabilityScore = Math.max(20, stabilityScore - recCount * 10);
+  if (tunnelOk === false) stabilityScore = Math.min(stabilityScore, 30);
+  var scoreCls = stabilityScore >= 80 ? 'text-green-400' : stabilityScore >= 50 ? 'text-yellow-400' : 'text-red-400';
+  var scoreBar = stabilityScore >= 80 ? 'bg-green-500' : stabilityScore >= 50 ? 'bg-yellow-500' : 'bg-red-500';
+  recoveryContent += '<div class="py-1.5">'
+    + '<div class="flex justify-between items-center mb-1">'
+    + '<span class="text-xs text-gray-400">Stability Score</span>'
+    + '<span class="text-xs font-mono ' + scoreCls + '">' + stabilityScore + '/100</span>'
+    + '</div>'
+    + '<div class="w-full bg-gray-800 rounded-full h-1.5">'
+    + '<div class="' + scoreBar + ' h-1.5 rounded-full" style="width:' + stabilityScore + '%"></div>'
+    + '</div></div>';
 
-  var recoveryBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
-    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Авто-рекавери</div>'
-    + _kv('Статус',          rsLabel[rs] || (rs || '\u2014'), false)
-    + _kv('Последний раз',   lastRecAt, false)
-    + _kv('Попыток за 24ч',  recCount, true)
-    + '</div>';
+  var recoverySection = _sectionCard('Recovery & Stability', 'fa-shield-check', recoveryContent);
 
-  // Timestamps
-  var lastCheck = d.last_check_at ? new Date(d.last_check_at).toLocaleString('ru-RU') : '\u2014';
-  var lastActive = d.last_active_at ? new Date(d.last_active_at).toLocaleString('ru-RU') : '\u2014';
-  var uptimeSec = d.total_uptime_seconds || 0;
-  var uptimeStr = uptimeSec > 0 ? _fmtUptime(uptimeSec) : '\u2014';
+  // ── Section 5: Time & Runtime ─────────────────────────────────────────────
+  var lastCheck   = d.last_check_at       ? new Date(d.last_check_at).toLocaleString('ru-RU')       : '—';
+  var lastVal     = d.client_validated_at ? new Date(d.client_validated_at).toLocaleString('ru-RU') : '—';
+  var lastActive  = d.last_active_at      ? new Date(d.last_active_at).toLocaleString('ru-RU')      : '—';
+  var uptimeSec   = d.total_uptime_seconds || 0;
+  var uptimeStr   = uptimeSec > 0 ? _fmtUptime(uptimeSec) : '—';
+  var createdAt   = d.created_at          ? new Date(d.created_at).toLocaleString('ru-RU')          : '—';
 
-  var timeBlock = '<div class="bg-gray-800/50 border border-gray-700 rounded-xl p-3 space-y-0">'
-    + '<div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-semibold">Время</div>'
-    + _kv('Последняя проверка', lastCheck, false)
-    + _kv('Последняя активность', lastActive, false)
-    + _kv('Суммарный аптайм', uptimeStr, true)
-    + '</div>';
+  var timeContent = ''
+    + _kv('Last Health Check',    lastCheck,  false)
+    + _kv('Last Client Validation', lastVal,  false)
+    + _kv('Last Active',          lastActive, false)
+    + _kv('Uptime',               uptimeStr,  true)
+    + _kv('Created',              createdAt,  false);
+  var timeSection = _sectionCard('Time & Runtime', 'fa-clock', timeContent);
 
-  return badgeRow + serviceBlock + networkBlock + latencyBlock + recoveryBlock + timeBlock;
+  return headerRow
+    + runtimeSection
+    + metricsSection
+    + exitSection
+    + recoverySection
+    + timeSection;
 }
 
 function _fmtUptime(sec) {
@@ -1164,16 +1343,25 @@ function _fmtUptime(sec) {
 }
 
 async function runDeepHealthCheck(connId) {
-  var btn = event && event.currentTarget;
-  if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i> Проверка…';
+  var btn = document.getElementById('hc-btn-' + connId);
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin text-[10px]"></i><span class="ml-1.5">Проверка…</span>';
+  }
 
   try {
-    const res = await api.get('/connections/' + connId + '/health', { timeout: 30000 });
+    const res = await api.get('/connections/' + connId + '/health', { timeout: 60000 });
     if (res.ok) {
       var el = document.getElementById('dstatus-content');
       if (el) el.innerHTML = _buildStatusContent(res.data, connId);
       _updateDetailHeaderBadge(res.data);
-      toast('Health check завершён', 'success', 2000);
+      // Обновляем тоже данные в _lastDetailConn
+      if (window._lastDetailConn && window._lastDetailConn.id === connId) {
+        Object.assign(window._lastDetailConn, res.data);
+      }
+      var hStatus = res.data.health_status || 'UNKNOWN';
+      var cls = hStatus === 'HEALTHY' ? 'success' : hStatus === 'DEGRADED' ? 'warn' : 'error';
+      toast('Health check: ' + hStatus, cls, 3000);
     } else {
       toast('Ошибка health check: ' + (res.error || 'unknown'), 'error');
     }
@@ -1181,7 +1369,12 @@ async function runDeepHealthCheck(connId) {
     toast('Health check error: ' + e.message, 'error');
   }
 
-  if (btn) btn.innerHTML = '<i class="fas fa-rotate-right text-[10px]"></i>Проверить сейчас';
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-rotate-right text-[10px]"></i>Проверить';
+  }
+}
+
 }
 
 // ── Tab 2: Protocol Config ────────────────────────────────────────────────────

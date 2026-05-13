@@ -123,6 +123,24 @@ class Connection(Base):
     # Суммарное время аптайма (секунды, накапливается)
     total_uptime_seconds = Column(Integer, nullable=True, default=0)
 
+    # ── Client E2E Validation (runtime observability) ─────────────────────
+    # Xray/Caddy активен на сервере
+    xray_active          = Column(Boolean, nullable=True)
+    # Порт слушает на сервере
+    port_listening       = Column(Boolean, nullable=True)
+    # E2E tunnel успешно установлен
+    tunnel_ok            = Column(Boolean, nullable=True)
+    # DNS через tunnel работает
+    dns_ok               = Column(Boolean, nullable=True)
+    # Routing OK (трафик идёт через VPN, не short-circuit)
+    routing_ok           = Column(Boolean, nullable=True)
+    # WARP Cloudflare активен
+    warp_active          = Column(Boolean, nullable=True)
+    # Время последней client validation
+    client_validated_at  = Column(DateTime(timezone=True), nullable=True)
+    # Последняя ошибка валидации
+    last_validation_error = Column(Text, nullable=True)
+
     # meta
     notes      = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
